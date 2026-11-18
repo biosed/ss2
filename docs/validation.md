@@ -29,3 +29,9 @@ The program clears one color per frame. Application timestamps describe the pres
 ## BC-250 run
 
 From the Bazzite desktop with the target mode active, run the validation-enabled CTest suite and `./build/ss2 --4k --fullscreen --validate --frames 120`. Confirm the log identifies RADV and 3840×2160. Record the desktop/compositor, refresh rate and pixel density. Then run `./build/ss2 --4k --fullscreen --timing` in the Release build with validation disabled to measure presentation intervals. Retain the printed format, mode, percentiles and long-interval count, and repeat under representative game content in a later milestone.
+
+## M1 Asahi verification with the asset reader
+
+On 19 November 2026, the ARM64 Wayland/Honeykrisp suite passed 8/8 with the privately staged validation layer. A separate 32-frame smoke run reported zero validation errors. The Clang sanitizer/offscreen suite also passed 8/8. Claude reviewed Asahi portability and found no M1-specific blocker. Gemini independently configured a fresh RelWithDebInfo build, confirmed an AArch64 ELF and visible Honeykrisp presentation, and passed 7/7 tests without validation. Its validation-required run correctly failed the three graphics tests when the staged layer was outside its search path.
+
+The x86-64/FEX X11 suite passed 8/8 on a full rerun. An earlier resize test aborted in Xlib/XCB with a queue sequence assertion, followed by a retry losing the X connection. The intermittent guest-display failure remains unexplained. Native M1 validation passed. Physical BC-250/RADV testing remains pending.

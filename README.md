@@ -4,7 +4,7 @@ The first milestone opens a resizable SDL3 window, creates a Vulkan 1.3 device a
 
 ## Build and run
 
-Use a C++20 toolchain, CMake 3.24+, SDL3 3.2+ development files, Vulkan 1.3 headers and loader, and a Vulkan-capable Linux driver. On Bazzite, build in a development environment with these packages and run in the desktop session with Mesa RADV. The executable uses the system SDL3 and Vulkan libraries. Original assets and a Windows compatibility runtime are unnecessary for this milestone.
+Use a C++20 toolchain, CMake 3.24+, SDL3 3.2+ development files, zlib 1.2.9+ development files, Vulkan 1.3 headers and loader, and a Vulkan-capable Linux driver. Python 3 runs the asset fixtures when building with tests. On this Apple M1 Pro, the same CMake commands build native ARM64 Linux and SDL selects the Wayland/Honeykrisp path. On Bazzite, build in a development environment with these packages and run in the desktop session with Mesa RADV. On this Mac, run `./build/ss2` from the checkout. To close automatically after 32 frames, run `./build/ss2 --frames 32`. The executable uses the system SDL3 and Vulkan libraries. Original assets and a Windows compatibility runtime are unnecessary for this milestone.
 
 ```sh
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
@@ -32,6 +32,7 @@ On the original ARM64 development host the Fedora layer was staged privately. To
 | Path | Responsibility |
 | --- | --- |
 | src/main.cpp | SDL application lifetime, input, presentation loop and optional frame statistics |
+| src/assets/ | Read a bounded FZFS archive entry and decode a selected 16-bit PCK frame |
 | src/render/ | Vulkan device selection, presentation, swapchain lifecycle and validation callbacks |
 | include/ss2/simulation.hpp | Platform-independent step, tick accumulator and snapshot boundary |
 | tests/ | Clock behavior, CLI diagnostics, real window resizing and injected WSI recovery |
@@ -39,6 +40,6 @@ On the original ARM64 development host the Fedora layer was staged privately. To
 | docs/ | Version-pinned upstream audit, original module evidence, validation results and milestone plan |
 | .github/workflows/ | x86-64 GCC Release and Clang sanitizer build/test definitions |
 
-Add `src/assets/` for the bounded SUE/PCK reader when its fixtures are ready, and `src/simulation/` for recovered behavior supported by original observations. Keep private installations, captures, save files, and Ghidra databases in a directory outside this project.
+The `ss2_sprite` executable runs the [SUE/PCK reference slice](docs/asset-reference.md) against a private game installation. Reserve `src/simulation/` for behavior supported by original observations. Keep private installations, captures, save files, and Ghidra databases in a directory outside this project.
 
 See the [validation record](docs/validation.md), [source audit](docs/source-audit.md), [original binary workflow](docs/reverse-engineering.md) and [implementation plan](docs/implementation-plan.md).

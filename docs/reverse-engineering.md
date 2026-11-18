@@ -54,3 +54,7 @@ Innoextract independently extracted the launcher, primary and override game DLLs
 ```
 
 On the primary DLL, the script reported 106 instruction references to timeGetTime, one to GetTickCount (site RVA 0xD03DB), one to Sleep (0xDD772) and zero to SetTimer under the script's direct-or-one-pointer search. SetTimer is present in the import table. Counts describe static references found by this procedure. They cannot identify which function advances simulation. The next evidence required is a trace connecting a time read to a simulation state write, repeated at different presentation rates, game speeds and across pause/resume. [Ghidra project](https://github.com/NationalSecurityAgency/ghidra)
+
+### Timing reference triage
+
+On the verified primary DLL, VModule_Play calls the active list node's function pointer at RVA 0x79C1E and follows the link at node offset 8. The export dispatches multiple handlers. Counting calls to the export alone would conflate dispatch and simulation work. The function at RVA 0x7AC70 reads timeGetTime and stores a value used by the linear congruential recurrence at RVA 0x7ACC0. This provides a concrete seed candidate to control for replay comparisons. Neither observation establishes a tick period. Both were checked against the i386 instructions in the original PE. A mission-level dynamic trace, pause/speed experiment and matched state observation remain open.
