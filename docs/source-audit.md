@@ -1,0 +1,44 @@
+# Reference source audit
+
+Audited recursive Git checkouts of WarStorm at `77a42000c24972ea9d6eaed616332fb2ffa63e4e` and WarToolKit at `8c5b925db477b310bb26f65d66f4b1cab8de0990` against the purchased GOG 13718 package. WarStorm pins Yoink at `1b1e6e9397f409eb0328c4eef9c14c4c5ab3d2c7`, Ogg at `db5c7a49ce7ebda47b15b78471e78fb7f2483e22`, Vorbis at `84c023699cdf023a32fa4ded32019f194afcdad0`, and zlib at `ef24c4c7502169f016dcd2a26923dbaf3216748c`. WarToolKit pins the same zlib commit. Both checkouts are outside the native project. MSVC build and runtime parity were not tested.
+
+## WarStorm
+
+| System | What the source establishes | Consequence for the port |
+| --- | --- | --- |
+| Game simulation | The listed Game directory contains only Game.vcxproj. It declares a Windows dynamic library with references to winmm and zlib and refers to Module.def. The listing lacks that file and game translation units. [Directory](https://github.com/americusmaximus/WarStorm/tree/77a42000c24972ea9d6eaed616332fb2ffa63e4e/Source/Game) · [Project](https://raw.githubusercontent.com/americusmaximus/WarStorm/77a42000c24972ea9d6eaed616332fb2ffa63e4e/Source/Game/Game.vcxproj) | The project cannot supply a replacement simulation. Unit orders, navigation, combat, visibility, RNG, AI, mission triggers, save/load and timing all require independent evidence. |
+| Launcher and module ABI | WinMain and InitializeApplicationStateModule have bodies. The latter loads the selected DLL and resolves all four VModule exports. InitializeRendererStateModule loads a renderer and resolves its initialization export. [Launcher module loading](https://github.com/americusmaximus/WarStorm/blob/77a42000c24972ea9d6eaed616332fb2ffa63e4e/Source/WarStorm/App.cxx#L142) · [Renderer loading](https://github.com/americusmaximus/WarStorm/blob/77a42000c24972ea9d6eaed616332fb2ffa63e4e/Source/WarStorm/Renderer.cxx#L35). The startup INI selects menu, game and text modules by name and selects one of three renderers. WSX contains import/export and renderer interface headers. [Solution](https://raw.githubusercontent.com/americusmaximus/WarStorm/77a42000c24972ea9d6eaed616332fb2ffa63e4e/WarStorm.sln) · [Configuration](https://raw.githubusercontent.com/americusmaximus/WarStorm/77a42000c24972ea9d6eaed616332fb2ffa63e4e/WarStorm.x32.ini) · [WSX](https://github.com/americusmaximus/WarStorm/tree/77a42000c24972ea9d6eaed616332fb2ffa63e4e/Source/WSX) | Use these to name candidate ABI boundaries, then verify each call against game_exe.exe. Launcher completeness is unverified. |
+| Menu and movies | ExecuteModule walks an action list and invokes handlers. Its VModule_Play address annotation agrees with the retail menu export. InitializeBink, ShowBinkFrame and ReleaseBink have implementations. The directory also contains input, controls, dossier, asset and archive code. [Menu dispatch](https://github.com/americusmaximus/WarStorm/blob/77a42000c24972ea9d6eaed616332fb2ffa63e4e/Source/Menu/Main.cxx) · [Bink](https://raw.githubusercontent.com/americusmaximus/WarStorm/77a42000c24972ea9d6eaed616332fb2ffa63e4e/Source/Menu/Bink.cxx) · [Menu tree](https://github.com/americusmaximus/WarStorm/tree/77a42000c24972ea9d6eaed616332fb2ffa63e4e/Source/Menu) | AcquireShortcut always returns CONTROLACTION_NONE, and Activate.cxx leaves many action registrations commented out. [Shortcut stub](https://github.com/americusmaximus/WarStorm/blob/77a42000c24972ea9d6eaed616332fb2ffa63e4e/Source/Menu/Shortcuts.cxx#L188) · [Action registration](https://github.com/americusmaximus/WarStorm/blob/77a42000c24972ea9d6eaed616332fb2ffa63e4e/Source/Menu/Activate.cxx#L1354). A functioning menu-to-mission-to-results round trip has not been verified. |
+| Rendering | N2CAD1024 has actual code. Initialize sets the surface stride and window limits. InitializeDirectX sets up DirectDraw and its cooperative level. The three resolution projects contain byte-identical Renderer.cxx files at this revision. [Renderer](https://raw.githubusercontent.com/americusmaximus/WarStorm/77a42000c24972ea9d6eaed616332fb2ffa63e4e/Source/N2CAD1024/Renderer.cxx) · [Renderer projects](https://github.com/americusmaximus/WarStorm/tree/77a42000c24972ea9d6eaed616332fb2ffa63e4e/Source) | Compare clipping, pixel layout, palette and sprite composition with captured frames before scaling to 4K. The fixed-size software/DirectDraw assumptions require a native presentation backend. Pixel parity and coverage across the three modules are open. |
+| Audio, compression, text and video dependencies | The solution has Text, winmm, libogg, libvorbis, libvorbisfile, Yoink and zlib projects. The submodules file names Ogg, Vorbis, zlib and Yoink. The README also lists Intel JPEG and identifies Bink. [Solution](https://raw.githubusercontent.com/americusmaximus/WarStorm/77a42000c24972ea9d6eaed616332fb2ffa63e4e/WarStorm.sln) · [Submodules](https://raw.githubusercontent.com/americusmaximus/WarStorm/77a42000c24972ea9d6eaed616332fb2ffa63e4e/.gitmodules) · [Upstream notes](https://github.com/americusmaximus/WarStorm) | Build dependencies and retail imports differ. Record the selected original binary variant for music tests. Sound mixing, localization coverage and cutscene compatibility need fixtures. |
+| Linux, 4K, 120 Hz | The inspected build is a Visual Studio solution and the inspected renderer calls Windows graphics APIs. The x64 configuration names Windows module binaries. [x64 config](https://github.com/americusmaximus/WarStorm/blob/77a42000c24972ea9d6eaed616332fb2ffa63e4e/WarStorm.x64.ini) · [Renderer implementation](https://raw.githubusercontent.com/americusmaximus/WarStorm/77a42000c24972ea9d6eaed616332fb2ffa63e4e/Source/N2CAD1024/Renderer.cxx) | No demonstrated SDL3/Vulkan engine, BC-250 performance result or recovered simulation cadence in the inspected material. |
+
+## WarToolKit
+
+| System | Source finding | Boundaries |
+| --- | --- | --- |
+| SUE writer | ArchiveFile reads data using stdio or zlib. It tracks entry offsets and sizes and handles block/compression choices. [sue/Archive.cxx](https://raw.githubusercontent.com/americusmaximus/WarToolKit/8c5b925db477b310bb26f65d66f4b1cab8de0990/Source/sue/Archive.cxx) | Implemented tool code. Validate the reader against its output and retail archives before relying on round trips. |
+| SUE reader | OpenArchive checks the magic and reads entry descriptors, names and offsets. ReadArchiveDetails inflates a table. AcquireArchiveItem and OpenArchiveItem distinguish external, packed and compressed entries. [unsue/Archive.cxx](https://github.com/americusmaximus/WarToolKit/blob/8c5b925db477b310bb26f65d66f4b1cab8de0990/Source/unsue/Archive.cxx) | Reference for a bounded native reader. Check offset ranges, fixed-width disk fields, decompression results and duplicate names explicitly. Some upstream structures use Windows handles and pointer casts. |
+| PCK frames and bitmap export | GetImageFrameCount derives count from the first offset. OpenImage creates DirectDraw surfaces and decodes repeated and literal 16-bit pixel runs. SavePixels writes bitmap data. [Image.cxx](https://github.com/americusmaximus/WarToolKit/blob/8c5b925db477b310bb26f65d66f4b1cab8de0990/Source/pckView/Image.cxx) · [BitMap.cxx](https://github.com/americusmaximus/WarToolKit/blob/8c5b925db477b310bb26f65d66f4b1cab8de0990/Source/pckView/BitMap.cxx) | Implemented conversion paths. The frame header still has an uncertain Colors field. Test transparency, row limits, origins and variant coverage separately. |
+| Runtime systems | The source tree lists pckView, sue, unsue and zlib. The stated scope includes multiple Sudden Strike titles. [Source tree](https://github.com/americusmaximus/WarToolKit/tree/8c5b925db477b310bb26f65d66f4b1cab8de0990/Source) · [Upstream](https://github.com/americusmaximus/WarToolKit) | No game loop, AI, campaign interpreter or Vulkan backend identified. File-format evidence needs a Gold 2.2 sample as an oracle. |
+
+## Reproduce the upstream audit
+
+Use an external reference directory on a network-enabled machine. These commands record the exact revisions of the top-level trees and nested SDKs. The native build has no dependency on these checkouts.
+
+```sh
+mkdir -p "$HOME/ss2-references"
+cd "$HOME/ss2-references"
+git clone https://github.com/americusmaximus/WarStorm.git
+git clone https://github.com/americusmaximus/WarToolKit.git
+git -C WarStorm checkout --detach 77a42000c24972ea9d6eaed616332fb2ffa63e4e
+git -C WarToolKit checkout --detach 8c5b925db477b310bb26f65d66f4b1cab8de0990
+for repo in WarStorm WarToolKit; do
+    git -C "$repo" submodule update --init --recursive
+    git -C "$repo" rev-parse HEAD
+    git -C "$repo" submodule status --recursive
+    git -C "$repo" ls-files Source
+done
+```
+
+Remaining evidence gaps include execution of the Windows projects, coverage of the menu action handlers and original runtime behavior under different speed settings.

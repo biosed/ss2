@@ -1,0 +1,11 @@
+/build*/
+/.agent-board/
+/private/
+/references/
+*.exe
+*.dll
+*.sue
+*.pck
+*.gpr
+*.rep/
+/.claude/

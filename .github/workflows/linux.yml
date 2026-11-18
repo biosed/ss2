@@ -1,0 +1,30 @@
+name: Linux Vulkan
+on: [push, pull_request]
+jobs:
+  build-and-test:
+    runs-on: ubuntu-24.04
+    container: fedora:44
+    strategy:
+      matrix:
+        include:
+          - type: Release
+            compiler: g++
+            flags: ""
+          - type: Debug
+            compiler: clang++
+            flags: "-fsanitize=address,undefined -fno-omit-frame-pointer"
+    steps:
+      - run: dnf install -y git gcc-c++ clang compiler-rt cmake ninja-build SDL3-devel vulkan-headers vulkan-loader-devel mesa-vulkan-drivers vulkan-validation-layers
+      - uses: actions/checkout@v4
+      - run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=${{ matrix.type }}
+          -DCMAKE_CXX_COMPILER=${{ matrix.compiler }}
+          "-DCMAKE_CXX_FLAGS=${{ matrix.flags }}"
+          -DSS2_TEST_WINDOW=ON -DSS2_TEST_VALIDATION=ON
+      - run: cmake --build build
+      - run: ctest --test-dir build --output-on-failure
+        env:
+          SDL_VIDEO_DRIVER: offscreen
+          VK_DRIVER_FILES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+          UBSAN_OPTIONS: halt_on_error=1
