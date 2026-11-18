@@ -3,6 +3,7 @@
 #include "assets/mission.hpp"
 #include "assets/scenery.hpp"
 #include "assets/terrain.hpp"
+#include "assets/vehicles.hpp"
 #include "ui/tutorial_selection.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
@@ -86,11 +87,13 @@ int runWindow(SDL_Window* window, ss2::ValidationReport* report, int limit, bool
     } else if (!gameDir.empty()) {
         auto map = ss2::assets::loadTutorialTerrain(gameDir);
         const auto objects = ss2::assets::drawTutorialScenery(map, gameDir);
-        auto infantry = ss2::assets::placeTutorialInfantry(map, gameDir);
+        const auto placements = ss2::assets::readTutorialPlacements(gameDir);
+        auto vehicles = ss2::assets::drawTutorialVehicles(map, gameDir, placements);
+        auto infantry = ss2::assets::placeTutorialInfantry(map, gameDir, placements);
         renderer.setMap(map);
         std::cout << "Tutorial I: " << map.width << 'x' << map.height << ", " << objects
-                  << " scenery placements, " << infantry.size() << " infantry\n";
-        selection.emplace(window, renderer, std::move(infantry));
+                  << " scenery placements, " << infantry.size() << " infantry, " << vehicles.size() << " vehicle and gun placements\n";
+        selection.emplace(window, renderer, std::move(infantry), std::move(vehicles));
     }
     FrameSample sample;
     const ss2::Snapshot empty{};

@@ -10,8 +10,9 @@ bool contains(MapRect r, int x, int y) {
 MapRect bounds(const assets::Infantry& u) { return {u.left, u.top, u.width, u.height}; }
 }
 
-TutorialSelection::TutorialSelection(SDL_Window* window, VulkanWindow& renderer, std::vector<assets::Infantry> units)
-    : window_(window), renderer_(renderer), units_(std::move(units)) {
+TutorialSelection::TutorialSelection(SDL_Window* window, VulkanWindow& renderer, std::vector<assets::Infantry> units,
+                                     std::vector<assets::Placement> vehicles)
+    : window_(window), renderer_(renderer), units_(std::move(units)), vehicles_(std::move(vehicles)) {
     // This editor mission names owner 0 "Player". Focus the placed officer in that player's squad.
     const auto first = std::ranges::find_if(units_, [](const auto& u) { return u.owner == 0 && u.id == "dofficer"; });
     if (first != units_.end()) {
@@ -88,6 +89,15 @@ void TutorialSelection::handle(const SDL_Event& e) {
     } else if (drag_ && e.type == SDL_EVENT_WINDOW_FOCUS_LOST) {
         drag_.reset();
         refresh();
+    } else if (e.type == SDL_EVENT_KEY_DOWN && e.key.key == SDLK_V && !vehicles_.empty()) {
+        const auto& unit = vehicles_[nextVehicle_];
+        nextVehicle_ = (nextVehicle_ + 1) % vehicles_.size();
+        selected_.clear();
+        renderer_.highlight({});
+        renderer_.focusMap(unit.x, unit.y);
+        const std::string title = "Sudden Strike II | Tutorial I | Native map | " + unit.id +
+            "   HP " + std::to_string(unit.hp) + "   Ammo " + std::to_string(unit.ammo);
+        SDL_SetWindowTitle(window_, title.c_str());
     } else if (e.type == SDL_EVENT_KEY_DOWN && e.key.key == SDLK_TAB && !units_.empty()) {
         const size_t next = selected_.empty() ? 0 : (*selected_.rbegin() + 1) % units_.size();
         selected_ = {next};

@@ -8,13 +8,15 @@
 namespace ss2 {
 class TutorialSelection {
 public:
-    TutorialSelection(SDL_Window*, VulkanWindow&, std::vector<assets::Infantry>);
+    TutorialSelection(SDL_Window*, VulkanWindow&, std::vector<assets::Infantry>, std::vector<assets::Placement> vehicles = {});
     void handle(const SDL_Event&);
 
 private:
     SDL_Window* window_;
     VulkanWindow& renderer_;
     std::vector<assets::Infantry> units_;
+    std::vector<assets::Placement> vehicles_;
+    size_t nextVehicle_{};
     std::set<size_t> selected_;
     std::optional<SDL_FPoint> drag_;
     void refresh();

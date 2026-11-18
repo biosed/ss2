@@ -15,7 +15,7 @@ target_compile_options(ss2 PRIVATE -Wall -Wextra -Wpedantic)
 find_package(ZLIB 1.2.9 REQUIRED)
 find_package(JPEG REQUIRED)
 add_library(ss2_assets STATIC src/assets/sprite.cpp src/assets/mission.cpp src/assets/terrain.cpp
-    src/assets/scenery.cpp src/assets/indexed.cpp src/assets/infantry.cpp)
+    src/assets/scenery.cpp src/assets/indexed.cpp src/assets/infantry.cpp src/assets/vehicles.cpp src/assets/placement.cpp)
 target_include_directories(ss2_assets PUBLIC src)
 target_link_libraries(ss2_assets PRIVATE ZLIB::ZLIB JPEG::JPEG)
 target_link_libraries(ss2 PRIVATE ss2_assets)

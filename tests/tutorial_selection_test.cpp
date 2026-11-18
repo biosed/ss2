@@ -18,7 +18,8 @@ int main(int argc, char**) {
             {"rifle", 270, 256, 80, 70, 1, 0, 266, 240, 9, 20},
             {"rifle", 280, 256, 90, 80, 2, 0, 276, 240, 9, 20},
             {"rifle", 260, 256, 90, 80, 2, 1, 259, 240, 5, 20},
-            {"rifle", 511, 256, 100, 100, 1, 0, 510, 240, 2, 20}});
+            {"rifle", 511, 256, 100, 100, 1, 0, 510, 240, 2, 20}},
+            {{"vehicle", 128, 128, 0, 100, 75, 1, 0}});
         if (!renderer.present({})) throw std::runtime_error("Selection fixture failed to present");
         int w{}, h{};
         SDL_GetWindowSize(window.get(), &w, &h);
@@ -58,6 +59,11 @@ int main(int argc, char**) {
         expect("2 infantry");
         SDL_SetModState(SDL_KMOD_NONE);
         if (!renderer.present({})) throw std::runtime_error("Selection highlight failed to present");
+        SDL_Event next{};
+        next.type = SDL_EVENT_KEY_DOWN;
+        next.key.key = SDLK_V;
+        select.handle(next);
+        expect("vehicle   HP 100   Ammo 75");
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         status = 1;

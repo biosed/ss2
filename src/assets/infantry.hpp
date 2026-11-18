@@ -1,5 +1,7 @@
 #pragma once
 #include "assets/map_image.hpp"
+#include "assets/placement.hpp"
+#include <span>
 #include <filesystem>
 #include <string>
 
@@ -10,5 +12,5 @@ struct Infantry {
     int left, top, width, height;
 };
 
-std::vector<Infantry> placeTutorialInfantry(MapImage&, const std::filesystem::path& gameDir);
+std::vector<Infantry> placeTutorialInfantry(MapImage&, const std::filesystem::path& gameDir, std::span<const Placement>);
 }
