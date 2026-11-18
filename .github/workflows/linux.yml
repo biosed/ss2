@@ -14,7 +14,7 @@ jobs:
             compiler: clang++
             flags: "-fsanitize=address,undefined -fno-omit-frame-pointer"
     steps:
-      - run: dnf install -y git gcc-c++ zlib-ng-compat-devel python3 clang compiler-rt cmake ninja-build SDL3-devel vulkan-headers vulkan-loader-devel mesa-vulkan-drivers vulkan-validation-layers
+      - run: dnf install -y git gcc-c++ zlib-ng-compat-devel libjpeg-turbo-devel python3 clang compiler-rt cmake ninja-build SDL3-devel vulkan-headers vulkan-loader-devel mesa-vulkan-drivers vulkan-validation-layers
       - uses: actions/checkout@v4
       - run: >
           cmake -S . -B build -G Ninja

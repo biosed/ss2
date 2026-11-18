@@ -23,3 +23,6 @@ The clear-only measurement establishes a presentation baseline. Assess the 8.33 
 3. **Run the smallest comparable scenario.** Use a recorded input sequence and a single observable state transition. Compare the native and original state at matched ticks across different render schedules, then compare the corresponding scene. Record the first divergent tick or pixel region before expanding to unit behavior, AI and campaigns.
 
 The first bounded SUE/PCK comparison passed on three retail sprite frames. The next unresolved reference is the original simulation clock and state progression. [Asset results](asset-reference.md) Run the RADV hardware test when the BC-250 is available. The project has no configured Git remote or hosted CI result.
+
+
+Tutorial I now provides a native visual reference and infantry picking. The next gameplay milestone is one original move order. Identify the retail order handler, establish the tick source and capture a starting unit state, destination and successive positions. That trace will provide an acceptance test for the first command under multiple render schedules. The current map inspector leaves all mission state at its recorded starting values. [Tutorial I evidence](tutorial-map.md)

@@ -58,3 +58,8 @@ On the primary DLL, the script reported 106 instruction references to timeGetTim
 ### Timing reference triage
 
 On the verified primary DLL, VModule_Play calls the active list node's function pointer at RVA 0x79C1E and follows the link at node offset 8. The export dispatches multiple handlers. Counting calls to the export alone would conflate dispatch and simulation work. The function at RVA 0x7AC70 reads timeGetTime and stores a value used by the linear congruential recurrence at RVA 0x7ACC0. This provides a concrete seed candidate to control for replay comparisons. Neither observation establishes a tick period. Both were checked against the i386 instructions in the original PE. A mission-level dynamic trace, pause/speed experiment and matched state observation remain open.
+
+
+### Tutorial I command reference
+
+The purchased editor source pairs a player-owned officer and riflemen in group 30 with named tutorial script records in `maps.src/map.020/mis.000/scripts2`. The labels cover selection, a send-unit prompt, a timer and a first-zone or enemy-group condition. The manual describes group selection and the native test exercises it. Labels and unit definition speed values alone do not establish movement distance per tick, obstacle handling or the script interpreter's event order. These require recovery in the original game module before the native scene can advance the mission.

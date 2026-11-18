@@ -1,6 +1,7 @@
 #include "render/window.hpp"
 #include <SDL3/SDL.h>
 #include <chrono>
+#include <cmath>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
@@ -48,8 +49,18 @@ int main(int argc, char** argv) {
         const bool validate = argc == 2 && std::string_view(argv[1]) == "--validate";
         ss2::VulkanWindow renderer(window.get(), validate ? &report : nullptr);
         checkSize(window.get(), renderer, 320, 240);
+        renderer.setMap({96, 64, std::vector<std::uint8_t>(96 * 64 * 4, 128)});
+        renderer.highlight({{20, 20, 8, 16}, {25, 23, 8, 16}});
         checkSize(window.get(), renderer, 640, 360);
+        const auto [x, y] = renderer.mapPosition(320, 180);
+        if (std::abs(x - 48) > 1 || std::abs(y - 32) > 1)
+            throw std::runtime_error("Map picking missed the center after resize");
+        renderer.setMap({1024, 1024, std::vector<std::uint8_t>(1024 * 1024 * 4, 64)});
+        renderer.focusMap(-500, -500);
         checkSize(window.get(), renderer, 384, 256);
+        const auto [edgeX, edgeY] = renderer.mapPosition(0, 0);
+        if (std::abs(edgeX) > 1 || std::abs(edgeY) > 1)
+            throw std::runtime_error("Map camera failed to clamp at the upper-left edge");
         // Wayland gives clients no portable minimized-state acknowledgement.
         if (std::string_view(SDL_GetCurrentVideoDriver()) == "x11" && SDL_MinimizeWindow(window.get())) {
             SDL_SyncWindow(window.get());
