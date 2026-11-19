@@ -59,6 +59,15 @@ int main(int argc, char**) {
         expect("2 infantry");
         SDL_SetModState(SDL_KMOD_NONE);
         if (!renderer.present({})) throw std::runtime_error("Selection highlight failed to present");
+        SDL_Event group{};
+        group.type = SDL_EVENT_KEY_DOWN;
+        group.key.key = SDLK_1;
+        group.key.mod = SDL_KMOD_CTRL;
+        select.handle(group);
+        click(251, 239, 1);
+        group.key.mod = SDL_KMOD_NONE;
+        select.handle(group);
+        expect("2 infantry");
         SDL_Event next{};
         next.type = SDL_EVENT_KEY_DOWN;
         next.key.key = SDLK_V;

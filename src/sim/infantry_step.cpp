@@ -1,0 +1,30 @@
+#include "sim/infantry_step.hpp"
+#include <algorithm>
+#include <array>
+#include <stdexcept>
+
+namespace ss2 {
+std::pair<int, int> InfantryStep::position() const {
+    static constexpr std::array<std::pair<int,int>, 8> directions{{
+        {1,0}, {1,1}, {0,1}, {-1,1}, {-1,0}, {-1,-1}, {0,-1}, {1,-1}
+    }};
+    if (slot >= 4) throw std::invalid_argument("Invalid infantry destination slot");
+    const auto [du, dv] = directions.at(direction);
+    const int remaining = running ? 255 - progress : 0;
+    const int subU = (8 + 16 * int(slot % 2)) * 256 - 16 * du * remaining;
+    const int subV = (8 + 16 * int(slot / 2)) * 256 - 16 * dv * remaining;
+    return {tileU * 32 + (subU >> 8), tileV * 32 + (subV >> 8)};
+}
+void InfantryStep::advance(bool crouched, std::uint32_t& sharedRandomState) {
+    if (!running) return;
+    sharedRandomState = sharedRandomState * 0x41c64e6du + 0x3039u;
+    if (progress == 255) {
+        running = false;
+        progress = 0;
+        return;
+    }
+    // All Tutorial I soldier definitions have zero experience delta for RUN.
+    const unsigned base = crouched ? 5 : 8;
+    progress = std::min(255u, unsigned(progress) + base + ((sharedRandomState >> 16) & 1u));
+}
+}

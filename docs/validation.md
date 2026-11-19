@@ -43,3 +43,9 @@ The ARM64 release and Clang ASan/UBSan suites exercised terrain decoding, indexe
 The M1 Pro desktop run used the native aarch64 ELF, SDL's X11 backend on the Plasma Wayland desktop, and Mesa Honeykrisp. The scene contains 1,360 decoded scenery placements, 88 infantry and eight tanks and guns. All 39 retail single-player mission overviews also decoded and presented in the sanitizer build. The 3840 × 2160 offscreen scene smoke used lavapipe. Neither that smoke nor the M1 panel establishes the physical BC-250's 4K/120 performance.
 
 The rebuilt x86-64 executable presented the tutorial on FEX/X11 with Honeykrisp and zero Vulkan validation errors. The FEX/offscreen lavapipe configuration failed during swapchain allocation with VK_ERROR_OUT_OF_DEVICE_MEMORY. Native ARM64 offscreen lavapipe succeeded. The public repository contains no retail data or captures.
+
+## First movement objective
+
+The native M1 build, Clang ASan/UBSan build and x86-64/FEX build exercise 18 tests with the private Tutorial I installation enabled. These cover the opening bytecode, accepted infantry steps, the two movement orders, final zone counts, control groups, briefing panels and Vulkan map-region readback. The rendered mission contains 1,368 nonempty scenery placements, including the damaged vehicle that marks the first objective.
+
+A real-time SDL input run used the installed 36 ms delay, two left-click selections and two right-click orders. It reached the original success callback and next briefing with zero Vulkan validation errors. A separate run used integer mouse coordinates and a faster test profile. The routes, input coordinates, checks against the original x86 routines and remaining simulation gaps are recorded in the [playable opening](tutorial-simulation.md). The hardware acceptance target remains 3840 × 2160 at 120 Hz on a BC-250 with RADV.

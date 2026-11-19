@@ -1,6 +1,6 @@
 # Sudden Strike II native Linux engine
 
-The native Linux executable opens the Tutorial I map from a private Gold 2.2 installation. It draws the terrain, scenery and placed infantry, and lets you inspect individual soldiers. Unit orders, movement, combat, AI and mission execution are still open. The simulation interface accepts a single step independently of display timing.
+The native Linux executable plays the first movement objective in Tutorial I from a private Gold 2.2 installation. You can select two original soldiers, order them into the objective area, and advance the original mission script. The SDL3/Vulkan renderer and the single-player mission clock run independently. Combat, AI, group orders and campaigns remain under development. [Play the verified opening](docs/tutorial-simulation.md#first-playable-objective)
 
 ## Run Tutorial I
 
@@ -8,7 +8,7 @@ The native Linux executable opens the Tutorial I map from a private Gold 2.2 ins
 ./build/ss2 --game-dir "$HOME/ss2-private/game/app"
 ```
 
-Left-click infantry to inspect their ID, HP, ammunition, group and owner. Drag a box around your squad to select multiple soldiers. Double-click selects matching infantry in view. Ctrl-double-click extends that selection across the map, and Shift toggles units. Tab focuses the next soldier. V visits the eight placed tanks and guns. Right-drag, middle-drag or use the arrow keys to pan. The wheel zooms, Home fits the map, 1 restores one map pixel per drawable pixel, and Escape closes the window.
+Press Enter or click a briefing panel to acknowledge it. Left-click one player soldier, then right-click clear ground when the cursor becomes a crosshair. Pause toggles the mission clock. Left-click infantry to inspect their ID, HP, ammunition, group and owner. Drag a box around your squad to select multiple soldiers. Double-click selects matching infantry in view. Ctrl-double-click extends that selection across the map, and Shift toggles units. Tab focuses the next soldier. V visits the eight placed tanks and guns. Right-drag, middle-drag or use the arrow keys to pan. The wheel zooms, Home fits the map, Ctrl plus a digit saves a squad and the digit recalls it, and Escape closes the window.
 
 For interactive runs, `./build/ss2` also checks `SS2_GAME_DIR` and then `$XDG_DATA_HOME/ss2/game` (default `~/.local/share/ss2/game`). A directory or symlink there can point to the privately extracted game. A launch without game data still provides the original renderer smoke test. `--frames` and `--timing` only load retail data when a path is supplied explicitly.
 

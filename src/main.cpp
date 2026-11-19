@@ -5,12 +5,15 @@
 #include "assets/terrain.hpp"
 #include "assets/vehicles.hpp"
 #include "ui/tutorial_selection.hpp"
+#include "ui/briefing.hpp"
+#include "sim/mission_runner.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <charconv>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <deque>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -79,7 +82,14 @@ int runWindow(SDL_Window* window, ss2::ValidationReport* report, int limit, bool
         if (const char* desktop = std::getenv("XDG_CURRENT_DESKTOP")) std::cout << "Desktop " << desktop << '\n';
     }
     ss2::VulkanWindow renderer(window, report);
+    std::optional<ss2::assets::InfantryScene> scene;
     std::optional<ss2::TutorialSelection> selection;
+    std::optional<ss2::MissionRunner> simulation;
+    ss2::Briefing briefing(window);
+    std::deque<std::string> pendingDialogs;
+    std::unique_ptr<SDL_Cursor, decltype(&SDL_DestroyCursor)> moveCursor(
+        SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_CROSSHAIR), SDL_DestroyCursor);
+    const auto resetCursor = [&] { if (moveCursor) SDL_SetCursor(SDL_GetDefaultCursor()); };
     if (!mission.empty()) {
         renderer.setMap(ss2::assets::readMissionOverview(mission));
         const auto title = "Sudden Strike II | " + mission.stem().string() + " | Mission overview";
@@ -89,26 +99,100 @@ int runWindow(SDL_Window* window, ss2::ValidationReport* report, int limit, bool
         const auto objects = ss2::assets::drawTutorialScenery(map, gameDir);
         const auto placements = ss2::assets::readTutorialPlacements(gameDir);
         auto vehicles = ss2::assets::drawTutorialVehicles(map, gameDir, placements);
-        auto infantry = ss2::assets::placeTutorialInfantry(map, gameDir, placements);
-        renderer.setMap(map);
-        std::cout << "Tutorial I: " << map.width << 'x' << map.height << ", " << objects
+        const auto mapWidth = map.width, mapHeight = map.height;
+        scene.emplace(std::move(map), gameDir, placements);
+        const auto& infantry = scene->units();
+        renderer.setMap(scene->compose());
+        std::cout << "Tutorial I: " << mapWidth << 'x' << mapHeight << ", " << objects
                   << " scenery placements, " << infantry.size() << " infantry, " << vehicles.size() << " vehicle and gun placements\n";
-        selection.emplace(window, renderer, std::move(infantry), std::move(vehicles));
+        auto data = ss2::assets::readTutorialData(gameDir / "maps/single/--- TUTORIAL I ---.SSM");
+        auto navigation = ss2::InfantryPathGrid::fromSubCellMasks(128,128,std::move(data.flags),std::move(data.obstacles));
+        ss2::TutorialUnits soldiers(std::move(navigation), infantry, vehicles);
+        simulation.emplace(std::move(data), ss2::tutorialTurnDelay(gameDir), std::move(soldiers));
+        selection.emplace(window, renderer, infantry, std::move(vehicles));
     }
     FrameSample sample;
     const ss2::Snapshot empty{};
     std::uint64_t frames = 0;
     bool running = true;
+    SDL_FPoint rightPress{};
+    bool pendingMove = false;
     while (running && (!limit || frames < static_cast<unsigned>(limit))) {
+        if (simulation) {
+            for (const auto pose : simulation->pollPoses()) {
+                const auto patch = scene->update(pose.index, pose.x, pose.y, pose.direction, pose.progress, pose.walking);
+                if (patch.pixels.width && patch.pixels.height) renderer.updateMapRegion(patch.x, patch.y, patch.pixels);
+                selection->update(pose.index, scene->units().at(pose.index));
+            }
+            for (const auto event : simulation->poll()) {
+                const auto& data = simulation->data();
+                if (event.kind == ss2::MissionEvent::Dialog || event.kind == ss2::MissionEvent::Message)
+                    std::cout << "Tutorial I phrase " << event.index << '\n';
+                if (event.kind == ss2::MissionEvent::Dialog) {
+                    pendingMove = false;
+                    resetCursor();
+                    if (briefing.active()) pendingDialogs.push_back(data.phrases.at(event.index));
+                    else briefing.open(data.phrases.at(event.index));
+                } else if (event.kind == ss2::MissionEvent::Camera) {
+                    const auto [x, y] = data.locations.at(event.index);
+                    renderer.focusMap(x, y);
+                } else if (event.kind == ss2::MissionEvent::Message)
+                    SDL_SetWindowTitle(window, data.phrases.at(event.index).c_str());
+                else if (event.kind == ss2::MissionEvent::Marker && selection) {
+                    const auto [x, y] = data.markers.at(event.index);
+                    selection->mark(x, y);
+                }
+            }
+        }
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
-            if (event.type == SDL_EVENT_QUIT || event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED ||
-                (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE))
+            if (event.type == SDL_EVENT_QUIT || event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) {
                 running = false;
+                break;
+            }
+            if (briefing.active()) {
+                if (briefing.handle(event)) {
+                    if (pendingDialogs.empty()) simulation->acknowledge();
+                    else {
+                        briefing.open(std::move(pendingDialogs.front()));
+                        pendingDialogs.pop_front();
+                    }
+                }
+                if (event.type >= SDL_EVENT_WINDOW_FIRST && event.type <= SDL_EVENT_WINDOW_LAST)
+                    renderer.handleEvent(event);
+                continue;
+            }
+            if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE) running = false;
+            if (simulation && event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_PAUSE && !event.key.repeat)
+                simulation->togglePause();
+            if (simulation && event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_RIGHT) {
+                pendingMove = true;
+                rightPress = {event.button.x, event.button.y};
+            }
+            if (pendingMove && event.type == SDL_EVENT_MOUSE_MOTION &&
+                std::hypot(event.motion.x-rightPress.x, event.motion.y-rightPress.y) > 3) pendingMove = false;
+            if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST) pendingMove = false;
+            if (pendingMove && event.type == SDL_EVENT_MOUSE_BUTTON_UP && event.button.button == SDL_BUTTON_RIGHT) {
+                pendingMove = false;
+                const auto [x,y] = renderer.mapPosition(event.button.x, event.button.y);
+                if (selection->selected().size() == 1) {
+                    if (!simulation->move(*selection->selected().begin(), int(std::floor(x)), int(std::floor(y))))
+                        SDL_SetWindowTitle(window, "Tutorial I | Choose an idle player soldier and a clear straight route");
+                    else std::cout << "Tutorial I accepted move to map pixel " << int(x) << ',' << int(y) << '\n';
+                } else SDL_SetWindowTitle(window, "Tutorial I | Select one soldier to issue a move");
+            }
+            if (simulation && moveCursor && event.type == SDL_EVENT_MOUSE_MOTION && !event.motion.state) {
+                const auto [x,y] = renderer.mapPosition(event.motion.x,event.motion.y);
+                const auto& picked = selection->selected();
+                const bool legal = picked.size() == 1 && simulation->canMove(*picked.begin(), int(std::floor(x)), int(std::floor(y)));
+                SDL_SetCursor(legal ? moveCursor.get() : SDL_GetDefaultCursor());
+            }
             if (selection) selection->handle(event);
+            if (selection && event.type == SDL_EVENT_KEY_DOWN && event.key.key >= SDLK_0 && event.key.key <= SDLK_9) continue;
             renderer.handleEvent(event);
         }
         if (!running) break;
+        briefing.draw(renderer);
         if (renderer.present(empty)) {
             ++frames;
             if (timing && sample.frame()) break;
@@ -116,6 +200,7 @@ int runWindow(SDL_Window* window, ss2::ValidationReport* report, int limit, bool
             SDL_Delay(SDL_GetWindowFlags(window) & SDL_WINDOW_MINIMIZED ? 30 : 5);
         }
     }
+    resetCursor();
     std::cout << "Presented " << frames << " frames\n";
     if (timing && !sample.report(refreshRate)) return 1;
     return limit && frames < static_cast<unsigned>(limit) ? 1 : 0;
