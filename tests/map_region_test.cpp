@@ -146,6 +146,32 @@ int main(int argc, char** argv) {
         same(renderer, reference, "patch on the replacement map");
         present(renderer);
         same(renderer, reference, "idle frame leaves the map alone");
+        // Markers: every kind, clipped and degenerate rectangles, at several zoom levels.
+        using ss2::MarkerKind;
+        renderer.setMarkers({{{5, 5, 10, 10}, MarkerKind::selection},
+                             {{12, 30, 8, 12}, MarkerKind::attack},
+                             {{20, 60, 6, 6}, MarkerKind::move},
+                             {{-50, -50, 60, 60}, MarkerKind::attack},      // Clipped at the map corner.
+                             {{38, 70, 500, 500}, MarkerKind::move},        // Runs off the far edges.
+                             {{0, 0, 40, 72}, MarkerKind::attack},          // Exactly the map.
+                             {{10, 10, 0, 5}, MarkerKind::selection},       // Empty: dropped.
+                             {{2147483600, 5, 100, 5}, MarkerKind::move},   // Far outside: dropped.
+                             {{3, 3, 1, 1}, MarkerKind::attack}});          // Smaller than the line weight.
+        present(renderer);
+        SDL_Event wheel{};
+        wheel.type = SDL_EVENT_MOUSE_WHEEL;
+        for (float step : {4.f, 4.f, -20.f}) {
+            wheel.wheel.y = step;
+            renderer.handleEvent(wheel);
+            present(renderer);
+        }
+        same(renderer, reference, "markers do not alter the map image");
+        rejects([&] { renderer.setMarkers({{{1, 1, 4, 4}, static_cast<MarkerKind>(7)}}); }, "unknown marker kind");
+        renderer.setMarkers({});
+        present(renderer);
+        renderer.setMarkers({{{1, 1, 4, 4}, MarkerKind::attack}});
+        renderer.setMap(reference);  // Replacing the map drops its markers.
+        present(renderer);
     } catch (const std::exception& e) {
         std::cerr << e.what() << '\n';
         status = 1;

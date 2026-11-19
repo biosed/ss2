@@ -1,28 +1,17 @@
 #include "render/window.hpp"
 #include "ui/briefing.hpp"
 #include <algorithm>
+#include <chrono>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace {
 void check(bool condition, const char* what) {
     if (!condition) throw std::runtime_error(what);
-}
-
-void wrapping() {
-    using Lines = std::vector<std::string>;
-    check(ss2::wrapText("", 10) == Lines{""}, "empty text is one blank line");
-    check(ss2::wrapText("one two three", 7) == Lines{"one two", "three"}, "greedy wrap");
-    check(ss2::wrapText("a  b\t c", 80) == Lines{"a b c"}, "runs of blanks collapse");
-    check(ss2::wrapText("first\n\nsecond", 80) == Lines{"first", "", "second"}, "newlines are kept");
-    check(ss2::wrapText("abcdefghij", 4) == Lines{"abcd", "efgh", "ij"}, "long words are split");
-    check(ss2::wrapText("x abcdefgh", 4) == Lines{"x", "abcd", "efgh"}, "long word after a short one");
-    // Two-byte code points count as one column each and are never cut in half.
-    check(ss2::wrapText("\xC3\xA9\xC3\xA9\xC3\xA9", 2) == Lines{"\xC3\xA9\xC3\xA9", "\xC3\xA9"}, "UTF-8 split");
-    check(ss2::wrapText("word", 0) == Lines{"w", "o", "r", "d"}, "zero columns behaves as one");
 }
 
 SDL_Event key(SDL_Keycode code, bool repeat = false) {
@@ -58,6 +47,95 @@ void present(ss2::VulkanWindow& renderer) {
     }
     throw std::runtime_error("Timed out waiting for presentation");
 }
+
+bool hasColour(const ss2::Notice& n, int r, int g, int b) {
+    const auto& p = n.rgba();
+    for (std::size_t i = 0; i + 3 < p.size(); i += 4)
+        if (p[i] == r && p[i + 1] == g && p[i + 2] == b) return true;
+    return false;
+}
+
+void notices(SDL_Window* window, ss2::VulkanWindow& renderer) {
+    using namespace std::chrono_literals;
+    using ss2::NoticeKind;
+    int pixelW{}, pixelH{};
+    SDL_GetWindowSizeInPixels(window, &pixelW, &pixelH);
+    ss2::Notice notice(window);
+    check(!notice.visible() && !notice.advance(1s), "starts hidden");
+    notice.clear();
+
+    notice.show("Move order accepted", NoticeKind::accepted, 3s);
+    check(notice.visible() && notice.kind() == NoticeKind::accepted && notice.text() == "Move order accepted", "shown");
+    check(notice.width() && notice.width() <= unsigned(pixelW) && notice.height() <= unsigned(pixelH), "notice fits");
+    check(notice.rgba().size() == std::size_t(notice.width()) * notice.height() * 4, "notice pixel count");
+    check(std::ranges::all_of(notice.rgba(), [n = 0](std::uint8_t v) mutable { return n++ % 4 != 3 || v == 255; }),
+          "notice is opaque");
+    check(hasColour(notice, 236, 236, 228), "notice text was rendered");
+    check(hasColour(notice, 104, 178, 120) && !hasColour(notice, 212, 96, 88), "accepted accent");
+    const auto accepted = notice.rgba();
+
+    // Age comes only from the caller.
+    check(!notice.advance(0ns) && !notice.advance(1s) && !notice.advance(1999ms) && notice.visible(), "still young");
+    check(notice.advance(1ms) && !notice.visible(), "expires exactly at its lifetime");
+    check(!notice.advance(10s), "expiry is reported once");
+
+    // Showing again replaces the text and restarts the age.
+    notice.show("Cannot move there", NoticeKind::blocked, 2s);
+    check(hasColour(notice, 212, 96, 88) && !hasColour(notice, 104, 178, 120), "blocked accent");
+    check(notice.rgba() != accepted, "kinds look different");
+    check(!notice.advance(1500ms), "first notice ages");
+    notice.show("That order is not available yet", NoticeKind::unsupported, 2s);
+    check(hasColour(notice, 214, 170, 82), "unsupported accent");
+    check(!notice.advance(1500ms) && notice.visible(), "replacement restarts the age");
+    check(notice.advance(1h) && !notice.visible(), "a long stall expires it");
+
+    // Zero lifetime stays until cleared; empty text clears.
+    notice.show("Pinned", NoticeKind::accepted, 0s);
+    check(!notice.advance(24h) && notice.visible(), "pinned notice stays");
+    notice.show("", NoticeKind::accepted);
+    check(!notice.visible(), "empty text clears");
+    try { notice.advance(-1ns); check(false, "negative elapsed is rejected"); } catch (const std::invalid_argument&) {}
+    try { notice.show("x", NoticeKind::accepted, -1s); check(false, "negative lifetime is rejected"); }
+    catch (const std::invalid_argument&) {}
+
+    // Long text is bounded to a few lines instead of covering the map.
+    std::string longText;
+    for (int i = 0; i < 300; ++i) longText += "order feedback ";
+    notice.show("Short", NoticeKind::blocked);
+    const auto oneLine = notice.height();
+    notice.show(longText, NoticeKind::blocked);
+    check(notice.height() <= unsigned(pixelH) && notice.height() < oneLine * 4 && notice.width() <= unsigned(pixelW),
+          "long notice is bounded");
+
+    // Not modal: input events change nothing.
+    for (auto event : {key(SDLK_RETURN), key(SDLK_ESCAPE), button(SDL_EVENT_MOUSE_BUTTON_DOWN, 1, 1),
+                       button(SDL_EVENT_MOUSE_BUTTON_UP, 1, 1)}) notice.handle(event);
+    check(notice.visible(), "input does not dismiss a notice");
+
+    // Presentation: alone, together with a panel, and while each is removed.
+    notice.draw(renderer);
+    present(renderer);
+    ss2::Briefing briefing(window);
+    briefing.open("Panel above the notice.");
+    briefing.draw(renderer);
+    present(renderer);
+    check(notice.advance(10s), "expires while the panel is open");
+    notice.draw(renderer);
+    present(renderer);
+    notice.show("Back again", NoticeKind::accepted);
+    notice.draw(renderer);
+    check(briefing.acknowledge(), "panel closes");
+    briefing.draw(renderer);
+    present(renderer);
+
+    // Oversized and tiny strips are cropped or placed without leaving the window.
+    renderer.setOverlay(1024, 768, std::vector<std::uint8_t>(1024 * 768 * 4, 255), ss2::OverlaySlot::notice);
+    present(renderer);
+    renderer.setOverlay(1, 1, std::vector<std::uint8_t>(4, 255), ss2::OverlaySlot::notice);
+    present(renderer);
+    renderer.clearOverlay(ss2::OverlaySlot::notice);
+    present(renderer);
+}
 }
 
 int main(int argc, char** argv) {
@@ -68,7 +146,6 @@ int main(int argc, char** argv) {
     ss2::ValidationReport report;
     int status = 0;
     try {
-        wrapping();
         std::unique_ptr<SDL_Window, decltype(&SDL_DestroyWindow)> window(
             SDL_CreateWindow("Briefing test", 640, 480, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE), SDL_DestroyWindow);
         if (!window) throw std::runtime_error(SDL_GetError());
@@ -80,6 +157,15 @@ int main(int argc, char** argv) {
         ss2::Briefing briefing(window.get());
         check(!briefing.active() && !briefing.acknowledge(), "starts closed");
         check(!briefing.handle(key(SDLK_RETURN)), "closed panel ignores keys");
+
+        briefing.open("iii");
+        const auto narrow = briefing.width();
+        briefing.open(std::string(20, 'W'));
+        const auto wide = briefing.width();
+        briefing.open(std::string(20, 'i'));
+        check(briefing.width() < wide && narrow < wide, "panel follows proportional text width");
+        briefing.open("Déplacez l’unité.\n" + std::string(300, 'W'));
+        check(briefing.pageCount() > 1 && briefing.width() <= unsigned(pixelW), "Unicode and long words wrap");
 
         briefing.open("Move the selected squad to the marked position.\nPress Enter when ready.");
         check(briefing.active() && briefing.pageCount() == 1, "opens on a single page");
@@ -163,6 +249,7 @@ int main(int argc, char** argv) {
         present(renderer);
         renderer.clearOverlay();
         present(renderer);
+        notices(window.get(), renderer);
     } catch (const std::exception& e) {
         std::cerr << e.what() << '\n';
         status = 1;

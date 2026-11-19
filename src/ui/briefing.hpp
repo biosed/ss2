@@ -1,18 +1,17 @@
 #pragma once
 
 #include <SDL3/SDL.h>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <string>
-#include <string_view>
+#include <memory>
 #include <vector>
+
+struct _PangoContext;
 
 namespace ss2 {
 class VulkanWindow;
-
-// Greedy word wrap on spaces and newlines. A column is one UTF-8 code point,
-// and words longer than a line are split between code points.
-std::vector<std::string> wrapText(std::string_view text, std::size_t columns);
 
 // A modeless text panel centred over the parent window. It never runs its own
 // event loop and has no timers: it stays open until acknowledged. While
@@ -48,11 +47,58 @@ private:
     bool inside(float windowX, float windowY) const;
 
     SDL_Window* parent_;
+    std::shared_ptr<_PangoContext> fonts_;
     std::string text_;
     bool active_ = false, armed_ = false;
     std::size_t page_ = 0, pages_ = 0;
     unsigned width_ = 0, height_ = 0;
     int left_ = 0, top_ = 0;
+    std::vector<std::uint8_t> rgba_;
+    std::uint64_t revision_ = 0, drawn_ = 0;
+};
+
+enum class NoticeKind { accepted, unsupported, blocked };
+
+// A short status strip at the bottom centre of the parent window. It is not
+// modal: it never consumes input and needs no acknowledgement. It keeps no
+// clock of its own; the caller reports elapsed time through advance().
+class Notice {
+public:
+    using Duration = std::chrono::nanoseconds;
+    explicit Notice(SDL_Window* parent);
+
+    // Replaces the current notice and restarts its age. A zero lifetime keeps
+    // it until clear() or the next show(). Empty text clears.
+    void show(std::string text, NoticeKind kind, Duration lifetime = std::chrono::seconds(4));
+    void clear();
+    bool visible() const { return visible_; }
+    NoticeKind kind() const { return kind_; }
+    const std::string& text() const { return text_; }
+
+    // Adds caller-measured time to the notice's age and hides it once the
+    // lifetime has passed. Returns true when this call hid it.
+    bool advance(Duration elapsed);
+
+    // Only follows window size changes. Pass every event; none is consumed.
+    void handle(const SDL_Event&);
+
+    // Hands the strip to the renderer, or removes it. Call once per frame.
+    void draw(VulkanWindow&);
+
+    unsigned width() const { return width_; }
+    unsigned height() const { return height_; }
+    const std::vector<std::uint8_t>& rgba() const { return rgba_; }
+
+private:
+    void layout();
+
+    SDL_Window* parent_;
+    std::shared_ptr<_PangoContext> fonts_;
+    std::string text_;
+    NoticeKind kind_ = NoticeKind::accepted;
+    Duration lifetime_{}, age_{};
+    bool visible_ = false;
+    unsigned width_ = 0, height_ = 0;
     std::vector<std::uint8_t> rgba_;
     std::uint64_t revision_ = 0, drawn_ = 0;
 };

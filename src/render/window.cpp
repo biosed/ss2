@@ -1,4 +1,5 @@
 #include "render/window.hpp"
+#include "render/sprite_shaders.hpp"
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
@@ -6,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstdio>
 #include <cstring>
 #include <stdexcept>
@@ -17,9 +19,12 @@
 namespace ss2 {
 namespace {
 constexpr auto transfer = vk::ImageUsageFlagBits::eTransferDst;
+constexpr auto attachment = vk::ImageUsageFlagBits::eColorAttachment;
+struct SpriteVertex { float x, y, u, v, brightness, alpha; };
 constexpr auto transferStage = vk::PipelineStageFlagBits::eTransfer;
 constexpr std::uint64_t acquireTimeoutNs = 50'000'000;
 constexpr char validationLayer[] = "VK_LAYER_KHRONOS_validation";
+constexpr std::size_t outlineBand = 8192 * 4;
 
 VKAPI_ATTR VkBool32 VKAPI_CALL onValidation(VkDebugUtilsMessageSeverityFlagBitsEXT,
     VkDebugUtilsMessageTypeFlagsEXT, const VkDebugUtilsMessengerCallbackDataEXT* message, void* data) {
@@ -57,6 +62,8 @@ struct VulkanWindow::Impl {
     // only after its own swapchain image has been acquired again.
     std::vector<vk::UniqueSemaphore> rendered;
     vk::Extent2D activeExtent;
+    // Window size in pixels that the current swapchain was built for.
+    int builtWidth = 0, builtHeight = 0;
     bool dirty = true;
     vk::UniqueDeviceMemory mapMemory;
     vk::UniqueImage map;
@@ -64,23 +71,65 @@ struct VulkanWindow::Impl {
     vk::UniqueDeviceMemory outlineMemory;
     vk::UniqueBuffer outline;
     std::vector<MapRect> selected;
+    std::vector<MapMarker> markers;
+    std::vector<MapBar> bars;
     struct MapPatch { vk::DeviceSize offset; int x, y; unsigned width, height; };
     std::vector<MapPatch> patches;
     std::vector<std::uint8_t> patchPixels;
     vk::UniqueDeviceMemory patchMemory;
     vk::UniqueBuffer patchBuffer;
     vk::DeviceSize patchCapacity{};
-    vk::UniqueDeviceMemory overlayMemory;
-    vk::UniqueBuffer overlayBuffer;
-    vk::DeviceSize overlayCapacity{};
-    std::vector<std::uint8_t> overlayPixels;
-    unsigned overlayW{}, overlayH{};
-    bool overlayStale = false;
+    struct Overlay {
+        vk::UniqueDeviceMemory memory;
+        vk::UniqueBuffer buffer;
+        vk::DeviceSize capacity{};
+        std::vector<std::uint8_t> pixels;
+        unsigned width{}, height{};
+        int left{}, top{};   // used by slots without a fixed place
+        bool stale = false;
+    };
+    // Indexed by OverlaySlot and drawn back to front: the bar, the notice, the panel, the menu.
+    std::array<Overlay, 5> overlays;
     // Transform of the last recorded frame, including any letterboxing.
     double screenLeft{}, screenTop{}, scaleX = 1.0, scaleY = 1.0;
     double centerX{}, centerY{}, scale = 1.0;
     vk::Format surfaceFormat{};
     bool transformReady = false;
+    bool mapLinear = false;
+    vk::Format mapFormat{};
+    // Sprite pass. Views follow the swapchain; the pipeline follows the surface format.
+    std::vector<vk::UniqueImageView> views;
+    bool canCapture = false;
+    vk::UniqueSampler sampler;
+    vk::UniqueDescriptorSetLayout spriteLayout;
+    vk::UniquePipelineLayout spritePipelineLayout;
+    vk::UniqueDescriptorPool spritePool;
+    vk::UniquePipeline spritePipeline;
+    vk::Format spritePipelineFormat{};
+    struct Atlas {
+        vk::UniqueDeviceMemory memory;
+        vk::UniqueImage image;
+        vk::UniqueImageView view;
+        vk::DescriptorSet set;
+        unsigned width{}, height{};
+        vk::Format format{};
+        std::vector<std::uint8_t> pixels;   // kept so the atlas can follow a surface format change
+    };
+    // The caller's slots, then one of our own that holds the glow shapes for beams.
+    static constexpr unsigned beamAtlas = VulkanWindow::spriteAtlasSlots;
+    static constexpr unsigned beamBlock = 16;   // texels per side of one colour's glow
+    std::array<Atlas, VulkanWindow::spriteAtlasSlots + 1> atlases;
+    std::vector<Sprite> sprites;
+    std::vector<MapBeam> beams;
+    std::vector<std::array<std::uint8_t, 3>> beamPalette;
+    struct SpriteBatch { unsigned atlas; std::uint32_t first, count; };
+    std::vector<SpriteBatch> spriteBatches;
+    vk::UniqueDeviceMemory spriteMemory;
+    vk::UniqueBuffer spriteBuffer;
+    vk::DeviceSize spriteCapacity{};
+    bool spritesStale = false;
+    // Where the map landed on screen in the last recorded frame.
+    vk::Rect2D mapScreenRect;
 
     std::pair<double, double> windowScale() const {
         int w{}, h{};
@@ -130,7 +179,11 @@ struct VulkanWindow::Impl {
         const float priority = 1;
         vk::DeviceQueueCreateInfo queueInfo({}, family, 1, &priority);
         const char* swapchainExtension = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
-        device = gpu.createDeviceUnique({{}, 1, &queueInfo, 0, nullptr, 1, &swapchainExtension});
+        vk::PhysicalDeviceVulkan13Features features13;
+        features13.dynamicRendering = true;
+        vk::DeviceCreateInfo deviceInfo({}, 1, &queueInfo, 0, nullptr, 1, &swapchainExtension);
+        deviceInfo.pNext = &features13;
+        device = gpu.createDeviceUnique(deviceInfo);
         queue = device->getQueue(family, 0);
         pool = device->createCommandPoolUnique({vk::CommandPoolCreateFlagBits::eResetCommandBuffer, family});
         command = device->allocateCommandBuffers({*pool, vk::CommandBufferLevel::ePrimary, 1}).front();
@@ -147,12 +200,19 @@ struct VulkanWindow::Impl {
             if (std::ranges::none_of(extensions, [](const auto& e) {
                 return std::strcmp(e.extensionName, VK_KHR_SWAPCHAIN_EXTENSION_NAME) == 0;
             })) continue;
-            if (!(candidate.getSurfaceCapabilitiesKHR(*surface).supportedUsageFlags & transfer) ||
-                candidate.getSurfaceFormatsKHR(*surface).empty()) continue;
             const auto families = candidate.getQueueFamilyProperties();
             for (uint32_t i = 0; i < families.size(); ++i) {
                 if (!(families[i].queueFlags & vk::QueueFlagBits::eGraphics) ||
+                    // On Wayland a device may support the surface type but lack a
+                    // buffer format the current compositor can import.
+                    !SDL_Vulkan_GetPresentationSupport(*instance, candidate, i) ||
                     !candidate.getSurfaceSupportKHR(i, *surface)) continue;
+                // These queries require a device that can present to this specific surface.
+                const auto usage = candidate.getSurfaceCapabilitiesKHR(*surface).supportedUsageFlags;
+                if (!(usage & transfer) || !(usage & attachment) ||
+                    candidate.getSurfaceFormatsKHR(*surface).empty()) break;
+                if (!candidate.getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan13Features>()
+                         .get<vk::PhysicalDeviceVulkan13Features>().dynamicRendering) break;
                 const int score = props.deviceType == vk::PhysicalDeviceType::eDiscreteGpu ? 2 :
                                   props.deviceType == vk::PhysicalDeviceType::eIntegratedGpu ? 1 : 0;
                 if (score > best) {
@@ -163,7 +223,7 @@ struct VulkanWindow::Impl {
                 break;
             }
         }
-        if (!gpu) throw std::runtime_error("Need Vulkan 1.3, a graphics/present queue and transfer-capable swapchain");
+        if (!gpu) throw std::runtime_error("Need Vulkan 1.3 with dynamic rendering, a graphics/present queue and a swapchain usable as transfer destination and colour attachment");
         const auto info = gpu.getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceDriverProperties>();
         std::cout << "SDL " << SDL_GetCurrentVideoDriver() << " | "
                   << info.get<vk::PhysicalDeviceProperties2>().properties.deviceName << " | "
@@ -205,20 +265,34 @@ struct VulkanWindow::Impl {
             if (caps.supportedCompositeAlpha & mode) { alpha = mode; break; }
         }
         device->waitIdle();
+        auto usage = transfer | attachment;
+        canCapture = bool(caps.supportedUsageFlags & vk::ImageUsageFlagBits::eTransferSrc);
+        if (canCapture) usage |= vk::ImageUsageFlagBits::eTransferSrc;
         vk::SwapchainCreateInfoKHR create({}, *surface, count, format.format, format.colorSpace,
-            extent, 1, transfer, vk::SharingMode::eExclusive, 0, nullptr, caps.currentTransform,
+            extent, 1, usage, vk::SharingMode::eExclusive, 0, nullptr, caps.currentTransform,
             alpha, vk::PresentModeKHR::eFifo, true, chain.get());
+        views.clear();
         chain = device->createSwapchainKHRUnique(create);
         images = device->getSwapchainImagesKHR(*chain);
+        for (auto image : images)
+            views.push_back(device->createImageViewUnique({{}, image, vk::ImageViewType::e2D, format.format, {},
+                {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}}));
         rendered.clear();
         for (size_t i = 0; i < images.size(); ++i) rendered.push_back(device->createSemaphoreUnique({}));
         if (map && !(gpu.getFormatProperties(format.format).optimalTilingFeatures & vk::FormatFeatureFlagBits::eBlitDst))
             throw std::runtime_error("Surface format cannot display the map");
         if (map && surfaceFormat != format.format)
             throw std::runtime_error("Map surface format changed during resize");
+        const bool formatChanged = surfaceFormat != format.format;
         surfaceFormat = format.format;
         activeExtent = extent;
-        overlayStale = true; // Stored in the surface's byte order.
+        // Atlases are stored in the surface's colour encoding, so they follow it.
+        if (formatChanged)
+            for (unsigned slot = 0; slot < atlases.size(); ++slot)
+                if (atlases[slot].image) uploadAtlas(slot);
+        builtWidth = width;
+        builtHeight = height;
+        for (auto& overlay : overlays) overlay.stale = true; // Stored in the surface's byte order.
         dirty = false;
         std::cout << "Swapchain " << extent.width << 'x' << extent.height << " FIFO, "
                   << images.size() << " images, " << vk::to_string(format.format) << ", " << vk::to_string(format.colorSpace) << '\n';
@@ -258,16 +332,23 @@ struct VulkanWindow::Impl {
         std::memcpy(mapped, data.rgba.data(), data.rgba.size());
         device->unmapMemory(*stagingMemory);
         if (!outline) {
-            constexpr size_t outlineBytes = 8192 * 4;
+            // One band of solid colour per MarkerKind plus a dark one for gauge backgrounds,
+            // written in the surface's byte order.
+            constexpr size_t outlineBytes = outlineBand * 4;
             vk::UniqueDeviceMemory memory;
             auto buffer = device->createBufferUnique({{}, outlineBytes, vk::BufferUsageFlagBits::eTransferSrc});
             memory = allocate(device->getBufferMemoryRequirements(*buffer),
                 vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
             device->bindBufferMemory(*buffer, *memory, 0);
             auto* pixels = static_cast<std::uint8_t*>(device->mapMemory(*memory, 0, outlineBytes));
+            const bool bgr = surfaceFormat == vk::Format::eB8G8R8A8Srgb || surfaceFormat == vk::Format::eB8G8R8A8Unorm;
+            constexpr std::uint8_t colours[4][3] = {{100, 255, 100}, {232, 72, 60}, {240, 210, 90}, {24, 26, 24}};
             for (size_t i = 0; i < outlineBytes; i += 4) {
-                pixels[i] = pixels[i+2] = 100;
-                pixels[i+1] = pixels[i+3] = 255;
+                const auto& c = colours[i / outlineBand];
+                pixels[i] = c[bgr ? 2 : 0];
+                pixels[i+1] = c[1];
+                pixels[i+2] = c[bgr ? 0 : 2];
+                pixels[i+3] = 255;
             }
             device->unmapMemory(*memory);
             outline = std::move(buffer);
@@ -297,9 +378,16 @@ struct VulkanWindow::Impl {
         queue.waitIdle();
         map = std::move(image);
         mapMemory = std::move(memory);
+        mapFormat = format;
         patches.clear();
         patchPixels.clear();
         selected.clear();
+        markers.clear();
+        bars.clear();
+        sprites.clear();
+        beams.clear();
+        spriteBatches.clear();
+        spritesStale = false;
         transformReady = false;
         mapSize = vk::Extent2D(data.width, data.height);
         centerX = data.width / 2.0;
@@ -409,8 +497,14 @@ struct VulkanWindow::Impl {
         return result;
     }
 
+    // The map occupies the window above the command bar, when there is one.
+    int viewHeight() const {
+        const int bar = int(overlays[std::size_t(OverlaySlot::hud)].height);
+        return std::max(1, int(activeExtent.height) - bar);
+    }
+
     double fitScale() const {
-        return std::min(double(activeExtent.width) / mapSize.width, double(activeExtent.height) / mapSize.height);
+        return std::min(double(activeExtent.width) / mapSize.width, double(viewHeight()) / mapSize.height);
     }
 
     void cameraEvent(const SDL_Event& event) {
@@ -418,7 +512,7 @@ struct VulkanWindow::Impl {
         if (event.type == SDL_EVENT_MOUSE_WHEEL) {
             double delta = event.wheel.direction == SDL_MOUSEWHEEL_FLIPPED ? -event.wheel.y : event.wheel.y;
             scale = std::clamp(scale * std::pow(1.25, delta), std::min(1.0, fitScale()), 8.0);
-        } else if (event.type == SDL_EVENT_MOUSE_MOTION && (event.motion.state & (SDL_BUTTON_RMASK | SDL_BUTTON_MMASK))) {
+        } else if (event.type == SDL_EVENT_MOUSE_MOTION && (event.motion.state & SDL_BUTTON_MMASK)) {
             const auto [sx, sy] = windowScale();
             centerX -= event.motion.xrel * sx / scale;
             centerY -= event.motion.yrel * sy / scale;
@@ -436,7 +530,7 @@ struct VulkanWindow::Impl {
 
     void drawMap(vk::Image destination) {
         const int w = mapSize.width, h = mapSize.height;
-        const int screenW = activeExtent.width, screenH = activeExtent.height;
+        const int screenW = activeExtent.width, screenH = viewHeight();
         const int srcW = std::clamp(int(std::round(screenW / scale)), 1, w);
         const int srcH = std::clamp(int(std::round(screenH / scale)), 1, h);
         centerX = std::clamp(centerX, srcW / 2.0, w - srcW / 2.0);
@@ -453,68 +547,455 @@ struct VulkanWindow::Impl {
         screenTop = top - y * scaleY;
         const vk::ImageBlit region(layer, {vk::Offset3D(x, y, 0), vk::Offset3D(x + srcW, y + srcH, 1)},
             layer, {vk::Offset3D(left, top, 0), vk::Offset3D(left + dstW, top + dstH, 1)});
+        // Linear only where the map format supports it; otherwise stay with nearest.
+        const bool linear = mapLinear && bool(gpu.getFormatProperties(mapFormat).optimalTilingFeatures &
+                                              vk::FormatFeatureFlagBits::eSampledImageFilterLinear);
         command.blitImage(*map, vk::ImageLayout::eTransferSrcOptimal, destination,
-                          vk::ImageLayout::eTransferDstOptimal, region, vk::Filter::eNearest);
-        for (const auto& rect : selected) drawOutline(destination, rect, screenW, screenH, layer);
+                          vk::ImageLayout::eTransferDstOptimal, region, linear ? vk::Filter::eLinear : vk::Filter::eNearest);
+        mapScreenRect = vk::Rect2D({left, top}, {unsigned(dstW), unsigned(dstH)});
     }
 
-    void drawOutline(vk::Image destination, MapRect r, int screenW, int screenH, vk::ImageSubresourceLayers layer) {
+    // Solid rectangles from the colour bands: a dark track, then the filled part.
+    void drawBars(vk::Image destination) {
+        if (bars.empty()) return;
+        const vk::ImageSubresourceLayers layer(vk::ImageAspectFlagBits::eColor, 0, 0, 1);
         const vk::MemoryBarrier finished(vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eTransferWrite);
-        command.pipelineBarrier(transferStage, transferStage, {}, finished, {}, {});
-        const int x0 = int(screenLeft + r.x * scaleX) - 2, y0 = int(screenTop + r.y * scaleY) - 2;
-        const int x1 = int(screenLeft + (r.x + r.width) * scaleX) + 2;
-        const int y1 = int(screenTop + (r.y + r.height) * scaleY) + 2;
-        const auto line = [&](int l, int t, int right, int bottom) {
-            l = std::max(0, l); t = std::max(0, t);
-            right = std::min(screenW, right); bottom = std::min(screenH, bottom);
-            if (right <= l || bottom <= t || std::int64_t(right-l) * (bottom-t) > 8192) return;
+        const std::int64_t clipL = mapScreenRect.offset.x, clipT = mapScreenRect.offset.y;
+        const std::int64_t clipR = clipL + mapScreenRect.extent.width, clipB = clipT + mapScreenRect.extent.height;
+        const int thickness = std::max(3, int(activeExtent.height) / 240);
+        const auto fill = [&](std::int64_t l, std::int64_t t, std::int64_t r, std::int64_t b, unsigned band) {
+            l = std::max(l, clipL); t = std::max(t, clipT); r = std::min(r, clipR); b = std::min(b, clipB);
+            if (r <= l || b <= t || (r - l) * (b - t) > 8192) return;
+            command.pipelineBarrier(transferStage, transferStage, {}, finished, {}, {});
             command.copyBufferToImage(*outline, destination, vk::ImageLayout::eTransferDstOptimal,
-                vk::BufferImageCopy(0, 0, 0, layer, {l, t, 0}, {unsigned(right-l), unsigned(bottom-t), 1}));
+                vk::BufferImageCopy(vk::DeviceSize(band) * outlineBand, 0, 0, layer, {int(l), int(t), 0},
+                                    {unsigned(r - l), unsigned(b - t), 1}));
         };
-        line(x0, y0, x1, y0+1); line(x0, y1-1, x1, y1);
-        line(x0, y0+1, x0+1, y1-1); line(x1-1, y0+1, x1, y1-1);
+        const auto edge = [](double v) { return std::int64_t(std::llround(std::clamp(v, -1e9, 1e9))); };
+        for (const auto& bar : bars) {
+            const std::int64_t l = edge(screenLeft + (bar.x - bar.width / 2.0) * scaleX);
+            const std::int64_t r = std::max(l + 4, edge(screenLeft + (bar.x + bar.width / 2.0) * scaleX));
+            const std::int64_t t = edge(screenTop + bar.y * scaleY) - thickness;
+            fill(l - 1, t - 1, r + 1, t + thickness + 1, 3);
+            const std::int64_t filled = l + std::llround((r - l) * double(bar.value));
+            // Green above 60%, amber above 30%, red below: the bands of selection, move and attack.
+            fill(l, t, filled, t + thickness, bar.value > 0.6f ? 0u : bar.value > 0.3f ? 2u : 1u);
+        }
     }
 
-    // Called with no submitted work pending, so the buffer can be replaced.
-    void uploadOverlay() {
-        overlayStale = false;
-        if (!overlayW) return;
-        const bool bgr = surfaceFormat == vk::Format::eB8G8R8A8Srgb || surfaceFormat == vk::Format::eB8G8R8A8Unorm;
-        if (!bgr && surfaceFormat != vk::Format::eR8G8B8A8Srgb && surfaceFormat != vk::Format::eR8G8B8A8Unorm)
-            throw std::runtime_error("Overlay requires an RGBA8 or BGRA8 surface");
-        if (overlayPixels.size() > overlayCapacity) {
+    void drawOutlines(vk::Image destination) {
+        const int screenW = activeExtent.width, screenH = viewHeight();
+        const vk::ImageSubresourceLayers layer(vk::ImageAspectFlagBits::eColor, 0, 0, 1);
+        for (const auto& rect : selected) drawOutline(destination, rect, screenW, screenH, layer);
+        for (const auto& marker : markers)
+            drawOutline(destination, marker.rect, screenW, screenH, layer, marker.kind,
+                        marker.kind == MarkerKind::attack ? 2 : 1);
+    }
+
+    bool srgbSurface() const {
+        return surfaceFormat == vk::Format::eR8G8B8A8Srgb || surfaceFormat == vk::Format::eB8G8R8A8Srgb;
+    }
+
+    // Built on first use and rebuilt if the surface format changes.
+    void ensureSpritePipeline() {
+        if (spritePipeline && spritePipelineFormat == surfaceFormat) return;
+        device->waitIdle();
+        if (!sampler) {
+            sampler = device->createSamplerUnique({{}, vk::Filter::eLinear, vk::Filter::eLinear,
+                vk::SamplerMipmapMode::eNearest, vk::SamplerAddressMode::eClampToEdge,
+                vk::SamplerAddressMode::eClampToEdge, vk::SamplerAddressMode::eClampToEdge});
+            const vk::DescriptorSetLayoutBinding binding(0, vk::DescriptorType::eCombinedImageSampler, 1,
+                vk::ShaderStageFlagBits::eFragment);
+            spriteLayout = device->createDescriptorSetLayoutUnique({{}, 1, &binding});
+            const vk::PushConstantRange push(vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
+                                             0, 5 * sizeof(float));
+            spritePipelineLayout = device->createPipelineLayoutUnique({{}, 1, &*spriteLayout, 1, &push});
+            const vk::DescriptorPoolSize size(vk::DescriptorType::eCombinedImageSampler, std::uint32_t(atlases.size()));
+            spritePool = device->createDescriptorPoolUnique({{}, std::uint32_t(atlases.size()), 1, &size});
+            std::vector<vk::DescriptorSetLayout> layouts(atlases.size(), *spriteLayout);
+            const auto sets = device->allocateDescriptorSets({*spritePool, std::uint32_t(layouts.size()), layouts.data()});
+            for (std::size_t i = 0; i < atlases.size(); ++i) atlases[i].set = sets[i];
+        }
+        const auto vertex = device->createShaderModuleUnique({{}, sizeof(shaders::spriteVertexSpirv), shaders::spriteVertexSpirv});
+        const auto fragment = device->createShaderModuleUnique({{}, sizeof(shaders::spriteFragmentSpirv), shaders::spriteFragmentSpirv});
+        const std::array stages{
+            vk::PipelineShaderStageCreateInfo({}, vk::ShaderStageFlagBits::eVertex, *vertex, "main"),
+            vk::PipelineShaderStageCreateInfo({}, vk::ShaderStageFlagBits::eFragment, *fragment, "main")};
+        const vk::VertexInputBindingDescription bindingInfo(0, sizeof(SpriteVertex), vk::VertexInputRate::eVertex);
+        const std::array attributes{
+            vk::VertexInputAttributeDescription(0, 0, vk::Format::eR32G32Sfloat, offsetof(SpriteVertex, x)),
+            vk::VertexInputAttributeDescription(1, 0, vk::Format::eR32G32Sfloat, offsetof(SpriteVertex, u)),
+            vk::VertexInputAttributeDescription(2, 0, vk::Format::eR32G32Sfloat, offsetof(SpriteVertex, brightness))};
+        const vk::PipelineVertexInputStateCreateInfo input({}, 1, &bindingInfo, std::uint32_t(attributes.size()), attributes.data());
+        const vk::PipelineInputAssemblyStateCreateInfo assembly({}, vk::PrimitiveTopology::eTriangleList);
+        const vk::PipelineViewportStateCreateInfo viewport({}, 1, nullptr, 1, nullptr);
+        vk::PipelineRasterizationStateCreateInfo raster;
+        raster.polygonMode = vk::PolygonMode::eFill;
+        raster.cullMode = vk::CullModeFlagBits::eNone;
+        raster.lineWidth = 1;
+        const vk::PipelineMultisampleStateCreateInfo multisample({}, vk::SampleCountFlagBits::e1);
+        // Premultiplied alpha over an opaque target; the target's alpha stays 1.
+        vk::PipelineColorBlendAttachmentState blend;
+        blend.blendEnable = true;
+        blend.srcColorBlendFactor = vk::BlendFactor::eOne;
+        blend.dstColorBlendFactor = vk::BlendFactor::eOneMinusSrcAlpha;
+        blend.colorBlendOp = vk::BlendOp::eAdd;
+        blend.srcAlphaBlendFactor = vk::BlendFactor::eZero;
+        blend.dstAlphaBlendFactor = vk::BlendFactor::eOne;
+        blend.alphaBlendOp = vk::BlendOp::eAdd;
+        blend.colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
+                               vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA;
+        vk::PipelineColorBlendStateCreateInfo blending;
+        blending.attachmentCount = 1;
+        blending.pAttachments = &blend;
+        const std::array dynamic{vk::DynamicState::eViewport, vk::DynamicState::eScissor};
+        const vk::PipelineDynamicStateCreateInfo dynamicState({}, std::uint32_t(dynamic.size()), dynamic.data());
+        vk::PipelineRenderingCreateInfo rendering;
+        rendering.colorAttachmentCount = 1;
+        rendering.pColorAttachmentFormats = &surfaceFormat;
+        vk::GraphicsPipelineCreateInfo info;
+        info.pNext = &rendering;
+        info.stageCount = std::uint32_t(stages.size());
+        info.pStages = stages.data();
+        info.pVertexInputState = &input;
+        info.pInputAssemblyState = &assembly;
+        info.pViewportState = &viewport;
+        info.pRasterizationState = &raster;
+        info.pMultisampleState = &multisample;
+        info.pColorBlendState = &blending;
+        info.pDynamicState = &dynamicState;
+        info.layout = *spritePipelineLayout;
+        auto created = device->createGraphicsPipelineUnique({}, info);
+        if (created.result != vk::Result::eSuccess) throw std::runtime_error("Could not create the sprite pipeline");
+        spritePipeline = std::move(created.value);
+        spritePipelineFormat = surfaceFormat;
+    }
+
+    // Creates or replaces the GPU image for a slot from its kept pixels.
+    void uploadAtlas(unsigned slot) {
+        auto& atlas = atlases[slot];
+        const bool srgb = srgbSurface();
+        const bool unorm = surfaceFormat == vk::Format::eR8G8B8A8Unorm || surfaceFormat == vk::Format::eB8G8R8A8Unorm;
+        if (!srgb && !unorm) throw std::runtime_error("Sprites require an RGBA8 or BGRA8 surface");
+        const auto format = unorm ? vk::Format::eR8G8B8A8Unorm : vk::Format::eR8G8B8A8Srgb;
+        if (!(gpu.getFormatProperties(format).optimalTilingFeatures & vk::FormatFeatureFlagBits::eSampledImageFilterLinear))
+            throw std::runtime_error("GPU cannot filter sprite atlases");
+        ensureSpritePipeline();
+        device->waitIdle();
+        vk::UniqueDeviceMemory stagingMemory;
+        auto staging = device->createBufferUnique({{}, atlas.pixels.size(), vk::BufferUsageFlagBits::eTransferSrc});
+        stagingMemory = allocate(device->getBufferMemoryRequirements(*staging),
+            vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+        device->bindBufferMemory(*staging, *stagingMemory, 0);
+        auto* mapped = static_cast<std::uint8_t*>(device->mapMemory(*stagingMemory, 0, atlas.pixels.size()));
+        // Callers supply straight alpha. Stored premultiplied, so linear filtering cannot
+        // pull the colour of transparent texels into an edge. For an sRGB image the
+        // multiply happens in linear light, which is where the sampler filters.
+        static const auto toLinear = [] {
+            std::array<float, 256> table{};
+            for (int i = 0; i < 256; ++i) {
+                const float c = i / 255.f;
+                table[i] = c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f);
+            }
+            return table;
+        }();
+        for (std::size_t i = 0; i < atlas.pixels.size(); i += 4) {
+            const unsigned alpha = atlas.pixels[i + 3];
+            for (int c = 0; c < 3; ++c) {
+                const unsigned value = atlas.pixels[i + c];
+                if (alpha == 255) mapped[i + c] = std::uint8_t(value);
+                else if (!alpha) mapped[i + c] = 0;
+                else if (srgb) {
+                    const float linear = toLinear[value] * (alpha / 255.f);
+                    const float encoded = linear <= 0.0031308f ? linear * 12.92f : 1.055f * std::pow(linear, 1 / 2.4f) - 0.055f;
+                    mapped[i + c] = std::uint8_t(std::lround(std::clamp(encoded, 0.f, 1.f) * 255));
+                } else mapped[i + c] = std::uint8_t((value * alpha + 127) / 255);
+            }
+            mapped[i + 3] = std::uint8_t(alpha);
+        }
+        device->unmapMemory(*stagingMemory);
+        const vk::Extent3D size(atlas.width, atlas.height, 1);
+        vk::UniqueDeviceMemory memory;
+        auto image = device->createImageUnique({{}, vk::ImageType::e2D, format, size, 1, 1, vk::SampleCountFlagBits::e1,
+            vk::ImageTiling::eOptimal, transfer | vk::ImageUsageFlagBits::eSampled});
+        memory = allocate(device->getImageMemoryRequirements(*image), vk::MemoryPropertyFlagBits::eDeviceLocal);
+        device->bindImageMemory(*image, *memory, 0);
+        const vk::ImageSubresourceRange range(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1);
+        command.reset();
+        command.begin({vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+        vk::ImageMemoryBarrier barrier({}, vk::AccessFlagBits::eTransferWrite,
+            vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal,
+            VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, *image, range);
+        command.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe, transferStage, {}, {}, {}, barrier);
+        command.copyBufferToImage(*staging, *image, vk::ImageLayout::eTransferDstOptimal,
+            vk::BufferImageCopy(0, 0, 0, {vk::ImageAspectFlagBits::eColor, 0, 0, 1}, {}, size));
+        barrier.setOldLayout(vk::ImageLayout::eTransferDstOptimal).setNewLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
+               .setSrcAccessMask(vk::AccessFlagBits::eTransferWrite).setDstAccessMask(vk::AccessFlagBits::eShaderRead);
+        command.pipelineBarrier(transferStage, vk::PipelineStageFlagBits::eFragmentShader, {}, {}, {}, barrier);
+        command.end();
+        queue.submit(vk::SubmitInfo({}, {}, command));
+        queue.waitIdle();
+        auto view = device->createImageViewUnique({{}, *image, vk::ImageViewType::e2D, format, {}, range});
+        const vk::DescriptorImageInfo imageInfo(*sampler, *view, vk::ImageLayout::eShaderReadOnlyOptimal);
+        device->updateDescriptorSets(vk::WriteDescriptorSet(atlas.set, 0, 0, 1,
+            vk::DescriptorType::eCombinedImageSampler, &imageInfo), {});
+        // Commit only now, so a failed upload leaves the previous atlas usable.
+        atlas.view = std::move(view);
+        atlas.image = std::move(image);
+        atlas.memory = std::move(memory);
+        atlas.format = format;
+    }
+
+    void setSpriteAtlas(unsigned slot, const assets::MapImage& data) {
+        if (slot >= VulkanWindow::spriteAtlasSlots) throw std::invalid_argument("Sprite atlas slot out of range");
+        const auto limit = gpu.getProperties().limits.maxImageDimension2D;
+        if (!data.width || !data.height || data.width > limit || data.height > limit ||
+            std::uint64_t(data.width) * data.height * 4 != data.rgba.size())
+            throw std::invalid_argument("Unsupported sprite atlas dimensions or pixel count");
+        if (dirty && !rebuild()) throw std::runtime_error("Sprite atlas needs a drawable window");
+        auto& atlas = atlases[slot];
+        auto previous = std::move(atlas.pixels);
+        const auto previousW = atlas.width, previousH = atlas.height;
+        atlas.pixels = data.rgba;
+        atlas.width = data.width;
+        atlas.height = data.height;
+        try { uploadAtlas(slot); }
+        catch (...) {
+            atlas.pixels = std::move(previous);
+            atlas.width = previousW;
+            atlas.height = previousH;
+            throw;
+        }
+        spritesStale = true;   // Texture coordinates depend on the atlas size.
+    }
+
+    // Gives every colour in the list a row of the glow atlas, rebuilding it when a new
+    // colour appears. Each row is a round glow: opaque core, soft rim, clear corners.
+    void setBeams(std::vector<MapBeam> list) {
+        std::vector<std::array<std::uint8_t, 3>> palette = beamPalette;
+        const auto add = [&](std::vector<std::array<std::uint8_t, 3>>& to) {
+            for (const auto& b : list) {
+                const std::array<std::uint8_t, 3> c{b.r, b.g, b.b};
+                if (std::find(to.begin(), to.end(), c) == to.end()) to.push_back(c);
+            }
+        };
+        add(palette);
+        if (palette.size() > VulkanWindow::maxBeamColours) {
+            // Colours of earlier lists are no longer needed; keep only this list's.
+            palette.clear();
+            add(palette);
+            if (palette.size() > VulkanWindow::maxBeamColours) throw std::invalid_argument("Too many beam colours in one list");
+        }
+        if (palette != beamPalette) {
+            if (dirty && !rebuild()) throw std::runtime_error("Beams need a drawable window");
+            auto& atlas = atlases[beamAtlas];
+            const unsigned rows = unsigned(palette.size()) * beamBlock;
+            std::vector<std::uint8_t> pixels(std::size_t(beamBlock) * rows * 4);
+            const float centre = (beamBlock - 1) / 2.f;
+            for (unsigned k = 0; k < palette.size(); ++k)
+                for (unsigned y = 0; y < beamBlock; ++y)
+                    for (unsigned x = 0; x < beamBlock; ++x) {
+                        const float d = std::hypot(x - centre, y - centre) / centre;
+                        const float t = std::clamp((1.f - d) / 0.55f, 0.f, 1.f);
+                        auto* p = &pixels[(std::size_t(k * beamBlock + y) * beamBlock + x) * 4];
+                        p[0] = palette[k][0]; p[1] = palette[k][1]; p[2] = palette[k][2];
+                        p[3] = std::uint8_t(std::lround(t * t * (3 - 2 * t) * 255));
+                    }
+            auto previous = std::move(atlas.pixels);
+            const auto previousW = atlas.width, previousH = atlas.height;
+            atlas.pixels = std::move(pixels);
+            atlas.width = beamBlock;
+            atlas.height = rows;
+            try { uploadAtlas(beamAtlas); }
+            catch (...) {
+                atlas.pixels = std::move(previous);
+                atlas.width = previousW;
+                atlas.height = previousH;
+                throw;
+            }
+            beamPalette = std::move(palette);
+        }
+        beams = std::move(list);
+        spritesStale = true;
+    }
+
+    // Rebuilds the vertex buffer. Requires that no submitted work is pending.
+    void stageSprites() {
+        spritesStale = false;
+        spriteBatches.clear();
+        if (sprites.empty() && beams.empty()) return;
+        const vk::DeviceSize bytes = (sprites.size() + beams.size()) * 6 * sizeof(SpriteVertex);
+        if (bytes > spriteCapacity) {
+            const auto size = std::max<vk::DeviceSize>(bytes, spriteCapacity * 2);
             vk::UniqueDeviceMemory memory;
-            auto buffer = device->createBufferUnique({{}, overlayPixels.size(), vk::BufferUsageFlagBits::eTransferSrc});
+            auto buffer = device->createBufferUnique({{}, size, vk::BufferUsageFlagBits::eVertexBuffer});
             memory = allocate(device->getBufferMemoryRequirements(*buffer),
                 vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
             device->bindBufferMemory(*buffer, *memory, 0);
-            overlayBuffer = std::move(buffer);
-            overlayMemory = std::move(memory);
-            overlayCapacity = overlayPixels.size();
+            spriteBuffer = std::move(buffer);
+            spriteMemory = std::move(memory);
+            spriteCapacity = size;
         }
-        auto* pixels = static_cast<std::uint8_t*>(device->mapMemory(*overlayMemory, 0, overlayPixels.size()));
-        std::memcpy(pixels, overlayPixels.data(), overlayPixels.size());
-        if (bgr) for (size_t i = 0; i < overlayPixels.size(); i += 4) std::swap(pixels[i], pixels[i + 2]);
-        device->unmapMemory(*overlayMemory);
+        auto* out = static_cast<SpriteVertex*>(device->mapMemory(*spriteMemory, 0, bytes));
+        std::uint32_t index = 0;
+        for (const auto& s : sprites) {
+            const auto& atlas = atlases[s.atlas];
+            const float u0 = s.u0 / atlas.width, u1 = s.u1 / atlas.width;
+            const float v0 = s.v0 / atlas.height, v1 = s.v1 / atlas.height;
+            const float x1 = s.x + s.width, y1 = s.y + s.height;
+            const SpriteVertex corners[4] = {{s.x, s.y, u0, v0, s.brightness, s.alpha}, {x1, s.y, u1, v0, s.brightness, s.alpha},
+                                             {x1, y1, u1, v1, s.brightness, s.alpha}, {s.x, y1, u0, v1, s.brightness, s.alpha}};
+            for (int corner : {0, 1, 2, 0, 2, 3}) *out++ = corners[corner];
+            if (spriteBatches.empty() || spriteBatches.back().atlas != s.atlas)
+                spriteBatches.push_back({s.atlas, index, 0});
+            spriteBatches.back().count += 6;
+            index += 6;
+        }
+        // Beams: a quad along the segment that samples across one colour's glow, or the
+        // whole glow when the segment is a point.
+        if (!beams.empty()) spriteBatches.push_back({beamAtlas, index, std::uint32_t(beams.size() * 6)});
+        const float rowsTotal = float(std::max(1u, atlases[beamAtlas].height));
+        for (const auto& b : beams) {
+            const auto colour = std::find(beamPalette.begin(), beamPalette.end(), std::array<std::uint8_t, 3>{b.r, b.g, b.b});
+            const float row = float(colour - beamPalette.begin()) * beamBlock;
+            const float inset = 0.5f / beamBlock, half = b.width / 2;
+            const float dx = b.x1 - b.x0, dy = b.y1 - b.y0, length = std::hypot(dx, dy);
+            SpriteVertex corners[4];
+            if (length < 1e-3f) {
+                const float v0 = (row + 0.5f) / rowsTotal, v1 = (row + beamBlock - 0.5f) / rowsTotal;
+                corners[0] = {b.x0 - half, b.y0 - half, inset, v0, 1, b.alpha0};
+                corners[1] = {b.x0 + half, b.y0 - half, 1 - inset, v0, 1, b.alpha0};
+                corners[2] = {b.x0 + half, b.y0 + half, 1 - inset, v1, 1, b.alpha0};
+                corners[3] = {b.x0 - half, b.y0 + half, inset, v1, 1, b.alpha0};
+            } else {
+                const float nx = -dy / length * half, ny = dx / length * half;
+                const float v = (row + beamBlock / 2.f) / rowsTotal;   // the widest line through the glow
+                corners[0] = {b.x0 + nx, b.y0 + ny, inset, v, 1, b.alpha0};
+                corners[1] = {b.x1 + nx, b.y1 + ny, inset, v, 1, b.alpha1};
+                corners[2] = {b.x1 - nx, b.y1 - ny, 1 - inset, v, 1, b.alpha1};
+                corners[3] = {b.x0 - nx, b.y0 - ny, 1 - inset, v, 1, b.alpha0};
+            }
+            for (int corner : {0, 1, 2, 0, 2, 3}) *out++ = corners[corner];
+        }
+        device->unmapMemory(*spriteMemory);
     }
 
-    void drawOverlay(vk::Image destination) {
+    // Draws the sprites into the open command buffer. The image arrives and leaves
+    // in the transfer-destination layout the rest of the frame uses.
+    void drawSprites(vk::Image destination, vk::ImageView view) {
+        if (spriteBatches.empty() || !mapScreenRect.extent.width || !mapScreenRect.extent.height) return;
+        const vk::ImageSubresourceRange range(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1);
+        const auto colourAccess = vk::AccessFlagBits::eColorAttachmentRead | vk::AccessFlagBits::eColorAttachmentWrite;
+        vk::ImageMemoryBarrier barrier(vk::AccessFlagBits::eTransferWrite, colourAccess,
+            vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eColorAttachmentOptimal,
+            VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, destination, range);
+        command.pipelineBarrier(transferStage, vk::PipelineStageFlagBits::eColorAttachmentOutput, {}, {}, {}, barrier);
+        vk::RenderingAttachmentInfo target;
+        target.imageView = view;
+        target.imageLayout = vk::ImageLayout::eColorAttachmentOptimal;
+        target.loadOp = vk::AttachmentLoadOp::eLoad;
+        target.storeOp = vk::AttachmentStoreOp::eStore;
+        vk::RenderingInfo rendering;
+        rendering.renderArea = vk::Rect2D({0, 0}, activeExtent);
+        rendering.layerCount = 1;
+        rendering.colorAttachmentCount = 1;
+        rendering.pColorAttachments = &target;
+        command.beginRendering(rendering);
+        command.bindPipeline(vk::PipelineBindPoint::eGraphics, *spritePipeline);
+        command.setViewport(0, vk::Viewport(0, 0, float(activeExtent.width), float(activeExtent.height), 0, 1));
+        command.setScissor(0, mapScreenRect);
+        // Map pixel -> screen pixel is the frame's camera transform; then to clip space.
+        const float push[5] = {float(scaleX * 2.0 / activeExtent.width), float(scaleY * 2.0 / activeExtent.height),
+                               float(screenLeft * 2.0 / activeExtent.width - 1.0),
+                               float(screenTop * 2.0 / activeExtent.height - 1.0), srgbSurface() ? 1.f : 0.f};
+        command.pushConstants(*spritePipelineLayout, vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
+                              0, sizeof push, push);
+        command.bindVertexBuffers(0, *spriteBuffer, vk::DeviceSize(0));
+        for (const auto& batch : spriteBatches) {
+            command.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, *spritePipelineLayout, 0, atlases[batch.atlas].set, {});
+            command.draw(batch.count, 1, batch.first, 0);
+        }
+        command.endRendering();
+        barrier.setOldLayout(vk::ImageLayout::eColorAttachmentOptimal).setNewLayout(vk::ImageLayout::eTransferDstOptimal)
+               .setSrcAccessMask(colourAccess).setDstAccessMask(vk::AccessFlagBits::eTransferWrite);
+        command.pipelineBarrier(vk::PipelineStageFlagBits::eColorAttachmentOutput, transferStage, {}, {}, {}, barrier);
+    }
+
+    void drawOutline(vk::Image destination, MapRect r, int screenW, int screenH, vk::ImageSubresourceLayers layer,
+                     MarkerKind kind = MarkerKind::selection, int weight = 1) {
+        const vk::MemoryBarrier finished(vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eTransferWrite);
+        const vk::DeviceSize band = vk::DeviceSize(kind) * outlineBand;
+        // Computed in 64 bits: a far-off rectangle at high zoom must clip, not overflow.
+        const auto edge = [](double v) { return std::int64_t(std::clamp(v, -1e9, 1e9)); };
+        const std::int64_t x0 = edge(screenLeft + r.x * scaleX) - 2, y0 = edge(screenTop + r.y * scaleY) - 2;
+        const std::int64_t x1 = edge(screenLeft + (double(r.x) + r.width) * scaleX) + 2;
+        const std::int64_t y1 = edge(screenTop + (double(r.y) + r.height) * scaleY) + 2;
+        const auto line = [&](std::int64_t l, std::int64_t t, std::int64_t right, std::int64_t bottom) {
+            l = std::max<std::int64_t>(0, l); t = std::max<std::int64_t>(0, t);
+            right = std::min<std::int64_t>(screenW, right); bottom = std::min<std::int64_t>(screenH, bottom);
+            if (right <= l || bottom <= t || (right-l) * (bottom-t) > 8192) return;
+            // The four sides of one rectangle can touch at clipped corners.
+            command.pipelineBarrier(transferStage, transferStage, {}, finished, {}, {});
+            command.copyBufferToImage(*outline, destination, vk::ImageLayout::eTransferDstOptimal,
+                vk::BufferImageCopy(band, 0, 0, layer, {int(l), int(t), 0}, {unsigned(right-l), unsigned(bottom-t), 1}));
+        };
+        for (int k = 0; k < weight; ++k) {
+            const std::int64_t a = x0 + k, b = y0 + k, c = x1 - k, d = y1 - k;
+            if (c - a < 2 || d - b < 2) break;
+            line(a, b, c, b+1); line(a, d-1, c, d);
+            line(a, b+1, a+1, d-1); line(c-1, b+1, c, d-1);
+        }
+    }
+
+    // Called with no submitted work pending, so the buffer can be replaced.
+    void uploadOverlay(Overlay& overlay) {
+        overlay.stale = false;
+        if (!overlay.width) return;
+        const bool bgr = surfaceFormat == vk::Format::eB8G8R8A8Srgb || surfaceFormat == vk::Format::eB8G8R8A8Unorm;
+        if (!bgr && surfaceFormat != vk::Format::eR8G8B8A8Srgb && surfaceFormat != vk::Format::eR8G8B8A8Unorm)
+            throw std::runtime_error("Overlay requires an RGBA8 or BGRA8 surface");
+        if (overlay.pixels.size() > overlay.capacity) {
+            vk::UniqueDeviceMemory memory;
+            auto buffer = device->createBufferUnique({{}, overlay.pixels.size(), vk::BufferUsageFlagBits::eTransferSrc});
+            memory = allocate(device->getBufferMemoryRequirements(*buffer),
+                vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+            device->bindBufferMemory(*buffer, *memory, 0);
+            overlay.buffer = std::move(buffer);
+            overlay.memory = std::move(memory);
+            overlay.capacity = overlay.pixels.size();
+        }
+        auto* pixels = static_cast<std::uint8_t*>(device->mapMemory(*overlay.memory, 0, overlay.pixels.size()));
+        std::memcpy(pixels, overlay.pixels.data(), overlay.pixels.size());
+        if (bgr) for (size_t i = 0; i < overlay.pixels.size(); i += 4) std::swap(pixels[i], pixels[i + 2]);
+        device->unmapMemory(*overlay.memory);
+    }
+
+    void drawOverlay(vk::Image destination, const Overlay& overlay, OverlaySlot slot) {
         const int screenW = activeExtent.width, screenH = activeExtent.height;
-        const int w = overlayW, h = overlayH;
-        const int left = (screenW - w) / 2, top = (screenH - h) / 2;
-        // A panel larger than the window is cropped equally on both sides.
+        const int w = overlay.width, h = overlay.height;
+        const bool placed = slot == OverlaySlot::tooltip;
+        const int left = placed ? std::clamp(overlay.left, 0, std::max(0, screenW - w)) : (screenW - w) / 2;
+        // The bar is flush with the bottom edge. The notice sits above a bottom margin,
+        // and above the bar when one is shown, but never starts above the window.
+        const int bar = int(overlays[std::size_t(OverlaySlot::hud)].height);
+        const int top = placed ? std::clamp(overlay.top, 0, std::max(0, screenH - h))
+                      : slot == OverlaySlot::hud ? screenH - h
+                      : slot == OverlaySlot::notice ? std::max(0, screenH - bar - std::max(8, screenH / 16) - h)
+                      : (screenH - h) / 2;
+        // Whatever does not fit is cropped rather than rejected.
         const int srcX = std::max(0, -left), srcY = std::max(0, -top);
-        const int copyW = std::min(w - srcX, screenW), copyH = std::min(h - srcY, screenH);
+        const int dstX = std::max(0, left), dstY = std::max(0, top);
+        const int copyW = std::min(w - srcX, screenW - dstX), copyH = std::min(h - srcY, screenH - dstY);
         if (copyW <= 0 || copyH <= 0) return;
         const vk::MemoryBarrier finished(vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eTransferWrite);
         command.pipelineBarrier(transferStage, transferStage, {}, finished, {}, {});
         const vk::ImageSubresourceLayers layer(vk::ImageAspectFlagBits::eColor, 0, 0, 1);
-        command.copyBufferToImage(*overlayBuffer, destination, vk::ImageLayout::eTransferDstOptimal,
+        command.copyBufferToImage(*overlay.buffer, destination, vk::ImageLayout::eTransferDstOptimal,
             vk::BufferImageCopy((vk::DeviceSize(srcY) * w + srcX) * 4, w, 0, layer,
-                {std::max(0, left), std::max(0, top), 0}, {unsigned(copyW), unsigned(copyH), 1}));
+                {dstX, dstY, 0}, {unsigned(copyW), unsigned(copyH), 1}));
     }
 
-    void record(vk::Image image) {
+    void record(vk::Image image, vk::ImageView view, vk::Buffer capture = {}) {
         command.reset();
         command.begin({vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
         vk::ImageSubresourceRange range(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1);
@@ -529,25 +1010,42 @@ struct VulkanWindow::Impl {
             const vk::MemoryBarrier clearFinished(vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eTransferWrite);
             command.pipelineBarrier(transferStage, transferStage, {}, clearFinished, {}, {});
             drawMap(image);
+            drawSprites(image, view);
+            drawBars(image);
+            drawOutlines(image);
         }
-        if (overlayW) drawOverlay(image);
-        barrier.setOldLayout(vk::ImageLayout::eTransferDstOptimal)
+        for (auto slot : {OverlaySlot::hud, OverlaySlot::tooltip, OverlaySlot::notice, OverlaySlot::panel, OverlaySlot::menu})
+            if (const auto& overlay = overlays[std::size_t(slot)]; overlay.width) drawOverlay(image, overlay, slot);
+        auto finalLayout = vk::ImageLayout::eTransferDstOptimal;
+        auto finalAccess = vk::AccessFlags(vk::AccessFlagBits::eTransferWrite);
+        if (capture) {
+            barrier.setOldLayout(vk::ImageLayout::eTransferDstOptimal).setNewLayout(vk::ImageLayout::eTransferSrcOptimal)
+                   .setSrcAccessMask(vk::AccessFlagBits::eTransferWrite).setDstAccessMask(vk::AccessFlagBits::eTransferRead);
+            command.pipelineBarrier(transferStage, transferStage, {}, {}, {}, barrier);
+            command.copyImageToBuffer(image, vk::ImageLayout::eTransferSrcOptimal, capture,
+                vk::BufferImageCopy(0, 0, 0, {vk::ImageAspectFlagBits::eColor, 0, 0, 1}, {},
+                                    {activeExtent.width, activeExtent.height, 1}));
+            finalLayout = vk::ImageLayout::eTransferSrcOptimal;
+            finalAccess = vk::AccessFlagBits::eTransferRead;
+        }
+        barrier.setOldLayout(finalLayout)
                .setNewLayout(vk::ImageLayout::ePresentSrcKHR)
-               .setSrcAccessMask(vk::AccessFlagBits::eTransferWrite).setDstAccessMask({});
+               .setSrcAccessMask(finalAccess).setDstAccessMask({});
         command.pipelineBarrier(transferStage, vk::PipelineStageFlagBits::eBottomOfPipe, {}, {}, {}, barrier);
         command.end();
     }
 
-    bool present() {
+    bool present(vk::Buffer capture = {}) {
         if (SDL_GetWindowFlags(window) & SDL_WINDOW_MINIMIZED) return false;
         try {
             if (dirty && !rebuild()) return false;
             if (device->waitForFences(*submitted, true, acquireTimeoutNs) != vk::Result::eSuccess) return false;
-            if (overlayStale) uploadOverlay();
+            for (auto& overlay : overlays) if (overlay.stale) uploadOverlay(overlay);
             stagePatches();
+            if (spritesStale) stageSprites();
             auto [status, index] = device->acquireNextImageKHR(*chain, acquireTimeoutNs, *acquired);
             if (status == vk::Result::eTimeout || status == vk::Result::eNotReady) return false;
-            record(images.at(index));
+            record(images.at(index), *views.at(index), capture);
             vk::PipelineStageFlags waitStage = transferStage;
             vk::SubmitInfo submit(1, &*acquired, &waitStage, 1, &command, 1, &*rendered[index]);
             device->resetFences(*submitted);
@@ -563,6 +1061,38 @@ struct VulkanWindow::Impl {
         }
     }
 
+    assets::MapImage captureFrame() {
+        if (dirty && !rebuild()) throw std::runtime_error("Frame capture needs a drawable window");
+        if (!canCapture) throw std::runtime_error("This surface cannot be read back");
+        const bool bgr = surfaceFormat == vk::Format::eB8G8R8A8Srgb || surfaceFormat == vk::Format::eB8G8R8A8Unorm;
+        if (!bgr && surfaceFormat != vk::Format::eR8G8B8A8Srgb && surfaceFormat != vk::Format::eR8G8B8A8Unorm)
+            throw std::runtime_error("Frame capture requires an RGBA8 or BGRA8 surface");
+        for (int attempt = 0; attempt < 200; ++attempt) {
+            SDL_PumpEvents();
+            if (dirty && !rebuild()) { SDL_Delay(5); continue; }
+            device->waitIdle();
+            const auto extent = activeExtent;
+            const vk::DeviceSize bytes = vk::DeviceSize(extent.width) * extent.height * 4;
+            vk::UniqueDeviceMemory memory;
+            auto buffer = device->createBufferUnique({{}, bytes, vk::BufferUsageFlagBits::eTransferDst});
+            memory = allocate(device->getBufferMemoryRequirements(*buffer),
+                vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+            device->bindBufferMemory(*buffer, *memory, 0);
+            const bool shown = present(*buffer);
+            // The buffer outlives the frame that wrote it, whatever present reported.
+            device->waitIdle();
+            if (!shown) { SDL_Delay(5); continue; }
+            assets::MapImage result{extent.width, extent.height, {}};
+            result.rgba.resize(bytes);
+            const auto* pixels = device->mapMemory(*memory, 0, bytes);
+            std::memcpy(result.rgba.data(), pixels, bytes);
+            device->unmapMemory(*memory);
+            if (bgr) for (std::size_t i = 0; i < result.rgba.size(); i += 4) std::swap(result.rgba[i], result.rgba[i + 2]);
+            return result;
+        }
+        throw std::runtime_error("Timed out waiting to capture a frame");
+    }
+
     ~Impl() {
         // Destruction also covers a failed present. A lost device can still be destroyed.
         if (device) (void)vkDeviceWaitIdle(*device);
@@ -574,7 +1104,9 @@ VulkanWindow::~VulkanWindow() = default;
 void VulkanWindow::setMap(const assets::MapImage& map) { impl_->setMap(map); }
 void VulkanWindow::updateMapRegion(int x, int y, const assets::MapImage& patch) { impl_->queuePatch(x, y, patch); }
 assets::MapImage VulkanWindow::captureMap() { return impl_->captureMap(); }
-void VulkanWindow::focusMap(int x, int y) {
+void VulkanWindow::focusMap(int x, int y, bool zoomFromOverview) {
+    if (zoomFromOverview && impl_->transformReady && impl_->scale <= impl_->fitScale())
+        impl_->scale = std::max(1.0,impl_->scale);
     impl_->centerX = x;
     impl_->centerY = y;
 }
@@ -596,25 +1128,90 @@ void VulkanWindow::highlight(std::vector<MapRect> rects) {
     std::erase_if(rects, [](MapRect r) { return r.width <= 0 || r.height <= 0; });
     impl_->selected = std::move(rects);
 }
-void VulkanWindow::setOverlay(unsigned width, unsigned height, std::span<const std::uint8_t> rgba) {
+void VulkanWindow::setMarkers(std::vector<MapMarker> list) {
+    for (auto& m : list) {
+        if (m.kind != MarkerKind::selection && m.kind != MarkerKind::attack && m.kind != MarkerKind::move)
+            throw std::invalid_argument("Unknown marker kind");
+        auto& r = m.rect;
+        const int right = int(std::clamp<std::int64_t>(std::int64_t(r.x) + r.width, 0, impl_->mapSize.width));
+        const int bottom = int(std::clamp<std::int64_t>(std::int64_t(r.y) + r.height, 0, impl_->mapSize.height));
+        r.x = std::clamp(r.x, 0, int(impl_->mapSize.width));
+        r.y = std::clamp(r.y, 0, int(impl_->mapSize.height));
+        r.width = right - r.x;
+        r.height = bottom - r.y;
+    }
+    std::erase_if(list, [](const MapMarker& m) { return m.rect.width <= 0 || m.rect.height <= 0; });
+    impl_->markers = std::move(list);
+}
+void VulkanWindow::setBars(std::vector<MapBar> list) {
+    for (const auto& b : list)
+        for (float v : {b.x, b.y, b.width, b.value})
+            if (!std::isfinite(v)) throw std::invalid_argument("Gauge has a non-finite value");
+    std::erase_if(list, [](const MapBar& b) { return b.width <= 0; });
+    for (auto& b : list) b.value = std::clamp(b.value, 0.f, 1.f);
+    impl_->bars = std::move(list);
+}
+void VulkanWindow::setMapFilterLinear(bool linear) { impl_->mapLinear = linear; }
+void VulkanWindow::setSpriteAtlas(unsigned slot, const assets::MapImage& atlas) { impl_->setSpriteAtlas(slot, atlas); }
+void VulkanWindow::setSprites(std::vector<Sprite> list) {
+    for (const auto& s : list) {
+        if (s.atlas >= spriteAtlasSlots || !impl_->atlases[s.atlas].image)
+            throw std::invalid_argument("Sprite names an atlas slot that has not been set");
+        for (float v : {s.x, s.y, s.width, s.height, s.u0, s.v0, s.u1, s.v1, s.brightness, s.alpha})
+            if (!std::isfinite(v)) throw std::invalid_argument("Sprite has a non-finite value");
+    }
+    // Nothing to draw for empty or fully transparent rectangles.
+    std::erase_if(list, [](const Sprite& s) { return s.width <= 0 || s.height <= 0 || s.alpha <= 0; });
+    for (auto& s : list) {
+        s.alpha = std::min(s.alpha, 1.f);
+        s.brightness = std::clamp(s.brightness, 0.f, 1.f);
+    }
+    impl_->sprites = std::move(list);
+    impl_->spritesStale = true;
+}
+void VulkanWindow::setBeams(std::vector<MapBeam> list) {
+    for (const auto& b : list)
+        for (float v : {b.x0, b.y0, b.x1, b.y1, b.width, b.alpha0, b.alpha1})
+            if (!std::isfinite(v)) throw std::invalid_argument("Beam has a non-finite value");
+    std::erase_if(list, [](const MapBeam& b) { return b.width <= 0 || (b.alpha0 <= 0 && b.alpha1 <= 0); });
+    for (auto& b : list) {
+        b.alpha0 = std::clamp(b.alpha0, 0.f, 1.f);
+        b.alpha1 = std::clamp(b.alpha1, 0.f, 1.f);
+    }
+    impl_->setBeams(std::move(list));
+}
+assets::MapImage VulkanWindow::captureFrame() { return impl_->captureFrame(); }
+bool VulkanWindow::surfaceIsSrgb() const { return impl_->srgbSurface(); }
+void VulkanWindow::setOverlay(unsigned width, unsigned height, std::span<const std::uint8_t> rgba, OverlaySlot slot) {
     if (!width || !height || width > 16384 || height > 16384 || std::uint64_t(width) * height * 4 != rgba.size())
         throw std::invalid_argument("Unsupported overlay dimensions or pixel count");
-    impl_->overlayPixels.assign(rgba.begin(), rgba.end());
-    impl_->overlayW = width;
-    impl_->overlayH = height;
-    impl_->overlayStale = true;
+    auto& overlay = impl_->overlays.at(std::size_t(slot));
+    overlay.pixels.assign(rgba.begin(), rgba.end());
+    overlay.width = width;
+    overlay.height = height;
+    overlay.stale = true;
 }
-void VulkanWindow::clearOverlay() {
-    impl_->overlayW = impl_->overlayH = 0;
-    impl_->overlayStale = false;
+void VulkanWindow::clearOverlay(OverlaySlot slot) {
+    auto& overlay = impl_->overlays.at(std::size_t(slot));
+    overlay.width = overlay.height = 0;
+    overlay.stale = false;
+}
+void VulkanWindow::moveOverlay(OverlaySlot slot, int left, int top) {
+    auto& overlay = impl_->overlays.at(std::size_t(slot));
+    overlay.left = left;
+    overlay.top = top;
 }
 void VulkanWindow::handleEvent(const SDL_Event& event) {
     impl_->cameraEvent(event);
+    // The size event queued at window creation repeats the size a swapchain built
+    // before the first event pump already has; rebuilding for it would be wasted work.
     if (event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED &&
-        event.window.windowID == SDL_GetWindowID(impl_->window)) impl_->dirty = true;
+        event.window.windowID == SDL_GetWindowID(impl_->window) &&
+        (!impl_->chain || event.window.data1 != impl_->builtWidth || event.window.data2 != impl_->builtHeight))
+        impl_->dirty = true;
 }
 std::pair<unsigned, unsigned> VulkanWindow::extent() const {
     return {impl_->activeExtent.width, impl_->activeExtent.height};
 }
-bool VulkanWindow::present(const Snapshot&) { return impl_->present(); }
+bool VulkanWindow::present(const Snapshot&) { return impl_->present({}); }
 }
