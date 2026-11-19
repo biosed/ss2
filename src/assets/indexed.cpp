@@ -1,4 +1,5 @@
 #include "assets/indexed.hpp"
+#include <algorithm>
 #include <stdexcept>
 
 namespace ss2::assets {
@@ -11,7 +12,31 @@ unsigned word(View v, std::size_t i) {
 }
 }
 
-void drawIndexedFrame(MapImage& map, int originX, int originY, View sprite, View palette) {
+SpriteCoverage readShadowCoverage(int originX, int originY, View sprite) {
+    if (sprite.size() < 9 || sprite[8] != 0xa3) throw std::runtime_error("Invalid stand shadow");
+    const int width = word(sprite,4), height = word(sprite,6);
+    if (width < 1 || height < 1 || width > 2048 || height > 2048)
+        throw std::runtime_error("Invalid stand shadow dimensions");
+    SpriteCoverage result{originX+std::int16_t(word(sprite,0)), originY+std::int16_t(word(sprite,2)), width,
+                          height, std::vector<std::uint8_t>(std::size_t(width)*height)};
+    std::size_t pos = 9;
+    for (int y = 0; y < height; ++y) {
+        const auto size = word(sprite,pos);
+        pos += 2;
+        if (size > sprite.size()-pos) throw std::runtime_error("Truncated stand shadow row");
+        int x = 0;
+        for (const auto op : sprite.subspan(pos,size)) {
+            const int count = op & 127;
+            if (count > width-x) throw std::runtime_error("Stand shadow run outside sprite");
+            if (!(op & 128)) std::fill_n(result.pixels.begin()+std::size_t(y)*width+x, count, 1);
+            x += count;
+        }
+        pos += size;
+    }
+    return result;
+}
+
+void drawIndexedFrame(MapImage& map, int originX, int originY, View sprite, View palette, SpriteCoverage* coverage) {
     if (sprite.size() < 9 || palette.size() < 512 || !map.width || !map.height ||
         (std::uint64_t(map.width) * map.height > map.rgba.size() / 4))
         throw std::runtime_error("Invalid indexed sprite or destination");
@@ -21,6 +46,7 @@ void drawIndexedFrame(MapImage& map, int originX, int originY, View sprite, View
     const bool compact = sprite[8] == 0xa1;
     if ((!compact && sprite[8] != 0xa2) || width < 1 || height < 1 || width > 2048 || height > 2048)
         throw std::runtime_error("Unsupported indexed sprite header");
+    if (coverage) *coverage = {int(left), int(top), width, height, std::vector<std::uint8_t>(std::size_t(width)*height)};
     std::size_t pos = 9;
     for (int y = 0; y < height; ++y) {
         const auto length = word(sprite, pos);
@@ -42,6 +68,7 @@ void drawIndexedFrame(MapImage& map, int originX, int originY, View sprite, View
                 if (dx < 0 || dy < 0 || dx >= map.width || dy >= map.height) continue;
                 const auto index = row[i + (repeat ? 0 : j)];
                 if (compact && repeat && !index) continue;
+                if (coverage) coverage->pixels[std::size_t(y)*width+x+j] = 1;
                 const auto color = word(palette, index * 2);
                 const unsigned r = color >> 11, g = color >> 5 & 63, b = color & 31;
                 auto* pixel = map.rgba.data() + 4 * (dy * map.width + dx);
@@ -50,7 +77,7 @@ void drawIndexedFrame(MapImage& map, int originX, int originY, View sprite, View
                 pixel[0] = channel((r << 3) | (r >> 2), pixel[0]);
                 pixel[1] = channel((g << 2) | (g >> 4), pixel[1]);
                 pixel[2] = channel((b << 3) | (b >> 2), pixel[2]);
-                pixel[3] = 255;
+                pixel[3] = channel(255, pixel[3]);
             }
             i += used;
             x += count;

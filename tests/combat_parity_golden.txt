@@ -1,0 +1,738 @@
+# Golden tick-level trace and event table for the SS2 matched-fields encounter.
+#
+# Source: the Gold 2.2 oracle fixture matched_fields_encounter.json
+# (dguner -> Group-3 aguner, difficulty 2, rng seed 0x12345678).
+# These values are simulation state only: no retail asset bytes and no
+# game data are stored here, so this table is safe to check in and to run
+# in CI without the private Gold installation.
+#
+# Verified: 120 ticks x 13 fields = 1560 values plus all 21 events.
+# The oracle and the native simulation both report the RAW hp of the target in
+# the last HP_APPLY row (new_hp=-47); it is the unit's live hp that is clamped
+# at 0 elsewhere, so the event values are compared strictly.
+
+# Section TRACE
+# tick order_id order_q dir act anim reload burst ammo expa tgt_spotted tgt_hp rng
+-1 1 0 0 0 0 0 0 40 0 1 100 305419896
+0 3 65535 6 1 0 38 1 39 7 1 100 1866972598
+1 3 65535 6 1 15 37 1 39 7 1 100 1866972598
+2 3 65535 6 1 30 36 1 39 7 1 100 1866972598
+3 3 65535 6 1 45 35 1 39 7 1 100 1866972598
+4 3 65535 6 1 60 34 1 39 7 1 51 2576638500
+5 3 65535 6 1 75 33 1 39 7 1 51 2576638500
+6 3 65535 6 1 90 32 1 39 7 1 51 2576638500
+7 3 65535 6 1 105 31 1 39 7 1 51 2576638500
+8 3 65535 6 1 120 30 1 39 7 1 51 2576638500
+9 3 65535 6 1 135 29 1 39 7 1 51 2576638500
+10 3 65535 6 1 150 28 1 39 7 1 51 2576638500
+11 3 65535 6 1 165 27 1 39 7 1 51 2576638500
+12 3 65535 6 1 180 26 1 39 7 1 51 2576638500
+13 3 65535 6 1 195 25 1 39 7 1 51 2576638500
+14 3 65535 6 1 210 24 1 39 7 1 51 2576638500
+15 3 65535 6 1 225 23 1 39 7 1 51 2576638500
+16 3 65535 6 1 240 22 1 39 7 1 51 2576638500
+17 3 65535 6 1 255 21 1 39 7 1 51 2576638500
+18 3 65535 6 0 0 20 1 39 7 1 51 2576638500
+19 3 65535 6 0 0 19 1 39 7 1 51 2576638500
+20 3 65535 6 0 0 18 1 39 7 1 51 2576638500
+21 3 65535 6 0 0 17 1 39 7 1 51 2576638500
+22 3 65535 6 0 0 16 1 39 7 1 51 2576638500
+23 3 65535 6 0 0 15 1 39 7 1 51 2576638500
+24 3 65535 6 0 0 14 1 39 7 1 51 2576638500
+25 3 65535 6 0 0 13 1 39 7 1 51 2576638500
+26 3 65535 6 0 0 12 1 39 7 1 51 2576638500
+27 3 65535 6 0 0 11 1 39 7 1 51 2576638500
+28 3 65535 6 0 0 10 1 39 7 1 51 2576638500
+29 3 65535 6 0 0 9 1 39 7 1 51 2576638500
+30 3 65535 6 0 0 8 1 39 7 1 51 2576638500
+31 3 65535 6 0 0 7 1 39 7 1 51 2576638500
+32 3 65535 6 0 0 6 1 39 7 1 51 2576638500
+33 3 65535 6 0 0 5 1 39 7 1 51 2576638500
+34 3 65535 6 0 0 4 1 39 7 1 51 2576638500
+35 3 65535 6 0 0 3 1 39 7 1 51 2576638500
+36 3 65535 6 0 0 2 1 39 7 1 51 2576638500
+37 3 65535 6 0 0 1 1 39 7 1 51 2576638500
+38 3 65535 6 1 0 38 2 38 13 1 51 2005532482
+39 3 65535 6 1 15 37 2 38 13 1 51 2005532482
+40 3 65535 6 1 30 36 2 38 13 1 51 2005532482
+41 3 65535 6 1 45 35 2 38 13 1 51 2005532482
+42 3 65535 6 1 60 34 2 38 13 1 51 1791458448
+43 3 65535 6 1 75 33 2 38 13 1 51 1791458448
+44 3 65535 6 1 90 32 2 38 13 1 51 1791458448
+45 3 65535 6 1 105 31 2 38 13 1 51 1791458448
+46 3 65535 6 1 120 30 2 38 13 1 51 1791458448
+47 3 65535 6 1 135 29 2 38 13 1 51 1791458448
+48 3 65535 6 1 150 28 2 38 13 1 51 1791458448
+49 3 65535 6 1 165 27 2 38 13 1 51 1791458448
+50 3 65535 6 1 180 26 2 38 13 1 51 1791458448
+51 3 65535 6 1 195 25 2 38 13 1 51 1791458448
+52 3 65535 6 1 210 24 2 38 13 1 51 1791458448
+53 3 65535 6 1 225 23 2 38 13 1 51 1791458448
+54 3 65535 6 1 240 22 2 38 13 1 51 1791458448
+55 3 65535 6 1 255 21 2 38 13 1 51 1791458448
+56 3 65535 6 0 0 20 2 38 13 1 51 1791458448
+57 3 65535 6 0 0 19 2 38 13 1 51 1791458448
+58 3 65535 6 0 0 18 2 38 13 1 51 1791458448
+59 3 65535 6 0 0 17 2 38 13 1 51 1791458448
+60 3 65535 6 0 0 16 2 38 13 1 51 1791458448
+61 3 65535 6 0 0 15 2 38 13 1 51 1791458448
+62 3 65535 6 0 0 14 2 38 13 1 51 1791458448
+63 3 65535 6 0 0 13 2 38 13 1 51 1791458448
+64 3 65535 6 0 0 12 2 38 13 1 51 1791458448
+65 3 65535 6 0 0 11 2 38 13 1 51 1791458448
+66 3 65535 6 0 0 10 2 38 13 1 51 1791458448
+67 3 65535 6 0 0 9 2 38 13 1 51 1791458448
+68 3 65535 6 0 0 8 2 38 13 1 51 1791458448
+69 3 65535 6 0 0 7 2 38 13 1 51 1791458448
+70 3 65535 6 0 0 6 2 38 13 1 51 1791458448
+71 3 65535 6 0 0 5 2 38 13 1 51 1791458448
+72 3 65535 6 0 0 4 2 38 13 1 51 1791458448
+73 3 65535 6 0 0 3 2 38 13 1 51 1791458448
+74 3 65535 6 0 0 2 2 38 13 1 51 1791458448
+75 3 65535 6 0 0 1 2 38 13 1 51 1791458448
+76 3 65535 6 1 0 38 3 37 19 1 51 2478624142
+77 3 65535 6 1 15 37 3 37 19 1 51 2478624142
+78 3 65535 6 1 30 36 3 37 19 1 51 2478624142
+79 3 65535 6 1 45 35 3 37 19 1 51 2478624142
+80 3 65535 6 1 60 34 3 37 19 1 2 550225221
+81 3 65535 6 1 75 33 3 37 19 1 2 550225221
+82 3 65535 6 1 90 32 3 37 19 1 2 550225221
+83 3 65535 6 1 105 31 3 37 19 1 2 550225221
+84 3 65535 6 1 120 30 3 37 19 1 2 550225221
+85 3 65535 6 1 135 29 3 37 19 1 2 550225221
+86 3 65535 6 1 150 28 3 37 19 1 2 550225221
+87 3 65535 6 1 165 27 3 37 19 1 2 550225221
+88 3 65535 6 1 180 26 3 37 19 1 2 550225221
+89 3 65535 6 1 195 25 3 37 19 1 2 550225221
+90 3 65535 6 1 210 24 3 37 19 1 2 550225221
+91 3 65535 6 1 225 23 3 37 19 1 2 550225221
+92 3 65535 6 1 240 22 3 37 19 1 2 550225221
+93 3 65535 6 1 255 21 3 37 19 1 2 550225221
+94 3 65535 6 0 0 20 3 37 19 1 2 550225221
+95 3 65535 6 0 0 19 3 37 19 1 2 550225221
+96 3 65535 6 0 0 18 3 37 19 1 2 550225221
+97 3 65535 6 0 0 17 3 37 19 1 2 550225221
+98 3 65535 6 0 0 16 3 37 19 1 2 550225221
+99 3 65535 6 0 0 15 3 37 19 1 2 550225221
+100 3 65535 6 0 0 14 3 37 19 1 2 550225221
+101 3 65535 6 0 0 13 3 37 19 1 2 550225221
+102 3 65535 6 0 0 12 3 37 19 1 2 550225221
+103 3 65535 6 0 0 11 3 37 19 1 2 550225221
+104 3 65535 6 0 0 10 3 37 19 1 2 550225221
+105 3 65535 6 0 0 9 3 37 19 1 2 550225221
+106 3 65535 6 0 0 8 3 37 19 1 2 550225221
+107 3 65535 6 0 0 7 3 37 19 1 2 550225221
+108 3 65535 6 0 0 6 3 37 19 1 2 550225221
+109 3 65535 6 0 0 5 3 37 19 1 2 550225221
+110 3 65535 6 0 0 4 3 37 19 1 2 550225221
+111 3 65535 6 0 0 3 3 37 19 1 2 550225221
+112 3 65535 6 0 0 2 3 37 19 1 2 550225221
+113 3 65535 6 0 0 1 3 37 19 1 2 550225221
+114 3 65535 6 1 0 38 4 36 25 1 2 4224025035
+115 3 65535 6 1 15 37 4 36 25 1 2 4224025035
+116 3 65535 6 1 30 36 4 36 25 1 2 4224025035
+117 3 65535 6 1 45 35 4 36 25 1 2 4224025035
+118 3 65535 6 1 60 34 4 36 25 1 0 3764940993
+
+# Section EVENTS
+# tick kind v1 v2 v3 v4 v5
+# Field meaning per kind:
+#   ORDER_ENQUEUE/ORDER_ACCEPT  v1=order_id
+#   FIRE_START                  v1=rng
+#   PROJ_LAUNCH                  v1=from_u v2=from_v v3=to_u v4=to_v v5=raw_dmg
+#   PROJ_IMPACT                  v1=impact_u v2=impact_v v3=flight_ticks v4=raw_dmg
+#   HIT_ROLL                     v1=roll v2=pct v3=hit(1=HIT,0=MISS)
+#   HP_APPLY                     v1=uid v2=delta v3=old_hp v4=new_hp
+0 ORDER_ENQUEUE 3
+0 ORDER_ACCEPT 3
+0 FIRE_START 305419896
+0 PROJ_LAUNCH 1318 2086 1336 1720 49
+4 PROJ_IMPACT 1338 1723 6 49
+4 HIT_ROLL 19 75 1
+4 HP_APPLY 2 -49 100 51
+38 FIRE_START 2576638500
+38 PROJ_LAUNCH 1318 2086 1336 1720 49
+42 PROJ_IMPACT 1339 1719 6 49
+42 HIT_ROLL 83 75 0
+76 FIRE_START 1791458448
+76 PROJ_LAUNCH 1318 2086 1336 1720 49
+80 PROJ_IMPACT 1336 1720 6 49
+80 HIT_ROLL 37 75 1
+80 HP_APPLY 2 -49 51 2
+114 FIRE_START 550225221
+114 PROJ_LAUNCH 1318 2086 1336 1720 49
+118 PROJ_IMPACT 1339 1719 6 49
+118 HIT_ROLL 75 75 1
+118 HP_APPLY 2 -49 2 -47
+
+# Section REGRESSION (native-vs-native, NOT oracle parity)
+#
+# These rows are a NATIVE baseline, not a Gold 2.2 oracle parity claim: the
+# duel and the march-pause engage have no oracle fixture. They pin the two
+# combat paths the oracle table above does not reach - two-sided return fire
+# and the march-pause gating - so that drift in return fire, in the pause
+# gating or in the combat timing fails CI instead of passing unnoticed.
+#
+# Regenerate with: combat_parity_test --emit
+#
+# Row format: <scenario> <tick> <field>=<value> ...
+#   alive_player / alive_enemy : TutorialUnits::countAliveInGroup, exact
+#   hp_player / hp_enemy       : summed hp over the player / enemy units
+#   shots                      : units that fired this tick
+#   moving                     : player units that moved this tick
+#   progress                   : cumulative path progress of the player units
+#
+# duel  : player dguner and Group-3 aguner, both auto-engaging, 250 ticks.
+# march : six-soldier squad marching past a stationary enemy; it pauses to
+#         engage from tick 221, the enemy dies at tick 228, the squad resumes
+#         at tick 230. 300 ticks.
+duel 0 alive_player=1 alive_enemy=1 hp_player=100 hp_enemy=100 shots=2 moving=0 progress=0
+duel 1 alive_player=1 alive_enemy=1 hp_player=100 hp_enemy=100 shots=0 moving=0 progress=0
+duel 2 alive_player=1 alive_enemy=1 hp_player=100 hp_enemy=100 shots=0 moving=0 progress=0
+duel 3 alive_player=1 alive_enemy=1 hp_player=100 hp_enemy=100 shots=0 moving=0 progress=0
+duel 4 alive_player=1 alive_enemy=1 hp_player=100 hp_enemy=100 shots=0 moving=0 progress=0
+duel 5 alive_player=1 alive_enemy=1 hp_player=100 hp_enemy=100 shots=0 moving=0 progress=0
+duel 6 alive_player=1 alive_enemy=1 hp_player=100 hp_enemy=100 shots=0 moving=0 progress=0
+duel 7 alive_player=1 alive_enemy=1 hp_player=100 hp_enemy=100 shots=0 moving=0 progress=0
+duel 8 alive_player=1 alive_enemy=1 hp_player=100 hp_enemy=100 shots=0 moving=0 progress=0
+duel 9 alive_player=1 alive_enemy=1 hp_player=100 hp_enemy=100 shots=0 moving=0 progress=0
+duel 10 alive_player=1 alive_enemy=1 hp_player=100 hp_enemy=100 shots=0 moving=0 progress=0
+duel 11 alive_player=1 alive_enemy=1 hp_player=100 hp_enemy=100 shots=0 moving=0 progress=0
+duel 12 alive_player=1 alive_enemy=1 hp_player=100 hp_enemy=100 shots=0 moving=0 progress=0
+duel 13 alive_player=1 alive_enemy=1 hp_player=100 hp_enemy=100 shots=0 moving=0 progress=0
+duel 14 alive_player=1 alive_enemy=1 hp_player=100 hp_enemy=100 shots=0 moving=0 progress=0
+duel 15 alive_player=1 alive_enemy=1 hp_player=100 hp_enemy=100 shots=0 moving=0 progress=0
+duel 16 alive_player=1 alive_enemy=1 hp_player=100 hp_enemy=100 shots=0 moving=0 progress=0
+duel 17 alive_player=1 alive_enemy=1 hp_player=100 hp_enemy=100 shots=0 moving=0 progress=0
+duel 18 alive_player=1 alive_enemy=1 hp_player=100 hp_enemy=100 shots=0 moving=0 progress=0
+duel 19 alive_player=1 alive_enemy=1 hp_player=100 hp_enemy=100 shots=0 moving=0 progress=0
+duel 20 alive_player=1 alive_enemy=1 hp_player=100 hp_enemy=100 shots=0 moving=0 progress=0
+duel 21 alive_player=1 alive_enemy=1 hp_player=100 hp_enemy=100 shots=0 moving=0 progress=0
+duel 22 alive_player=1 alive_enemy=1 hp_player=100 hp_enemy=100 shots=0 moving=0 progress=0
+duel 23 alive_player=1 alive_enemy=1 hp_player=100 hp_enemy=100 shots=0 moving=0 progress=0
+duel 24 alive_player=1 alive_enemy=1 hp_player=100 hp_enemy=100 shots=0 moving=0 progress=0
+duel 25 alive_player=1 alive_enemy=1 hp_player=100 hp_enemy=100 shots=0 moving=0 progress=0
+duel 26 alive_player=1 alive_enemy=1 hp_player=100 hp_enemy=100 shots=0 moving=0 progress=0
+duel 27 alive_player=1 alive_enemy=1 hp_player=100 hp_enemy=100 shots=0 moving=0 progress=0
+duel 28 alive_player=1 alive_enemy=1 hp_player=100 hp_enemy=100 shots=0 moving=0 progress=0
+duel 29 alive_player=1 alive_enemy=1 hp_player=100 hp_enemy=100 shots=0 moving=0 progress=0
+duel 30 alive_player=1 alive_enemy=1 hp_player=100 hp_enemy=100 shots=0 moving=0 progress=0
+duel 31 alive_player=1 alive_enemy=1 hp_player=100 hp_enemy=100 shots=0 moving=0 progress=0
+duel 32 alive_player=1 alive_enemy=1 hp_player=100 hp_enemy=100 shots=0 moving=0 progress=0
+duel 33 alive_player=1 alive_enemy=1 hp_player=100 hp_enemy=100 shots=0 moving=0 progress=0
+duel 34 alive_player=1 alive_enemy=1 hp_player=100 hp_enemy=100 shots=0 moving=0 progress=0
+duel 35 alive_player=1 alive_enemy=1 hp_player=100 hp_enemy=100 shots=0 moving=0 progress=0
+duel 36 alive_player=1 alive_enemy=1 hp_player=100 hp_enemy=100 shots=0 moving=0 progress=0
+duel 37 alive_player=1 alive_enemy=1 hp_player=100 hp_enemy=100 shots=1 moving=0 progress=0
+duel 38 alive_player=1 alive_enemy=1 hp_player=100 hp_enemy=100 shots=1 moving=0 progress=0
+duel 39 alive_player=1 alive_enemy=1 hp_player=100 hp_enemy=100 shots=0 moving=0 progress=0
+duel 40 alive_player=1 alive_enemy=1 hp_player=100 hp_enemy=100 shots=0 moving=0 progress=0
+duel 41 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=100 shots=0 moving=0 progress=0
+duel 42 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=51 shots=0 moving=0 progress=0
+duel 43 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=51 shots=0 moving=0 progress=0
+duel 44 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=51 shots=0 moving=0 progress=0
+duel 45 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=51 shots=0 moving=0 progress=0
+duel 46 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=51 shots=0 moving=0 progress=0
+duel 47 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=51 shots=0 moving=0 progress=0
+duel 48 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=51 shots=0 moving=0 progress=0
+duel 49 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=51 shots=0 moving=0 progress=0
+duel 50 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=51 shots=0 moving=0 progress=0
+duel 51 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=51 shots=0 moving=0 progress=0
+duel 52 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=51 shots=0 moving=0 progress=0
+duel 53 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=51 shots=0 moving=0 progress=0
+duel 54 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=51 shots=0 moving=0 progress=0
+duel 55 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=51 shots=0 moving=0 progress=0
+duel 56 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=51 shots=0 moving=0 progress=0
+duel 57 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=51 shots=0 moving=0 progress=0
+duel 58 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=51 shots=0 moving=0 progress=0
+duel 59 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=51 shots=0 moving=0 progress=0
+duel 60 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=51 shots=0 moving=0 progress=0
+duel 61 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=51 shots=0 moving=0 progress=0
+duel 62 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=51 shots=0 moving=0 progress=0
+duel 63 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=51 shots=0 moving=0 progress=0
+duel 64 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=51 shots=0 moving=0 progress=0
+duel 65 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=51 shots=0 moving=0 progress=0
+duel 66 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=51 shots=0 moving=0 progress=0
+duel 67 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=51 shots=0 moving=0 progress=0
+duel 68 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=51 shots=0 moving=0 progress=0
+duel 69 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=51 shots=0 moving=0 progress=0
+duel 70 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=51 shots=0 moving=0 progress=0
+duel 71 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=51 shots=0 moving=0 progress=0
+duel 72 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=51 shots=0 moving=0 progress=0
+duel 73 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=51 shots=0 moving=0 progress=0
+duel 74 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=51 shots=1 moving=0 progress=0
+duel 75 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=51 shots=0 moving=0 progress=0
+duel 76 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=51 shots=1 moving=0 progress=0
+duel 77 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=51 shots=0 moving=0 progress=0
+duel 78 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=51 shots=0 moving=0 progress=0
+duel 79 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=51 shots=0 moving=0 progress=0
+duel 80 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=2 shots=0 moving=0 progress=0
+duel 81 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=2 shots=0 moving=0 progress=0
+duel 82 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=2 shots=0 moving=0 progress=0
+duel 83 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=2 shots=0 moving=0 progress=0
+duel 84 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=2 shots=0 moving=0 progress=0
+duel 85 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=2 shots=0 moving=0 progress=0
+duel 86 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=2 shots=0 moving=0 progress=0
+duel 87 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=2 shots=0 moving=0 progress=0
+duel 88 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=2 shots=0 moving=0 progress=0
+duel 89 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=2 shots=0 moving=0 progress=0
+duel 90 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=2 shots=0 moving=0 progress=0
+duel 91 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=2 shots=0 moving=0 progress=0
+duel 92 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=2 shots=0 moving=0 progress=0
+duel 93 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=2 shots=0 moving=0 progress=0
+duel 94 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=2 shots=0 moving=0 progress=0
+duel 95 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=2 shots=0 moving=0 progress=0
+duel 96 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=2 shots=0 moving=0 progress=0
+duel 97 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=2 shots=0 moving=0 progress=0
+duel 98 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=2 shots=0 moving=0 progress=0
+duel 99 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=2 shots=0 moving=0 progress=0
+duel 100 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=2 shots=0 moving=0 progress=0
+duel 101 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=2 shots=0 moving=0 progress=0
+duel 102 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=2 shots=0 moving=0 progress=0
+duel 103 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=2 shots=0 moving=0 progress=0
+duel 104 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=2 shots=0 moving=0 progress=0
+duel 105 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=2 shots=0 moving=0 progress=0
+duel 106 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=2 shots=0 moving=0 progress=0
+duel 107 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=2 shots=0 moving=0 progress=0
+duel 108 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=2 shots=0 moving=0 progress=0
+duel 109 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=2 shots=0 moving=0 progress=0
+duel 110 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=2 shots=0 moving=0 progress=0
+duel 111 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=2 shots=1 moving=0 progress=0
+duel 112 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=2 shots=0 moving=0 progress=0
+duel 113 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=2 shots=0 moving=0 progress=0
+duel 114 alive_player=1 alive_enemy=1 hp_player=59 hp_enemy=2 shots=1 moving=0 progress=0
+duel 115 alive_player=1 alive_enemy=1 hp_player=18 hp_enemy=2 shots=0 moving=0 progress=0
+duel 116 alive_player=1 alive_enemy=1 hp_player=18 hp_enemy=2 shots=0 moving=0 progress=0
+duel 117 alive_player=1 alive_enemy=1 hp_player=18 hp_enemy=2 shots=0 moving=0 progress=0
+duel 118 alive_player=1 alive_enemy=1 hp_player=18 hp_enemy=2 shots=0 moving=0 progress=0
+duel 119 alive_player=1 alive_enemy=1 hp_player=18 hp_enemy=2 shots=0 moving=0 progress=0
+duel 120 alive_player=1 alive_enemy=1 hp_player=18 hp_enemy=2 shots=0 moving=0 progress=0
+duel 121 alive_player=1 alive_enemy=1 hp_player=18 hp_enemy=2 shots=0 moving=0 progress=0
+duel 122 alive_player=1 alive_enemy=1 hp_player=18 hp_enemy=2 shots=0 moving=0 progress=0
+duel 123 alive_player=1 alive_enemy=1 hp_player=18 hp_enemy=2 shots=0 moving=0 progress=0
+duel 124 alive_player=1 alive_enemy=1 hp_player=18 hp_enemy=2 shots=0 moving=0 progress=0
+duel 125 alive_player=1 alive_enemy=1 hp_player=18 hp_enemy=2 shots=0 moving=0 progress=0
+duel 126 alive_player=1 alive_enemy=1 hp_player=18 hp_enemy=2 shots=0 moving=0 progress=0
+duel 127 alive_player=1 alive_enemy=1 hp_player=18 hp_enemy=2 shots=0 moving=0 progress=0
+duel 128 alive_player=1 alive_enemy=1 hp_player=18 hp_enemy=2 shots=0 moving=0 progress=0
+duel 129 alive_player=1 alive_enemy=1 hp_player=18 hp_enemy=2 shots=0 moving=0 progress=0
+duel 130 alive_player=1 alive_enemy=1 hp_player=18 hp_enemy=2 shots=0 moving=0 progress=0
+duel 131 alive_player=1 alive_enemy=1 hp_player=18 hp_enemy=2 shots=0 moving=0 progress=0
+duel 132 alive_player=1 alive_enemy=1 hp_player=18 hp_enemy=2 shots=0 moving=0 progress=0
+duel 133 alive_player=1 alive_enemy=1 hp_player=18 hp_enemy=2 shots=0 moving=0 progress=0
+duel 134 alive_player=1 alive_enemy=1 hp_player=18 hp_enemy=2 shots=0 moving=0 progress=0
+duel 135 alive_player=1 alive_enemy=1 hp_player=18 hp_enemy=2 shots=0 moving=0 progress=0
+duel 136 alive_player=1 alive_enemy=1 hp_player=18 hp_enemy=2 shots=0 moving=0 progress=0
+duel 137 alive_player=1 alive_enemy=1 hp_player=18 hp_enemy=2 shots=0 moving=0 progress=0
+duel 138 alive_player=1 alive_enemy=1 hp_player=18 hp_enemy=2 shots=0 moving=0 progress=0
+duel 139 alive_player=1 alive_enemy=1 hp_player=18 hp_enemy=2 shots=0 moving=0 progress=0
+duel 140 alive_player=1 alive_enemy=1 hp_player=18 hp_enemy=2 shots=0 moving=0 progress=0
+duel 141 alive_player=1 alive_enemy=1 hp_player=18 hp_enemy=2 shots=0 moving=0 progress=0
+duel 142 alive_player=1 alive_enemy=1 hp_player=18 hp_enemy=2 shots=0 moving=0 progress=0
+duel 143 alive_player=1 alive_enemy=1 hp_player=18 hp_enemy=2 shots=0 moving=0 progress=0
+duel 144 alive_player=1 alive_enemy=1 hp_player=18 hp_enemy=2 shots=0 moving=0 progress=0
+duel 145 alive_player=1 alive_enemy=1 hp_player=18 hp_enemy=2 shots=0 moving=0 progress=0
+duel 146 alive_player=1 alive_enemy=1 hp_player=18 hp_enemy=2 shots=0 moving=0 progress=0
+duel 147 alive_player=1 alive_enemy=1 hp_player=18 hp_enemy=2 shots=0 moving=0 progress=0
+duel 148 alive_player=1 alive_enemy=1 hp_player=18 hp_enemy=2 shots=1 moving=0 progress=0
+duel 149 alive_player=1 alive_enemy=1 hp_player=18 hp_enemy=2 shots=0 moving=0 progress=0
+duel 150 alive_player=1 alive_enemy=1 hp_player=18 hp_enemy=2 shots=0 moving=0 progress=0
+duel 151 alive_player=1 alive_enemy=1 hp_player=18 hp_enemy=2 shots=0 moving=0 progress=0
+duel 152 alive_player=0 alive_enemy=1 hp_player=0 hp_enemy=2 shots=1 moving=0 progress=0
+duel 153 alive_player=0 alive_enemy=1 hp_player=0 hp_enemy=2 shots=0 moving=0 progress=0
+duel 154 alive_player=0 alive_enemy=1 hp_player=0 hp_enemy=2 shots=0 moving=0 progress=0
+duel 155 alive_player=0 alive_enemy=1 hp_player=0 hp_enemy=2 shots=0 moving=0 progress=0
+duel 156 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 157 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 158 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 159 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 160 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 161 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 162 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 163 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 164 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 165 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 166 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 167 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 168 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 169 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 170 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 171 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 172 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 173 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 174 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 175 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 176 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 177 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 178 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 179 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 180 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 181 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 182 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 183 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 184 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 185 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 186 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 187 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 188 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 189 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 190 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 191 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 192 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 193 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 194 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 195 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 196 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 197 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 198 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 199 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 200 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 201 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 202 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 203 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 204 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 205 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 206 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 207 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 208 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 209 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 210 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 211 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 212 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 213 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 214 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 215 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 216 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 217 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 218 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 219 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 220 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 221 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 222 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 223 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 224 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 225 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 226 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 227 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 228 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 229 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 230 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 231 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 232 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 233 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 234 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 235 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 236 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 237 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 238 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 239 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 240 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 241 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 242 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 243 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 244 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 245 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 246 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 247 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 248 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+duel 249 alive_player=0 alive_enemy=0 hp_player=0 hp_enemy=0 shots=0 moving=0 progress=0
+march 0 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=0 progress=0
+march 1 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=0
+march 2 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=52
+march 3 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=156
+march 4 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=311
+march 5 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=517
+march 6 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=773
+march 7 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=1079
+march 8 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=1436
+march 9 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=1844
+march 10 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=2303
+march 11 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=2815
+march 12 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=3377
+march 13 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=3989
+march 14 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=4651
+march 15 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=5365
+march 16 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=6131
+march 17 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=6948
+march 18 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=7814
+march 19 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=8731
+march 20 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=9699
+march 21 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=10719
+march 22 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=11791
+march 23 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=12911
+march 24 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=14084
+march 25 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=15308
+march 26 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=16585
+march 27 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=17914
+march 28 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=19295
+march 29 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=20728
+march 30 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=22211
+march 31 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=23738
+march 32 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=23993
+march 33 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=24036
+march 34 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=24132
+march 35 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=24277
+march 36 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=24472
+march 37 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=24717
+march 38 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=25013
+march 39 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=25361
+march 40 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=25758
+march 41 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=26204
+march 42 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=26702
+march 43 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=27253
+march 44 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=27853
+march 45 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=28504
+march 46 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=29207
+march 47 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=29960
+march 48 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=30764
+march 49 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=31620
+march 50 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=32525
+march 51 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=33480
+march 52 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=34485
+march 53 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=35542
+march 54 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=36650
+march 55 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=37809
+march 56 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=39019
+march 57 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=40278
+march 58 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=41586
+march 59 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=42945
+march 60 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=44353
+march 61 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=45814
+march 62 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=47322
+march 63 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=48339
+march 64 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=48611
+march 65 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=48671
+march 66 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=48782
+march 67 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=48944
+march 68 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=49154
+march 69 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=49416
+march 70 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=49729
+march 71 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=50093
+march 72 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=50507
+march 73 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=50973
+march 74 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=51489
+march 75 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=52055
+march 76 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=52673
+march 77 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=53342
+march 78 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=54063
+march 79 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=54834
+march 80 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=55658
+march 81 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=56533
+march 82 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=57458
+march 83 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=58433
+march 84 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=59460
+march 85 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=60538
+march 86 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=61666
+march 87 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=62844
+march 88 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=64074
+march 89 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=65354
+march 90 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=66686
+march 91 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=68069
+march 92 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=69505
+march 93 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=70991
+march 94 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=72255
+march 95 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=72772
+march 96 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=73070
+march 97 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=73153
+march 98 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=73289
+march 99 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=73476
+march 100 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=73715
+march 101 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=74007
+march 102 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=74351
+march 103 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=74749
+march 104 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=75198
+march 105 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=75697
+march 106 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=76248
+march 107 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=76849
+march 108 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=77501
+march 109 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=78204
+march 110 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=78957
+march 111 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=79760
+march 112 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=80614
+march 113 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=81520
+march 114 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=82477
+march 115 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=83484
+march 116 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=84541
+march 117 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=85648
+march 118 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=86807
+march 119 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=88017
+march 120 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=89277
+march 121 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=90587
+march 122 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=91946
+march 123 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=93354
+march 124 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=94811
+march 125 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=96052
+march 126 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=97069
+march 127 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=97605
+march 128 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=97666
+march 129 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=97778
+march 130 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=97941
+march 131 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=98152
+march 132 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=98416
+march 133 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=98732
+march 134 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=99097
+march 135 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=99514
+march 136 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=99982
+march 137 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=100503
+march 138 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=101078
+march 139 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=101704
+march 140 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=102380
+march 141 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=103106
+march 142 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=103883
+march 143 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=104711
+march 144 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=105591
+march 145 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=106523
+march 146 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=107506
+march 147 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=108541
+march 148 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=109626
+march 149 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=110763
+march 150 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=111951
+march 151 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=113191
+march 152 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=114483
+march 153 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=115825
+march 154 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=117219
+march 155 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=118663
+march 156 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=119894
+march 157 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=121165
+march 158 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=121433
+march 159 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=121748
+march 160 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=121852
+march 161 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=122008
+march 162 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=122213
+march 163 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=122470
+march 164 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=122776
+march 165 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=123133
+march 166 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=123541
+march 167 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=123999
+march 168 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=124507
+march 169 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=125065
+march 170 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=125672
+march 171 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=126330
+march 172 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=127040
+march 173 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=127802
+march 174 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=128615
+march 175 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=129477
+march 176 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=130389
+march 177 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=131353
+march 178 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=132367
+march 179 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=133432
+march 180 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=134548
+march 181 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=135716
+march 182 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=136932
+march 183 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=138199
+march 184 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=139517
+march 185 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=140883
+march 186 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=142300
+march 187 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=143762
+march 188 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=145011
+march 189 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=146030
+march 190 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=146310
+march 191 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=146634
+march 192 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=146744
+march 193 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=146905
+march 194 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=147118
+march 195 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=147383
+march 196 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=147697
+march 197 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=148062
+march 198 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=148479
+march 199 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=148947
+march 200 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=149464
+march 201 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=150031
+march 202 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=150649
+march 203 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=151315
+march 204 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=152032
+march 205 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=152799
+march 206 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=153617
+march 207 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=154487
+march 208 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=155407
+march 209 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=156379
+march 210 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=157402
+march 211 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=158475
+march 212 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=159598
+march 213 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=160772
+march 214 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=161998
+march 215 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=163276
+march 216 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=164604
+march 217 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=165982
+march 218 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=167409
+march 219 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=168884
+march 220 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=6 progress=170137
+march 221 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=1 moving=6 progress=170901
+march 222 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=2 moving=4 progress=171189
+march 223 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=1 moving=3 progress=171248
+march 224 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=3 progress=171333
+march 225 alive_player=6 alive_enemy=1 hp_player=600 hp_enemy=100 shots=0 moving=3 progress=171443
+march 226 alive_player=6 alive_enemy=1 hp_player=559 hp_enemy=100 shots=0 moving=3 progress=171580
+march 227 alive_player=6 alive_enemy=1 hp_player=559 hp_enemy=2 shots=0 moving=3 progress=171742
+march 228 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=3 progress=171931
+march 229 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=3 progress=172146
+march 230 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=172386
+march 231 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=172677
+march 232 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=173018
+march 233 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=173410
+march 234 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=173850
+march 235 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=174342
+march 236 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=174885
+march 237 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=175479
+march 238 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=176124
+march 239 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=176822
+march 240 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=177571
+march 241 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=178373
+march 242 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=179226
+march 243 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=180129
+march 244 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=181084
+march 245 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=182089
+march 246 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=183145
+march 247 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=184250
+march 248 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=185408
+march 249 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=186617
+march 250 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=187878
+march 251 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=189182
+march 252 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=189747
+march 253 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=190364
+march 254 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=191031
+march 255 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=191750
+march 256 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=192519
+march 257 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=193340
+march 258 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=194212
+march 259 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=195135
+march 260 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=196103
+march 261 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=196587
+march 262 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=196858
+march 263 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=197182
+march 264 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=197558
+march 265 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=197985
+march 266 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=198463
+march 267 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=198990
+march 268 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=199567
+march 269 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=200194
+march 270 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=200872
+march 271 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=201602
+march 272 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=202384
+march 273 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=203216
+march 274 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=204101
+march 275 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=205038
+march 276 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=206026
+march 277 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=207064
+march 278 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=208154
+march 279 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=209294
+march 280 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=210483
+march 281 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=211722
+march 282 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=213014
+march 283 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=213823
+march 284 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=214420
+march 285 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=215068
+march 286 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=215767
+march 287 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=216516
+march 288 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=217315
+march 289 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=218167
+march 290 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=219070
+march 291 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=220021
+march 292 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=220751
+march 293 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=221006
+march 294 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=221313
+march 295 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=221671
+march 296 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=222079
+march 297 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=222539
+march 298 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=223050
+march 299 alive_player=6 alive_enemy=0 hp_player=559 hp_enemy=0 shots=0 moving=6 progress=223613

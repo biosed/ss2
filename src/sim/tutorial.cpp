@@ -34,26 +34,62 @@ unsigned tutorialTurnDelay(const std::filesystem::path& gameDir) {
     return 40; // Default passed by the retail single-player initialization.
 }
 
-Tutorial::Tutorial(assets::TutorialData data, unsigned initialZoneCount) : data_(std::move(data)) {
-    if (data_.scripts.size() < active_.size()) throw std::runtime_error("Incomplete tutorial script set");
-    active_.fill(true);
-    active_[2] = false; // AI visibility trigger belongs to the world simulation.
-    scan(initialZoneCount);
+namespace {
+MissionQueries legacyQueries(unsigned inZone2, unsigned enemyGroup3Alive) {
+    return {
+        [inZone2](unsigned zone, unsigned player) -> unsigned {
+            if (zone != 2 || player != 0) throw std::runtime_error("Unsupported mission zone query");
+            return inZone2;
+        },
+        [enemyGroup3Alive](unsigned group) -> unsigned {
+            if (group == 3) return enemyGroup3Alive;
+            return 100; // non-legacy groups inactive in legacy 16-script mode
+        }
+    };
+}
 }
 
-void Tutorial::step(unsigned inZone) {
+void Tutorial::initActive(bool fullMission) {
+    if (data_.scripts.size() < 12) throw std::runtime_error("Incomplete tutorial script set");
+    active_.fill(false);
+    const std::size_t limit = fullMission ? std::min(active_.size(), data_.scripts.size())
+                                          : std::min<std::size_t>(16, data_.scripts.size());
+    for (std::size_t i = 0; i < limit; ++i) active_[i] = true;
+    active_[2] = false;  // AI visibility trigger belongs to the world simulation.
+    if (fullMission) {
+        active_[18] = false; // Reinforcement group 71 spawns via OP(40), not present at start.
+        active_[25] = false; // Allied vehicle group 50 destruction requires anti-tank mechanics.
+    }
+}
+
+Tutorial::Tutorial(assets::TutorialData data, unsigned initialZoneCount, unsigned initialEnemyGroup3)
+    : data_(std::move(data)) {
+    initActive(false);
+    scan(legacyQueries(initialZoneCount, initialEnemyGroup3));
+}
+
+Tutorial::Tutorial(assets::TutorialData data, MissionQueries queries) : data_(std::move(data)) {
+    initActive(true);
+    scan(queries);
+}
+
+void Tutorial::step(unsigned inZone, unsigned enemyGroup3Alive) {
+    step(legacyQueries(inZone, enemyGroup3Alive));
+}
+
+void Tutorial::step(const MissionQueries& queries) {
     ++tick_;
-    if ((tick_ & 63u) == 3) scan(inZone);
+    if ((tick_ & 63u) == 3) scan(queries);
 }
 
 std::vector<MissionEvent> Tutorial::takeEvents() { return std::exchange(events_, {}); }
 
-void Tutorial::scan(unsigned inZone) {
+void Tutorial::scan(const MissionQueries& queries) {
     for (unsigned i = 0; i < active_.size(); ++i)
-        if (active_[i]) evaluate(i, inZone);
+        if (active_[i]) evaluate(i, queries);
 }
 
-void Tutorial::evaluate(unsigned script, unsigned inZone) {
+void Tutorial::evaluate(unsigned script, const MissionQueries& queries) {
     std::vector<uint32_t> stack;
     const auto pop = [&]() {
         if (stack.empty()) throw std::runtime_error("Mission stack underflow");
@@ -76,10 +112,22 @@ void Tutorial::evaluate(unsigned script, unsigned inZone) {
             stack.push_back(a && b);
             break;
         }
+        case 2: {
+            const auto b = pop(), a = pop();
+            stack.push_back(a || b);
+            break;
+        }
+        case 3: {
+            const auto threshold = pop(), mode = pop(), group = pop();
+            (void)pop(); // unit type / owner mask
+            const unsigned alive = queries.countAliveByGroup ? queries.countAliveByGroup(group) : 0u;
+            stack.push_back(compare(mode, int32_t(alive), int32_t(threshold)));
+            break;
+        }
         case 6: {
             const auto zone = pop(), player = pop(), threshold = pop(), mode = pop();
-            if (zone != 2 || player != 0) throw std::runtime_error("Unsupported mission zone query");
-            stack.push_back(compare(mode, inZone, threshold));
+            const unsigned count = queries.countInZone ? queries.countInZone(zone, player) : 0u;
+            stack.push_back(compare(mode, int32_t(count), int32_t(threshold)));
             break;
         }
         case 7: if (!pop()) return; break;
@@ -105,6 +153,19 @@ void Tutorial::evaluate(unsigned script, unsigned inZone) {
                 data_.markers.at(*marker);
                 events_.push_back({MissionEvent::Marker, *marker});
             }
+            break;
+        }
+        case 18: {
+            const auto result = pop();
+            events_.push_back({MissionEvent::Victory, result});
+            break;
+        }
+        case 19: case 20: case 21: {
+            (void)pop(); (void)pop(); // group transfer / behaviour action
+            break;
+        }
+        case 40: {
+            for (int k = 0; k < 5; ++k) (void)pop(); // reinforcement / AI dispatch action
             break;
         }
         case 27: {

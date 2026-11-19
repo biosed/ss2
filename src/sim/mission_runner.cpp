@@ -4,8 +4,22 @@
 #include <utility>
 
 namespace ss2 {
+namespace {
+MissionQueries makeQueries(const TutorialUnits& units, const std::array<std::uint8_t, 128 * 128>& zones) {
+    return {
+        [&units, &zones](unsigned zone, unsigned player) {
+            return units.countInZone(zones, zone, int(player));
+        },
+        [&units](unsigned group) {
+            return units.countAliveByGroup(group);
+        }
+    };
+}
+}
+
 MissionRunner::MissionRunner(assets::TutorialData data, unsigned delayMs, TutorialUnits units)
-    : units_(std::move(units)), tutorial_(data, units_.countInZone(data.zones, 2)) {
+    : units_(std::move(units)), tutorial_(data, makeQueries(units_, data.zones)) {
+    fog_ = units_.takeFogSnapshot();
     collect();
     worker_ = std::jthread([this, delayMs](std::stop_token stop) { run(stop, delayMs); });
 }
@@ -44,7 +58,8 @@ void MissionRunner::run(std::stop_token stop, unsigned delayMs) {
                     if (old == poses_.end()) poses_.push_back(pose);
                     else *old = pose;
                 }
-                tutorial_.step(units_.countInZone(tutorial_.data().zones, 2));
+                if (auto snap = units_.takeFogSnapshot()) fog_ = std::move(snap);
+                tutorial_.step(makeQueries(units_, tutorial_.data().zones));
                 collect();
             }
         }
@@ -60,20 +75,52 @@ std::vector<SoldierPose> MissionRunner::pollPoses() {
     std::lock_guard lock(mutex_);
     return std::exchange(poses_, {});
 }
-bool MissionRunner::canMove(size_t index, int x, int y) {
+std::optional<std::vector<std::uint8_t>> MissionRunner::pollFog() {
     std::lock_guard lock(mutex_);
-    return !modal_ && units_.canMove(index, x, y);
+    return std::exchange(fog_, std::nullopt);
 }
-bool MissionRunner::move(size_t index, int x, int y) {
+bool MissionRunner::canMove(std::span<const size_t> indices, int x, int y) {
     std::lock_guard lock(mutex_);
-    return !modal_ && units_.order(index, x, y);
+    return !modal_ && units_.canMoveSelection(indices, x, y);
+}
+std::optional<size_t> MissionRunner::move(std::span<const size_t> indices, int x, int y) {
+    std::lock_guard lock(mutex_);
+    if (modal_) return {};
+    return units_.orderSelection(indices, x, y);
+}
+bool MissionRunner::isValidAttackTarget(size_t targetIndex) {
+    std::lock_guard lock(mutex_);
+    return !modal_ && units_.isValidAttackTarget(targetIndex, 0);
+}
+std::optional<size_t> MissionRunner::attack(std::span<const size_t> indices, size_t targetIndex) {
+    std::lock_guard lock(mutex_);
+    if (modal_) return {};
+    return units_.orderAttack(indices, targetIndex);
+}
+size_t MissionRunner::stop(std::span<const size_t> indices) {
+    std::lock_guard lock(mutex_);
+    if (modal_) return 0;
+    return units_.stopSelection(indices);
+}
+std::optional<bool> MissionRunner::toggleHoldFire(std::span<const size_t> indices) {
+    std::lock_guard lock(mutex_);
+    if (modal_ || indices.empty()) return std::nullopt;
+    return units_.toggleHoldFire(indices);
+}
+std::optional<bool> MissionRunner::toggleCrouch(std::span<const size_t> indices) {
+    std::lock_guard lock(mutex_);
+    if (modal_ || indices.empty()) return std::nullopt;
+    const bool crouched = units_.toggleCrouch(indices);
+    if (auto snap = units_.takeFogSnapshot()) fog_ = std::move(snap);
+    return crouched;
 }
 void MissionRunner::acknowledge() {
     std::lock_guard lock(mutex_);
     modal_ = false;
 }
-void MissionRunner::togglePause() {
+bool MissionRunner::togglePause() {
     std::lock_guard lock(mutex_);
     paused_ = !paused_;
+    return paused_;
 }
 }

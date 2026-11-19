@@ -3,6 +3,8 @@
 #include <utility>
 
 namespace ss2 {
+std::uint32_t infantryRandom(std::uint32_t& state, std::uint32_t mask);
+
 struct InfantryStep {
     int tileU, tileV;
     unsigned slot, direction;

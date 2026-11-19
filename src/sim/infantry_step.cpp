@@ -15,9 +15,14 @@ std::pair<int, int> InfantryStep::position() const {
     const int subV = (8 + 16 * int(slot / 2)) * 256 - 16 * dv * remaining;
     return {tileU * 32 + (subU >> 8), tileV * 32 + (subV >> 8)};
 }
+std::uint32_t infantryRandom(std::uint32_t& state, std::uint32_t mask) {
+    state = state * 0x41c64e6du + 0x3039u;
+    return (state >> 16) & mask;
+}
+
 void InfantryStep::advance(bool crouched, std::uint32_t& sharedRandomState) {
     if (!running) return;
-    sharedRandomState = sharedRandomState * 0x41c64e6du + 0x3039u;
+    const auto bit = infantryRandom(sharedRandomState, 1);
     if (progress == 255) {
         running = false;
         progress = 0;
@@ -25,6 +30,6 @@ void InfantryStep::advance(bool crouched, std::uint32_t& sharedRandomState) {
     }
     // All Tutorial I soldier definitions have zero experience delta for RUN.
     const unsigned base = crouched ? 5 : 8;
-    progress = std::min(255u, unsigned(progress) + base + ((sharedRandomState >> 16) & 1u));
+    progress = std::min(255u, unsigned(progress) + base + bit);
 }
 }
