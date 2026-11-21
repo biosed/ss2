@@ -25,7 +25,11 @@ add_library(ss2_window STATIC src/render/window.cpp)
 target_include_directories(ss2_window PUBLIC include src)
 target_link_libraries(ss2_window PUBLIC SDL3::SDL3 PRIVATE Vulkan::Vulkan)
 target_compile_options(ss2_window PRIVATE ${SS2_WARNINGS})
-add_executable(ss2 src/main.cpp src/ui/tutorial_selection.cpp src/audio/sound_player.cpp)
+add_executable(ss2 src/main.cpp
+    src/session/session_setup.cpp src/session/session_audio.cpp src/session/session_menus.cpp
+    src/session/session_orders.cpp src/session/session_tick.cpp src/session/session_input.cpp
+    src/session/session_hud.cpp src/session/session_view.cpp
+    src/ui/tutorial_selection.cpp src/audio/sound_player.cpp)
 target_link_libraries(ss2 PRIVATE ss2_window)
 target_compile_options(ss2 PRIVATE ${SS2_WARNINGS})
 find_package(PkgConfig REQUIRED)

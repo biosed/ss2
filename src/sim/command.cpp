@@ -138,7 +138,10 @@ public:
         } else if constexpr (IsArray<T>::value) {
             for (const auto& e : v) put(e);
         } else {
-            std::apply([this](const auto&... f) { (put(f), ...); }, fields(v));
+            std::apply([this](const auto&... f) {
+                (void)this;
+                (put(f), ...);
+            }, fields(v));
         }
     }
     std::string take() { return std::move(out_); }
@@ -213,7 +216,10 @@ public:
             return true;
         } else {
             FieldValues<T> values;
-            const bool ok = std::apply([this](auto&... f) { return (get(f) && ...); }, values);
+            const bool ok = std::apply([this](auto&... f) {
+                (void)this;
+                return (get(f) && ...);
+            }, values);
             if (ok) v = std::make_from_tuple<T>(std::move(values));
             return ok;
         }

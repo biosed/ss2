@@ -122,7 +122,6 @@ private:
     std::vector<GoldCampaignEntry> campaigns_;
     std::unique_ptr<Assets> assets_;
 
-    FrontEnd::Screen lastSyncedScreen_{FrontEnd::Screen::MainMenu};
     std::string hoveredId_;
     std::string focusedId_{"single"};
     int scrollOffset_{0};
