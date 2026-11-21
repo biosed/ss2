@@ -121,6 +121,7 @@ struct CampaignMissionSummary {
     unsigned width{};
     unsigned height{};
     unsigned scheme{};
+    std::string description{};
 };
 
 struct CampaignSummary {

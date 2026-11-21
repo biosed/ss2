@@ -2,16 +2,61 @@
 
 #include "ui/strings.hpp"
 
+#include <algorithm>
+#include <cctype>
 #include <charconv>
 #include <string_view>
 #include <system_error>
 #include <utility>
 
 namespace ss2 {
+namespace {
+
+std::string toLowerAscii(std::string_view sv) {
+    std::string out(sv);
+    for (char& ch : out) {
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    }
+    return out;
+}
+
+bool parseTailIndex(std::string_view id, std::string_view prefix, std::size_t& out) {
+    if (!id.starts_with(prefix)) return false;
+    const std::string_view digits = id.substr(prefix.size());
+    if (digits.empty()) return false;
+    const auto res = std::from_chars(digits.data(), digits.data() + digits.size(), out);
+    return res.ec == std::errc{} && res.ptr == digits.data() + digits.size();
+}
+
+char campaignShortcutChar(std::string_view name) {
+    const std::string low = toLowerAscii(name);
+    if (low.find("german") != std::string::npos || low == "de") return 'G';
+    if (low.find("japan") != std::string::npos) return 'J';
+    if (low.find("brit") != std::string::npos || low == "gb" || low == "uk") return 'B';
+    if (low == "us" || low.starts_with("us ") || low.find("usa") != std::string::npos ||
+        low.find("american") != std::string::npos || low.find("u.s.") != std::string::npos) return 'U';
+    if (low.find("russ") != std::string::npos || low.find("ussr") != std::string::npos ||
+        low.find("soviet") != std::string::npos) return 'R';
+    return '\0';
+}
+
+const char* difficultyKey(int difficulty) {
+    return difficulty == 1 ? "Easy" : difficulty == 3 ? "Hard" : "Normal";
+}
+
+}  // namespace
 
 void FrontEnd::setMissions(std::vector<Entry> missions) {
     missions_ = std::move(missions);
     if (selected_ >= missions_.size()) selected_ = 0;
+}
+
+void FrontEnd::setCampaigns(std::vector<CampaignEntry> campaigns) {
+    campaigns_ = std::move(campaigns);
+    if (selectedCampaign_ >= campaigns_.size()) selectedCampaign_ = 0;
+    if (const auto* c = currentCampaign(); !c || selectedCampaignMission_ >= c->missions.size()) {
+        selectedCampaignMission_ = 0;
+    }
 }
 
 void FrontEnd::select(std::size_t index) {
@@ -22,12 +67,65 @@ const FrontEnd::Entry* FrontEnd::selectedMission() const {
     return selected_ < missions_.size() ? &missions_[selected_] : nullptr;
 }
 
+void FrontEnd::selectCampaign(std::size_t index) {
+    if (campaigns_.empty()) {
+        selectedCampaign_ = 0;
+        selectedCampaignMission_ = 0;
+        return;
+    }
+    const std::size_t clamped = index < campaigns_.size() ? index : campaigns_.size() - 1;
+    if (clamped != selectedCampaign_) {
+        selectedCampaign_ = clamped;
+        selectedCampaignMission_ = 0;
+    } else if (const auto* c = currentCampaign(); !c || selectedCampaignMission_ >= c->missions.size()) {
+        selectedCampaignMission_ = 0;
+    }
+}
+
+void FrontEnd::selectCampaignMission(std::size_t index) {
+    const auto* c = currentCampaign();
+    if (!c || c->missions.empty()) {
+        selectedCampaignMission_ = 0;
+        return;
+    }
+    selectedCampaignMission_ = index < c->missions.size() ? index : c->missions.size() - 1;
+}
+
+const FrontEnd::CampaignEntry* FrontEnd::currentCampaign() const {
+    return selectedCampaign_ < campaigns_.size() ? &campaigns_[selectedCampaign_] : nullptr;
+}
+
+const FrontEnd::CampaignMissionEntry* FrontEnd::selectedCampaignMissionEntry() const {
+    const auto* c = currentCampaign();
+    return (c && selectedCampaignMission_ < c->missions.size()) ? &c->missions[selectedCampaignMission_] : nullptr;
+}
+
+void FrontEnd::setDifficulty(int difficulty) {
+    difficulty_ = std::clamp(difficulty, 1, 3);
+}
+
+void FrontEnd::cycleDifficulty(int delta) {
+    const int offset = ((difficulty_ - 1) + (delta % 3) + 3) % 3;
+    difficulty_ = 1 + offset;
+}
+
 std::string FrontEnd::briefingText() const {
+    const bool useCampaign = (screen_ == Screen::Campaigns || screen_ == Screen::CampaignMissions || briefingFromCampaign_);
+    if (useCampaign) {
+        const auto* m = selectedCampaignMissionEntry();
+        return m ? m->description : std::string{};
+    }
     const Entry* m = selectedMission();
     return m ? m->description : std::string{};
 }
 
 std::string FrontEnd::launchPath() const {
+    const bool useCampaign = (screen_ == Screen::Campaigns || screen_ == Screen::CampaignMissions || briefingFromCampaign_);
+    if (useCampaign) {
+        const auto* m = selectedCampaignMissionEntry();
+        if (!m) return {};
+        return (difficulty_ == 1 && !m->easyPath.empty()) ? m->easyPath : m->path;
+    }
     const Entry* m = selectedMission();
     return m ? m->path : std::string{};
 }
@@ -43,6 +141,9 @@ std::string FrontEnd::title() const {
         case Screen::MainMenu: return tr("Main Menu");
         case Screen::SinglePlayer: return tr("Single Player");
         case Screen::SingleMissions: return tr("Single Missions");
+        case Screen::Campaigns: return tr("Campaigns");
+        case Screen::CampaignMissions:
+            return currentCampaign() ? currentCampaign()->name : tr("Campaigns");
         case Screen::Briefing: return tr("Mission Briefing");
         case Screen::Launch:
         case Screen::Quit: break;
@@ -78,6 +179,33 @@ std::vector<MenuItem> FrontEnd::items() const {
             items.push_back({"start", tr("Start"), "Enter", !missions_.empty()});
             items.push_back({"cancel", tr("Cancel"), "Esc", true});
             break;
+        case Screen::Campaigns:
+            for (std::size_t i = 0; i < campaigns_.size(); ++i) {
+                const char sc = campaignShortcutChar(campaigns_[i].name);
+                const std::string tag = sc ? std::string(1, sc) : std::string{};
+                items.push_back({"campaign:" + std::to_string(i), campaigns_[i].name, tag, true});
+            }
+            if (campaigns_.empty()) {
+                items.push_back({"", tr("No campaigns installed."), "", false});
+            }
+            items.push_back({"custom", tr("Custom"), "C", true});
+            items.push_back({"cancel", tr("Cancel"), "Esc", true});
+            break;
+        case Screen::CampaignMissions: {
+            const auto* camp = currentCampaign();
+            const bool hasMissions = camp && !camp->missions.empty();
+            if (hasMissions) {
+                for (std::size_t i = 0; i < camp->missions.size(); ++i) {
+                    items.push_back({"cmission:" + std::to_string(i), camp->missions[i].name, camp->missions[i].tag, true});
+                }
+            } else {
+                items.push_back({"", tr("No missions installed."), "", false});
+            }
+            items.push_back({"difficulty", tr("Difficulty"), tr(difficultyKey(difficulty_)), true});
+            items.push_back({"start", tr("Start"), "S", hasMissions});
+            items.push_back({"cancel", tr("Cancel"), "Esc", true});
+            break;
+        }
         case Screen::Briefing:
             items.push_back({"start", tr("Start"), "S", true});
             items.push_back({"cancel", tr("Cancel"), "Esc", true});
@@ -90,16 +218,30 @@ std::vector<MenuItem> FrontEnd::items() const {
 }
 
 void FrontEnd::activate(const std::string& id) {
-    if (id.rfind("mission:", 0) == 0) {
-        std::size_t index = 0;
-        const std::string_view digits(id.data() + 8, id.size() - 8);
-        const auto res = std::from_chars(digits.data(), digits.data() + digits.size(), index);
-        if (res.ec == std::errc{} && index < missions_.size()) {
+    if (std::size_t index = 0; parseTailIndex(id, "mission:", index)) {
+        if (index < missions_.size()) {
             select(index);
+            briefingFromCampaign_ = false;
             screen_ = Screen::Briefing;
         }
         return;
     }
+    if (std::size_t index = 0; parseTailIndex(id, "campaign:", index)) {
+        if (index < campaigns_.size()) {
+            selectCampaign(index);
+            screen_ = Screen::CampaignMissions;
+        }
+        return;
+    }
+    if (std::size_t index = 0; parseTailIndex(id, "cmission:", index)) {
+        if (const auto* camp = currentCampaign(); camp && index < camp->missions.size()) {
+            selectCampaignMission(index);
+            briefingFromCampaign_ = true;
+            screen_ = Screen::Briefing;
+        }
+        return;
+    }
+
     switch (screen_) {
         case Screen::MainMenu:
             if (id == "single") screen_ = Screen::SinglePlayer;
@@ -108,20 +250,55 @@ void FrontEnd::activate(const std::string& id) {
                      id == "replay" || id == "credits") notice_ = tr("Not implemented yet.");
             break;
         case Screen::SinglePlayer:
-            if (id == "missions") { screen_ = Screen::SingleMissions; }
-            else if (id == "cancel" || id == "back") screen_ = Screen::MainMenu;
-            else if (id == "campaigns" || id == "load") notice_ = tr("Not implemented yet.");
+            if (id == "missions") {
+                briefingFromCampaign_ = false;
+                screen_ = Screen::SingleMissions;
+            } else if (id == "campaigns") {
+                screen_ = Screen::Campaigns;
+            } else if (id == "cancel" || id == "back") {
+                screen_ = Screen::MainMenu;
+            } else if (id == "load") {
+                notice_ = tr("Not implemented yet.");
+            }
             break;
         case Screen::SingleMissions:
             if (id == "start") {
-                if (selectedMission()) screen_ = Screen::Briefing;
-                else notice_ = tr("No missions installed.");
-            } else if (id == "cancel" || id == "back") screen_ = Screen::SinglePlayer;
+                if (selectedMission()) {
+                    briefingFromCampaign_ = false;
+                    screen_ = Screen::Briefing;
+                } else {
+                    notice_ = tr("No missions installed.");
+                }
+            } else if (id == "cancel" || id == "back") {
+                screen_ = Screen::SinglePlayer;
+            }
+            break;
+        case Screen::Campaigns:
+            if (id == "custom") notice_ = tr("Not implemented yet.");
+            else if (id == "cancel" || id == "back") screen_ = Screen::SinglePlayer;
+            break;
+        case Screen::CampaignMissions:
+            if (id == "difficulty") {
+                cycleDifficulty(1);
+            } else if (id == "start") {
+                if (selectedCampaignMissionEntry()) {
+                    briefingFromCampaign_ = true;
+                    screen_ = Screen::Briefing;
+                } else {
+                    notice_ = tr("No missions installed.");
+                }
+            } else if (id == "cancel" || id == "back") {
+                screen_ = Screen::Campaigns;
+            }
             break;
         case Screen::Briefing:
             if (id == "start") {
-                if (selectedMission()) screen_ = Screen::Launch;
-            } else if (id == "cancel" || id == "back") screen_ = Screen::SingleMissions;
+                const bool valid = briefingFromCampaign_ ? (selectedCampaignMissionEntry() != nullptr)
+                                                         : (selectedMission() != nullptr);
+                if (valid) screen_ = Screen::Launch;
+            } else if (id == "cancel" || id == "back") {
+                screen_ = briefingFromCampaign_ ? Screen::CampaignMissions : Screen::SingleMissions;
+            }
             break;
         case Screen::Launch:
         case Screen::Quit:
@@ -134,7 +311,11 @@ void FrontEnd::back() {
         case Screen::MainMenu: screen_ = Screen::Quit; break;
         case Screen::SinglePlayer: screen_ = Screen::MainMenu; break;
         case Screen::SingleMissions: screen_ = Screen::SinglePlayer; break;
-        case Screen::Briefing: screen_ = Screen::SingleMissions; break;
+        case Screen::Campaigns: screen_ = Screen::SinglePlayer; break;
+        case Screen::CampaignMissions: screen_ = Screen::Campaigns; break;
+        case Screen::Briefing:
+            screen_ = briefingFromCampaign_ ? Screen::CampaignMissions : Screen::SingleMissions;
+            break;
         case Screen::Launch:
         case Screen::Quit: break;
     }
@@ -163,6 +344,20 @@ std::string FrontEnd::shortcutId(char letter) const {
             }
             break;
         case Screen::SingleMissions:
+            break;
+        case Screen::Campaigns: {
+            if (c == 'c') return "custom";
+            const char target = char(c - 'a' + 'A');
+            for (std::size_t i = 0; i < campaigns_.size(); ++i) {
+                if (campaignShortcutChar(campaigns_[i].name) == target) {
+                    return "campaign:" + std::to_string(i);
+                }
+            }
+            break;
+        }
+        case Screen::CampaignMissions:
+            if (c == 'd') return "difficulty";
+            if (c == 's') return "start";
             break;
         case Screen::Briefing:
             if (c == 's') return "start";

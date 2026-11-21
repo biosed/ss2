@@ -1,5 +1,6 @@
 // Gold frontend navigation graph: the verified Tutorial I path to Start, Back/Esc,
-// cancel-briefing-starts-no-mission, switch-mission, quit and deferred branches. Asset-free.
+// cancel-briefing-starts-no-mission, switch-mission, Campaigns + Difficulty routing,
+// quit and deferred branches. Asset-free.
 #include "ui/frontend.hpp"
 
 #include <iostream>
@@ -19,6 +20,47 @@ std::vector<ss2::FrontEnd::Entry> missions() {
     return {
         {"Tutorial I", "/game/maps/single/--- TUTORIAL I ---.SSM", "Tutorial mission #1.", "128x128 Summer"},
         {"V2", "/game/maps/single/V2.ssm", "V2 description.", "384x384 Summer"},
+    };
+}
+std::vector<ss2::FrontEnd::CampaignEntry> campaigns() {
+    return {
+        {
+            "German Campaign",
+            {
+                {"023000", "1. Starting Position", "/game/maps/campaign/023000.ssc",
+                 "/game/maps/campaign/EASY/023000.ssc", "Kharkiv advance.", "256x256 Summer"},
+                {"023001", "2. The Approach to Tchutovo", "/game/maps/campaign/023001.ssc",
+                 "/game/maps/campaign/EASY/023001.ssc", "6th Panzer support.", "256x256 Summer"},
+            },
+        },
+        {
+            "Japanese Campaign",
+            {
+                {"002000", "1. Omen of Victory", "/game/maps/campaign/002000.ssc",
+                 "/game/maps/campaign/EASY/002000.ssc", "Rescue pilots.", "256x256 Beach"},
+            },
+        },
+        {
+            "British Campaign",
+            {
+                {"030000", "1. Leopard - Unexpected Circumstances", "/game/maps/campaign/030000.ssc",
+                 "/game/maps/campaign/EASY/030000.ssc", "Counter-offensive.", "256x256 Summer"},
+            },
+        },
+        {
+            "US Campaign",
+            {
+                {"016000", "1. The Assault", "/game/maps/campaign/016000.ssc",
+                 "/game/maps/campaign/EASY/016000.ssc", "Cross the Rhine.", "128x128 Summer"},
+            },
+        },
+        {
+            "Russian Campaign",
+            {
+                {"000000", "1. Revenge", "/game/maps/campaign/000000.ssc",
+                 "/game/maps/campaign/EASY/000000.ssc", "Capture Berlin.", "128x128 Summer"},
+            },
+        },
     };
 }
 }
@@ -117,9 +159,86 @@ int main() {
         check(!def.takeNotice().empty(), "deferred branch reports a notice");
         check(def.takeNotice().empty(), "notice is cleared after reading");
         def.activate("single");
-        def.activate("campaigns");
-        check(def.screen() == FrontEnd::Screen::SinglePlayer, "Campaigns is deferred, stays on Single Player");
-        check(!def.takeNotice().empty(), "Campaigns reports a notice");
+        def.activate("load");
+        check(def.screen() == FrontEnd::Screen::SinglePlayer, "Load is deferred, stays on Single Player");
+        check(!def.takeNotice().empty(), "Load reports a notice");
+
+        // Campaigns path, shortcuts (G/J/B/U/R/C/D/S), Easy/Normal/Hard routing, and stack back.
+        FrontEnd camp;
+        camp.setMissions(missions());
+        camp.setCampaigns(campaigns());
+        camp.activate(camp.shortcutId('s'));
+        check(camp.screen() == FrontEnd::Screen::SinglePlayer, "Main Menu S -> Single Player");
+        camp.activate(camp.shortcutId('c'));
+        check(camp.screen() == FrontEnd::Screen::Campaigns, "Single Player C -> Campaigns");
+        check(camp.shortcutId('g') == "campaign:0" && camp.shortcutId('j') == "campaign:1" &&
+              camp.shortcutId('b') == "campaign:2" && camp.shortcutId('u') == "campaign:3" &&
+              camp.shortcutId('r') == "campaign:4" && camp.shortcutId('c') == "custom",
+              "Campaigns nation + Custom shortcuts resolve accurately without US/Russian collision");
+        camp.activate(camp.shortcutId('c'));
+        check(camp.screen() == FrontEnd::Screen::Campaigns && !camp.takeNotice().empty(),
+              "Custom stays on Campaigns and emits a notice");
+        camp.activate(camp.shortcutId('g'));
+        check(camp.screen() == FrontEnd::Screen::CampaignMissions && camp.selectedCampaign() == 0,
+              "G opens German Campaign missions");
+        camp.selectCampaignMission(1);
+        check(camp.difficulty() == 2, "Default difficulty is Normal (2)");
+        check(camp.launchPath() == "/game/maps/campaign/023001.ssc", "Normal difficulty uses standard .ssc");
+
+        // Cycle difficulty Normal -> Hard -> Easy via 'd' shortcut.
+        camp.activate(camp.shortcutId('d'));
+        check(camp.difficulty() == 3 && camp.launchPath() == "/game/maps/campaign/023001.ssc",
+              "Hard difficulty uses standard .ssc");
+        camp.activate(camp.shortcutId('d'));
+        check(camp.difficulty() == 1 && camp.launchPath() == "/game/maps/campaign/EASY/023001.ssc",
+              "Easy difficulty routes to EASY/*.ssc");
+
+        camp.activate(camp.shortcutId('s'));
+        check(camp.screen() == FrontEnd::Screen::Briefing && camp.briefingFromCampaign(),
+              "Start on CampaignMissions enters campaign Briefing");
+        check(camp.briefingText() == "6th Panzer support.", "Briefing displays campaign I-DESC");
+
+        // Cancel / Esc from campaign Briefing returns to CampaignMissions and preserves mission index.
+        camp.activate("cancel");
+        check(camp.screen() == FrontEnd::Screen::CampaignMissions && camp.selectedCampaignMission() == 1,
+              "Cancel from campaign Briefing returns to CampaignMissions keeping selection");
+        camp.activate("cmission:1");
+        check(camp.screen() == FrontEnd::Screen::Briefing, "cmission:1 reopens Briefing");
+        camp.back();
+        check(camp.screen() == FrontEnd::Screen::CampaignMissions && camp.selectedCampaignMission() == 1,
+              "Esc from campaign Briefing returns to CampaignMissions");
+        camp.back();
+        check(camp.screen() == FrontEnd::Screen::Campaigns, "Esc from CampaignMissions returns to Campaigns");
+        // Re-entering same campaign preserves mission index; switching to another resets to 0.
+        camp.activate("campaign:0");
+        check(camp.selectedCampaignMission() == 1, "Re-entering same campaign keeps selected mission");
+        camp.back();
+        camp.activate("campaign:1");
+        check(camp.selectedCampaign() == 1 && camp.selectedCampaignMission() == 0,
+              "Switching to another campaign resets mission selection to 0");
+        camp.back();
+        check(camp.screen() == FrontEnd::Screen::Campaigns, "Back to Campaigns");
+        camp.back();
+        check(camp.screen() == FrontEnd::Screen::SinglePlayer, "Esc from Campaigns returns to SinglePlayer");
+
+        // Switching back to SingleMissions clears briefingFromCampaign_ flag.
+        camp.activate("missions");
+        camp.activate("mission:0");
+        check(camp.screen() == FrontEnd::Screen::Briefing && !camp.briefingFromCampaign(),
+              "Single Missions resets briefingFromCampaign()");
+        camp.back();
+        check(camp.screen() == FrontEnd::Screen::SingleMissions, "Cancel returns to SingleMissions");
+
+        // Empty campaigns check.
+        FrontEnd emptyCamp;
+        emptyCamp.activate("single");
+        emptyCamp.activate("campaigns");
+        check(emptyCamp.screen() == FrontEnd::Screen::Campaigns, "Empty campaigns opens Campaigns screen safely");
+        bool hasNoCampMsg = false;
+        for (const auto& it : emptyCamp.items()) {
+            if (!it.selectable && it.label == "No campaigns installed.") hasNoCampMsg = true;
+        }
+        check(hasNoCampMsg, "Empty campaigns advertises non-selectable notice row");
 
         // No missions installed: Start is inert and reports why.
         FrontEnd empty;
@@ -154,7 +273,8 @@ int main() {
         check(sc.shortcutId('x').empty(), "unadvertised letter has no shortcut");
         sc.activate(sc.shortcutId('s'));
         check(sc.screen() == FrontEnd::Screen::SinglePlayer, "shortcut S opens Single Player");
-        check(sc.shortcutId('s') == "missions" && sc.shortcutId('l') == "load", "Single Player letter shortcuts");
+        check(sc.shortcutId('s') == "missions" && sc.shortcutId('c') == "campaigns" &&
+              sc.shortcutId('l') == "load", "Single Player letter shortcuts");
         sc.activate(sc.shortcutId('s'));
         check(sc.screen() == FrontEnd::Screen::SingleMissions, "shortcut S opens Single Missions");
         sc.activate("mission:0");

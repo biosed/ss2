@@ -6217,9 +6217,10 @@ int runWindow(SDL_Window* window, ss2::ValidationReport* report, int limit, bool
 // on the same window. Returns the chosen mission path, or nullopt when the user quits.
 std::optional<std::filesystem::path> runFrontEnd(SDL_Window* window, ss2::ValidationReport* report,
                                                  const std::filesystem::path& gameDir,
-                                                 const ss2::UserSettings& settings) {
+                                                 ss2::UserSettings& settings, bool persistSettings) {
     ss2::VulkanWindow renderer(window, report);
     ss2::GoldFrontEnd goldFe(window, gameDir);
+    goldFe.setDifficulty(settings.difficulty);
 
     std::vector<ss2::GoldMissionEntry> entries;
     for (const auto& m : ss2::assets::listSinglePlayerMissions(gameDir)) {
@@ -6239,6 +6240,35 @@ std::optional<std::filesystem::path> runFrontEnd(SDL_Window* window, ss2::Valida
     }
     goldFe.setMissions(std::move(entries));
 
+    std::vector<ss2::GoldCampaignEntry> campaignEntries;
+    for (const auto& c : ss2::assets::listCampaigns(gameDir)) {
+        ss2::GoldCampaignEntry ce;
+        ce.name = c.name;
+        ce.missions.reserve(c.missions.size());
+        for (const auto& m : c.missions) {
+            std::string tag = std::to_string(m.width) + "x" + std::to_string(m.height) +
+                              (m.scheme == 2 ? " Beach" : " Summer");
+            const std::string codeKey = ss2::normalizeMissionKey(m.code);
+            const std::string stemKey = ss2::normalizeMissionKey(m.path.stem().string());
+            const bool completed = settings.completedMissions.contains(codeKey) ||
+                                   settings.completedMissions.contains(stemKey);
+            if (completed) tag = ss2::tr("Completed") + " | " + tag;
+            int bestScore = 0;
+            if (const auto sit = settings.missionHighScores.find(codeKey); sit != settings.missionHighScores.end()) {
+                bestScore = std::max(bestScore, sit->second);
+            }
+            if (const auto sit = settings.missionHighScores.find(stemKey); sit != settings.missionHighScores.end()) {
+                bestScore = std::max(bestScore, sit->second);
+            }
+            if (bestScore > 0) tag += " | " + std::to_string(bestScore);
+            ce.missions.push_back({m.code, m.title, m.path.string(), m.easyPath.string(),
+                                   m.description, tag, m.width, m.height, m.scheme,
+                                   completed, bestScore});
+        }
+        campaignEntries.push_back(std::move(ce));
+    }
+    goldFe.setCampaigns(std::move(campaignEntries));
+
     const ss2::Snapshot empty{};
     std::uint64_t lastTick = SDL_GetTicksNS();
     for (;;) {
@@ -6255,6 +6285,12 @@ std::optional<std::filesystem::path> runFrontEnd(SDL_Window* window, ss2::Valida
 
         const auto screen = goldFe.state().screen();
         if (screen == ss2::FrontEnd::Screen::Launch) {
+            if (goldFe.difficulty() != settings.difficulty) {
+                settings.difficulty = goldFe.difficulty();
+                if (persistSettings) {
+                    (void)ss2::saveUserSettings(ss2::defaultSettingsPath(), settings);
+                }
+            }
             return std::filesystem::path(goldFe.state().launchPath());
         }
         if (screen == ss2::FrontEnd::Screen::Quit) return std::nullopt;
@@ -6438,7 +6474,7 @@ int main(int argc, char** argv) try {
     ss2::ValidationReport report;
     int result = 0;
     if (mission.empty() && !gameDir.empty() && !overviewOnly && !limit && !timing) {
-        const auto chosen = runFrontEnd(window.get(), validate ? &report : nullptr, gameDir, settings);
+        const auto chosen = runFrontEnd(window.get(), validate ? &report : nullptr, gameDir, settings, persistSettings);
         if (!chosen) return 0;
         mission = *chosen;
     }

@@ -1139,6 +1139,12 @@ void testOptionalRetailSweep() {
               "findCampaignMission soviet:1 resolves Soviet #1 (000000)");
         check(uk1.has_value() && brit1.has_value() && uk1->path == brit1->path,
               "findCampaignMission uk:1 matches british:1");
+        const auto retailCampaigns = ss2::assets::listCampaigns(gameDir);
+        check(retailCampaigns.size() == 5, "listCampaigns returns all 5 Gold campaigns");
+        check(!retailCampaigns[0].missions.empty() &&
+              !retailCampaigns[0].missions[0].description.empty() &&
+              !retailCampaigns[0].missions[0].easyPath.empty(),
+              "listCampaigns populates mission I-DESC descriptions and EASY paths");
         const auto arnhem = ss2::assets::findCampaignMission(gameDir, "031000");
         check(arnhem.has_value(), "findCampaignMission finds 031000");
         const auto arnhemData = ss2::assets::readMissionData(arnhem->path);

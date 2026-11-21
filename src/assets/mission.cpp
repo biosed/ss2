@@ -836,9 +836,10 @@ std::vector<CampaignSummary> listCampaigns(const std::filesystem::path& gameDir)
                     easyPath = *ep;
                 }
             }
+            std::string description = parseDescriptionIn(archive, false);
             return CampaignMissionSummary{
                 code, title.empty() ? code : title, *sscPath, std::move(easyPath),
-                archive.width, archive.height, archive.scheme
+                archive.width, archive.height, archive.scheme, std::move(description)
             };
         } catch (const std::exception&) {
             return std::nullopt;
@@ -910,9 +911,10 @@ std::vector<CampaignSummary> listCampaigns(const std::filesystem::path& gameDir)
                     easyPath = *ep;
                 }
             }
+            std::string description = parseDescriptionIn(archive, false);
             fallback.missions.push_back({
                 code, std::move(title), f, std::move(easyPath),
-                archive.width, archive.height, archive.scheme
+                archive.width, archive.height, archive.scheme, std::move(description)
             });
         } catch (const std::exception&) {}
     }

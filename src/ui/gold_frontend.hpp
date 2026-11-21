@@ -27,6 +27,25 @@ struct GoldMissionEntry {
     int highScore{};
 };
 
+struct GoldCampaignMissionEntry {
+    std::string code;
+    std::string name;
+    std::string path;
+    std::string easyPath;
+    std::string description;
+    std::string tag;
+    unsigned width{};
+    unsigned height{};
+    unsigned scheme{};
+    bool completed{};
+    int highScore{};
+};
+
+struct GoldCampaignEntry {
+    std::string name;
+    std::vector<GoldCampaignMissionEntry> missions;
+};
+
 struct GoldStageRect {
     double x{}, y{}, width{}, height{}, scale{1.0};
 };
@@ -36,9 +55,10 @@ struct GoldPoint {
     bool inside{false};
 };
 
-// Authentic Sudden Strike II Gold 2.2 frontend renderer and controller for Screens 1-4.
-// Composites real menu_common.sue artwork + mission I-JPG1024 overviews onto an
-// aspect-fitted 800x600 stage inside OverlaySlot::panel so Briefing and Menu never overlap.
+// Authentic Sudden Strike II Gold 2.2 frontend renderer and controller for Screens 1-4
+// plus the Gold Campaigns browser and campaign mission selector. Composites real
+// menu_common.sue artwork + mission I-JPG1024 overviews onto an aspect-fitted 800x600
+// stage inside OverlaySlot::panel so Briefing and Menu never overlap.
 class GoldFrontEnd {
 public:
     GoldFrontEnd(SDL_Window* window, const std::filesystem::path& gameDir,
@@ -49,6 +69,9 @@ public:
     GoldFrontEnd& operator=(const GoldFrontEnd&) = delete;
 
     void setMissions(std::vector<GoldMissionEntry> missions);
+    void setCampaigns(std::vector<GoldCampaignEntry> campaigns);
+    void setDifficulty(int difficulty);
+    int difficulty() const { return fe_.difficulty(); }
 
     const FrontEnd& state() const { return fe_; }
     FrontEnd& state() { return fe_; }
@@ -80,17 +103,23 @@ private:
     void ensureFocusedValid();
     void syncNoticeFromState();
     void onScreenChanged(FrontEnd::Screen previous);
+    std::size_t activeListCount() const;
+    std::size_t activeListSelected() const;
+    void selectActiveRow(std::size_t index);
+    const char* activeRowPrefix() const;
+    std::size_t previewCampaignIndex() const;
     void ensureSelectionVisible();
     void scrollBy(int deltaRows);
     std::string hitTestStage(double sx, double sy) const;
     void activateId(const std::string& id);
     void showNotice(std::string text);
-    void ensureOverviewLoaded(std::size_t index);
+    void ensureOverviewLoaded(const std::string& path);
 
     SDL_Window* window_{};
     std::filesystem::path gameDir_;
     FrontEnd fe_;
     std::vector<GoldMissionEntry> missions_;
+    std::vector<GoldCampaignEntry> campaigns_;
     std::unique_ptr<Assets> assets_;
 
     FrontEnd::Screen lastSyncedScreen_{FrontEnd::Screen::MainMenu};
