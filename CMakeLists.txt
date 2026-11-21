@@ -140,7 +140,16 @@ if(BUILD_TESTING)
   target_link_libraries(combat_parity_test PRIVATE ss2_sim)
   target_compile_options(combat_parity_test PRIVATE ${SS2_ENABLE_ASSERTIONS})
   add_test(NAME combat_parity COMMAND combat_parity_test ${CMAKE_CURRENT_SOURCE_DIR}/tests/combat_parity_golden.txt)
-  add_executable(tutorial_vm_test tests/tutorial_vm_test.cpp)
+  add_executable(tutorial_vm_test
+    tests/tutorial_vm_test.cpp
+    tests/tutorial_vm_test_core.cpp
+    tests/tutorial_vm_test_4f_4o.cpp
+    tests/tutorial_vm_test_4p_4w.cpp
+    tests/tutorial_vm_test_4x_5b.cpp
+    tests/tutorial_vm_test_5c_5f.cpp
+    tests/tutorial_vm_test_5g_5j.cpp
+    tests/tutorial_vm_test_5k_5o.cpp
+    tests/tutorial_vm_test_5p_5u.cpp)
   target_link_libraries(tutorial_vm_test PRIVATE ss2_sim)
   add_test(NAME tutorial_vm COMMAND tutorial_vm_test)
   add_executable(replay_test tests/replay_test.cpp)
