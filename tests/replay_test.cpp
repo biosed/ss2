@@ -3,6 +3,7 @@
 // replay a Tutorial I session with its real script and dialogs.
 #include "assets/mission.hpp"
 #include "assets/unit_catalog.hpp"
+#include "assets/vehicles.hpp"
 #include "sim/command.hpp"
 #include "sim/mission_runner.hpp"
 #include "sim/tutorial_units.hpp"
@@ -440,6 +441,149 @@ std::optional<std::uint32_t> replayAndVerifyTrace(
     return std::nullopt;
 }
 
+// Recorded full Tutorial I route regression through P[7] village briefing:
+// opening dialogs -> wreck march -> fields briefing (Dialog 5) -> group-3
+// elimination (Phrase 6) -> P[7] village briefing (Dialog 7), then full
+// ReplayFile round-trip with 250-tick periodic stateHash trace parity.
+void testGoldTutorialFullRoute(const std::filesystem::path& game) {
+    const auto data = ss2::assets::readMissionData(game / "maps/single/--- TUTORIAL I ---.SSM");
+    const auto placements = ss2::assets::readTutorialPlacements(game);
+    const auto catalog = ss2::assets::UnitCatalog::load(game);
+
+    std::vector<ss2::assets::Infantry> infantry;
+    std::vector<ss2::assets::Placement> vehicles;
+    for (const auto& p : placements) {
+        if (p.id == "zis-3" || p.id == "m3a1" || p.id == "ds39" || p.id == "panther") vehicles.push_back(p);
+        else infantry.push_back({p.id, p.x, p.y, p.hp, p.ammo, p.group, p.owner, 0, 0, 0, 0, unsigned(p.direction)});
+    }
+
+    const auto makeFullRunner = [&] {
+        ss2::FogGrid fog(data.width, data.height, data.flags);
+        require(fog.loadCirc64FromGame(game), "CIRC64.DAT must load for Tutorial I full route test");
+        ss2::TutorialUnits units(ss2::InfantryPathGrid::loadTutorial(game), infantry, vehicles,
+                                 std::move(fog), 2, true, {}, catalog);
+        units.setPlayerTeams(data.playerTeams);
+        units.setMines(data.mines);
+        units.setAirSupport(data.airSupport, data.paratrooperGroup, data.paratrooperRoster);
+        return std::make_unique<ss2::MissionRunner>(
+            ss2::MissionRunner::ManualClock{}, data, std::move(units));
+    };
+
+    std::vector<std::size_t> squad;
+    for (std::size_t i = 0; i < infantry.size(); ++i) {
+        if (infantry[i].owner == 0) squad.push_back(i);
+    }
+    require(squad.size() == 29u, "Tutorial I player squad must contain 29 infantry");
+
+    auto live = makeFullRunner();
+    const auto livingSquad = [&] {
+        const auto snap = live->takeSnapshot();
+        std::vector<std::size_t> alive;
+        for (const auto id : squad) {
+            if (id < snap.soldiers.size() && snap.soldiers[id].hp > 0) alive.push_back(id);
+        }
+        return alive;
+    };
+    live->startRecording();
+    constexpr std::uint32_t kTraceStride = 250u;
+    constexpr int kMaxTicks = 10000;
+    std::vector<std::pair<std::uint32_t, std::uint64_t>> trace;
+
+    unsigned dialogs = 0;
+    bool sawPhrase4 = false;
+    bool sawDialog5 = false;
+    bool sawPhrase6 = false;
+    bool sawDialog7 = false;
+    std::optional<std::uint32_t> fieldsOrderTick;
+    int sweepStage = 0;
+    std::uint32_t trailingTicks = 0;
+
+    for (int step = 0; step < kMaxTicks; ++step) {
+        for (const auto& e : live->poll()) {
+            if (e.kind == ss2::MissionEvent::Message && e.index == 4) sawPhrase4 = true;
+            if (e.kind == ss2::MissionEvent::Message && e.index == 6) sawPhrase6 = true;
+            if (e.kind == ss2::MissionEvent::Dialog) {
+                ++dialogs;
+                if (e.index == 5) sawDialog5 = true;
+                if (e.index == 7) sawDialog7 = true;
+                live->acknowledge();
+            }
+        }
+
+        const auto curTick = live->simTick();
+
+        if (curTick == 520u && !sawDialog5) {
+            const auto ids = livingSquad();
+            const auto accepted = live->move(ids, 2960, 1776);
+            require(accepted && *accepted == ids.size(), "Wreck march order failed on Tutorial I");
+        }
+        if (sawDialog5 && !fieldsOrderTick) {
+            const auto ids = livingSquad();
+            require(!ids.empty(), "No living player infantry remaining after wreck objective");
+            const auto accepted = live->attackMove(ids, 3712, 1520);
+            require(accepted && *accepted > 0u, "Fields attack-move order failed after Dialog 5");
+            fieldsOrderTick = curTick;
+        }
+        if (fieldsOrderTick && !sawPhrase6) {
+            if (sweepStage == 0 && curTick >= *fieldsOrderTick + 1500u) {
+                const auto ids = livingSquad();
+                if (!ids.empty()) (void)live->attackMove(ids, 3744, 1536);
+                sweepStage = 1;
+            } else if (sweepStage == 1 && curTick >= *fieldsOrderTick + 2500u) {
+                const auto ids = livingSquad();
+                if (!ids.empty()) (void)live->attackMove(ids, 3680, 1504);
+                sweepStage = 2;
+            }
+        }
+
+        if ((curTick % kTraceStride) == 0u) {
+            const auto h = live->stateHash();
+            if (!trace.empty() && trace.back().first == curTick) trace.back().second = h;
+            else trace.emplace_back(curTick, h);
+        }
+
+        if (sawDialog7 && ++trailingTicks >= 20u) break;
+
+        live->advanceTicks(1);
+    }
+
+    require(sawPhrase4, "Tutorial I full route must reach Phrase 4 (wreck complete)");
+    require(sawDialog5, "Tutorial I full route must reach Dialog 5 (fields briefing)");
+    require(sawPhrase6, "Tutorial I full route must reach Phrase 6 (group-3 cleared)");
+    require(sawDialog7, "Tutorial I full route must reach Dialog 7 (P[7] village briefing)");
+
+    const auto endTick = live->simTick();
+    const auto endHash = live->stateHash();
+    const auto endSnap = live->takeSnapshot();
+    const auto log = live->takeRecording();
+    if (trace.empty() || trace.back().first != endTick) {
+        trace.emplace_back(endTick, endHash);
+    }
+
+    cmd::ReplayFile rep;
+    rep.mission = "maps/single/--- TUTORIAL I ---.SSM";
+    rep.difficulty = 2;
+    rep.autoEngage = true;
+    rep.endTick = endTick;
+    rep.endStateHash = endHash;
+    rep.commands = log;
+    const auto parsed = cmd::fromReplayFileText(cmd::toReplayFileText(rep));
+    require(parsed && *parsed == rep, "Full Tutorial I ReplayFile round trip failed");
+
+    auto replayed = makeFullRunner();
+    const auto badTick = replayAndVerifyTrace(*replayed, parsed->commands, endTick, kTraceStride, trace);
+    require(!badTick.has_value(),
+            "Full Tutorial I route replay diverged at sample tick " + std::to_string(badTick.value_or(0)));
+    require(replayed->simTick() == endTick && replayed->takeSnapshot() == endSnap,
+            "Full Tutorial I replay final snapshot diverged");
+    require(replayed->stateHash() == endHash,
+            "Full Tutorial I replay final stateHash diverged");
+
+    std::cout << "Gold Tutorial I full route P[7] replay (" << dialogs << " dialogs, "
+              << log.size() << " commands, " << endTick << " ticks, stateHash 0x"
+              << std::hex << endHash << std::dec << ") PASSED\n";
+}
+
 void testStateHashSensitivityAndTrace(const World& world) {
     // (1) Issuing an order before any tick leaves Snapshot unchanged (positions,
     // HP and ammo have not moved yet) while changing stateHash immediately.
@@ -515,7 +659,10 @@ int main(int argc, char** argv) try {
     testDeterminism(world);
     testStateHashSensitivityAndTrace(world);
     testLiveReplay(world);
-    if (argc == 2) testGoldTutorial(argv[1]);
+    if (argc == 2) {
+        testGoldTutorial(argv[1]);
+        testGoldTutorialFullRoute(argv[1]);
+    }
     return 0;
 } catch (const std::exception& e) {
     std::cerr << e.what() << '\n';

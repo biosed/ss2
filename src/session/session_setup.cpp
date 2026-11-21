@@ -67,7 +67,8 @@ GameSession::GameSession(SDL_Window* win, ValidationReport* rep, int lim, bool t
                          const std::filesystem::path& hd, bool origInf, bool autoEng,
                          UserSettings& cfg, bool persistCfg,
                          bool ovOnly, std::optional<std::filesystem::path>* nextOut,
-                         const std::filesystem::path& recPath, const cmd::ReplayFile* repFile)
+                         const std::filesystem::path& recPath, const cmd::ReplayFile* repFile,
+                         bool manualClk)
     : window(win),
       report(rep),
       limit(lim),
@@ -83,6 +84,7 @@ GameSession::GameSession(SDL_Window* win, ValidationReport* rep, int lim, bool t
       nextMissionOut(nextOut),
       recordPath(recPath),
       replayFile(repFile),
+      manualClock(manualClk),
       renderer(window, report),
       menu(window),
       tooltip(window),
@@ -484,6 +486,9 @@ void GameSession::initializeMission() {
             std::cout << "Replay verified: " << replayFile->commands.size()
                       << " commands, tick " << simulation->simTick()
                       << ", stateHash 0x" << std::hex << actualHash << std::dec << '\n';
+        } else if (manualClock) {
+            simulation.emplace(ss2::MissionRunner::ManualClock{}, std::move(data), std::move(soldiers));
+            simulation->startRecording();
         } else {
             simulation.emplace(std::move(data), ss2::tutorialTurnDelay(gameDir), std::move(soldiers),
                                !recordPath.empty());
@@ -573,10 +578,11 @@ int runGameSession(SDL_Window* window, ValidationReport* report, int limit, bool
                    UserSettings& settings, bool persistSettings,
                    bool overviewOnly, std::optional<std::filesystem::path>* nextMissionOut,
                    const std::filesystem::path& recordPath,
-                   const cmd::ReplayFile* replayFile) {
+                   const cmd::ReplayFile* replayFile,
+                   bool manualClock) {
     GameSession session(window, report, limit, timing, gameDir, mission, hdPack, originalInfantry,
                         autoEngage, settings, persistSettings, overviewOnly, nextMissionOut,
-                        recordPath, replayFile);
+                        recordPath, replayFile, manualClock);
     return session.run();
 }
 

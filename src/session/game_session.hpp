@@ -47,7 +47,8 @@ int runGameSession(SDL_Window* window, ValidationReport* report, int limit, bool
                    UserSettings& settings, bool persistSettings,
                    bool overviewOnly = false, std::optional<std::filesystem::path>* nextMissionOut = nullptr,
                    const std::filesystem::path& recordPath = {},
-                   const cmd::ReplayFile* replayFile = nullptr);
+                   const cmd::ReplayFile* replayFile = nullptr,
+                   bool manualClock = false);
 
 class FrameSample {
     using Clock = std::chrono::steady_clock;
@@ -143,6 +144,7 @@ struct GameSession {
     std::optional<std::filesystem::path>* nextMissionOut;
     const std::filesystem::path& recordPath;
     const cmd::ReplayFile* replayFile;
+    bool manualClock = false;
 
     float refreshRate = 0.0f;
     VulkanWindow renderer;
@@ -282,7 +284,8 @@ struct GameSession {
                 const std::filesystem::path& hdPack, bool originalInfantry, bool autoEngage,
                 UserSettings& settings, bool persistSettings,
                 bool overviewOnly, std::optional<std::filesystem::path>* nextMissionOut,
-                const std::filesystem::path& recordPath, const cmd::ReplayFile* replayFile);
+                const std::filesystem::path& recordPath, const cmd::ReplayFile* replayFile,
+                bool manualClock = false);
 
     int run();
 
@@ -376,6 +379,7 @@ struct GameSession {
 
     // Per-frame loop stages (session_tick.cpp, session_input.cpp, session_hud.cpp, session_view.cpp).
     void stepSimulationEvents();
+    void handleInputEvent(const SDL_Event& event);
     void pollInputEvents();
     void updateHudAndBeams();
     bool updateViewTooltipAndPresent();

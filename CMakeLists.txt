@@ -25,11 +25,7 @@ add_library(ss2_window STATIC src/render/window.cpp)
 target_include_directories(ss2_window PUBLIC include src)
 target_link_libraries(ss2_window PUBLIC SDL3::SDL3 PRIVATE Vulkan::Vulkan)
 target_compile_options(ss2_window PRIVATE ${SS2_WARNINGS})
-add_executable(ss2 src/main.cpp
-    src/session/session_setup.cpp src/session/session_audio.cpp src/session/session_menus.cpp
-    src/session/session_orders.cpp src/session/session_tick.cpp src/session/session_input.cpp
-    src/session/session_hud.cpp src/session/session_view.cpp
-    src/ui/tutorial_selection.cpp src/audio/sound_player.cpp)
+add_executable(ss2 src/main.cpp)
 target_link_libraries(ss2 PRIVATE ss2_window)
 target_compile_options(ss2 PRIVATE ${SS2_WARNINGS})
 find_package(PkgConfig REQUIRED)
@@ -66,7 +62,14 @@ add_library(ss2_video STATIC src/video/movie_player.cpp)
 target_include_directories(ss2_video PUBLIC src)
 target_link_libraries(ss2_video PUBLIC SDL3::SDL3 ss2_assets PkgConfig::FFMPEG)
 target_compile_options(ss2_video PRIVATE ${SS2_WARNINGS})
-target_link_libraries(ss2 PRIVATE ss2_video)
+add_library(ss2_session STATIC
+    src/session/session_setup.cpp src/session/session_audio.cpp src/session/session_menus.cpp
+    src/session/session_orders.cpp src/session/session_tick.cpp src/session/session_input.cpp
+    src/session/session_hud.cpp src/session/session_view.cpp
+    src/ui/tutorial_selection.cpp src/audio/sound_player.cpp)
+target_link_libraries(ss2_session PUBLIC ss2_window ss2_briefing ss2_sim)
+target_compile_options(ss2_session PRIVATE ${SS2_WARNINGS})
+target_link_libraries(ss2 PRIVATE ss2_session ss2_gold_frontend ss2_video)
 target_compile_options(ss2_assets PRIVATE ${SS2_WARNINGS})
 add_executable(ss2_sprite tools/sprite_probe.cpp)
 target_link_libraries(ss2_sprite PRIVATE ss2_assets)
@@ -235,6 +238,12 @@ if(BUILD_TESTING)
         -DVALIDATION_ARG=${validation_arg}
         -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_cli_replay.cmake)
       set_tests_properties(gold_cli_record_replay PROPERTIES TIMEOUT 45
+        FAIL_REGULAR_EXPRESSION "Validation Error|VUID-")
+      add_executable(session_input_test tests/session_input_test.cpp)
+      target_link_libraries(session_input_test PRIVATE ss2_session)
+      target_compile_options(session_input_test PRIVATE ${SS2_WARNINGS} ${SS2_ENABLE_ASSERTIONS})
+      add_test(NAME gold_session_input COMMAND session_input_test ${SS2_PRIVATE_GAME} ${validation_arg})
+      set_tests_properties(gold_session_input PROPERTIES TIMEOUT 45
         FAIL_REGULAR_EXPRESSION "Validation Error|VUID-")
     endif()
     set_tests_properties(briefing_panel command_bar menu_panel hover_tooltip vulkan_map_region vulkan_sprite_pass tutorial_selection vulkan_present vulkan_resize vulkan_wsi_recovery gold_frontend_vulkan PROPERTIES TIMEOUT 30
