@@ -1,5 +1,6 @@
 #include "assets/mission.hpp"
 #include "assets/placement.hpp"
+#include "assets/unit_catalog.hpp"
 #include "sim/infantry_combat.hpp"
 #include "sim/tutorial.hpp"
 #include "sim/tutorial_units.hpp"
@@ -35,6 +36,16 @@ void testSightAndLosControls() {
     assert(effectiveSightRadius(off, 0, false, 0, 1) == 16);
     // Crouching sight drop
     assert(effectiveSightRadius(dg, 0, true, 0, 2) == 9);
+    // Fallback crouch sight follows retail crouchsight base..max: dguner/aguner
+    // 9..9, dsmguner 8..9, dofficer 9..10, reached at full experience (0x8000).
+    const auto ag = InfantryCombatDesc::aguner();
+    assert(effectiveSightRadius(ag, 0, true, 0, 2) == 9);
+    assert(effectiveSightRadius(smg, 0, true, 0, 2) == 8);
+    assert(effectiveSightRadius(off, 0, true, 0, 2) == 9);
+    assert(effectiveSightRadius(dg, 0x8000, true, 0, 2) == 9);
+    assert(effectiveSightRadius(ag, 0x8000, true, 0, 2) == 9);
+    assert(effectiveSightRadius(smg, 0x8000, true, 0, 2) == 9);
+    assert(effectiveSightRadius(off, 0x8000, true, 0, 2) == 10);
 
     // LOS occlusion control: P-FLAGS 0x0800 at tile (41, 58) blocks (41, 62) -> (41, 53) (dy=9t)
     std::vector<std::uint32_t> flags(128 * 128, 0);
@@ -245,6 +256,50 @@ void testTutorialUnitsCombatLoop() {
     for (int t = 0; t < 50; ++t) tac.step();
     assert(tac.countAliveInGroup(1, 3) == 1);               // enemy untouched while holding fire
 }
+// The hardcoded fallback descriptors must agree with the retail catalog on sight.
+void testFallbackMatchesRetailCatalog(const std::filesystem::path& gameDir) {
+    const auto catalog = ss2::assets::UnitCatalog::load(gameDir);
+    assert(catalog);
+    for (const char* id : {"dguner", "aguner", "dsmguner", "rsmguner", "dofficer", "aofficer"}) {
+        const auto* spec = catalog->find(id);
+        assert(spec && spec->sight > 0 && spec->crouchSight > 0);
+        const auto d = InfantryCombatDesc::forUnitId(id);
+        assert(d.sightBase == spec->sight);
+        assert(d.crouchSightBase == spec->crouchSight);
+        assert(d.crouchSightDelta == spec->crouchSightMax - spec->crouchSight);
+    }
+}
+
+// Same-map comparison with the retail oracle (verify_group3_spotting.py: real
+// n2Game_Dll.dll, real Tutorial I P-FLAGS and CIRC64.DAT, Normal difficulty).
+// Group-3 aguner at tile (41,53); FIRST_SPOTTED rows from the retail run.
+bool spotsAguner(const ss2::assets::TutorialData& tutorial, const std::filesystem::path& gameDir,
+                 const InfantryCombatDesc& observer, int tileX, int tileY) {
+    FogGrid fog(128, 128, tutorial.flags);
+    assert(fog.loadCirc64FromGame(gameDir));
+    CombatWorld world(std::move(fog), 2, 0x12345678u);
+    world.addUnit(CombatUnit{1, 0, tileX * 32 + 16, tileY * 32 + 16, 100, 40, 0, false, observer});
+    world.addUnit(CombatUnit{2, 1, kAgU, kAgV, 100, 64, 80, false, InfantryCombatDesc::aguner()});
+    world.refreshSpotting();
+    const bool spotted = (world.findUnit(2)->spottedMask & 1u) != 0;
+    assert(spotted == world.isValidEnemyTarget(2, 0));
+    return spotted;
+}
+
+void testRetailSpottingRows(const ss2::assets::TutorialData& tutorial, const std::filesystem::path& gameDir) {
+    // South approach along x=41: first spotted at dy = own sight, unspotted one tile further.
+    const struct { const char* id; int dy; } rows[] = {{"dsmguner", 11}, {"dguner", 12}, {"dofficer", 13}};
+    for (const auto& row : rows) {
+        const auto desc = InfantryCombatDesc::forUnitId(row.id);
+        assert(spotsAguner(tutorial, gameDir, desc, 41, 53 + row.dy));
+        assert(!spotsAguner(tutorial, gameDir, desc, 41, 53 + row.dy + 1));
+    }
+    // Diagonal SE approach for dguner: first spotted at dx=dy=8 (11.3t), not at 9.
+    // Off-axis, so this row depends on the real CIRC64 ring, not the fallback.
+    const auto dg = InfantryCombatDesc::dguner();
+    assert(spotsAguner(tutorial, gameDir, dg, 41 + 8, 53 + 8));
+    assert(!spotsAguner(tutorial, gameDir, dg, 41 + 9, 53 + 9));
+}
 } // namespace
 
 int main(int argc, char** argv) {
@@ -254,6 +309,8 @@ int main(int argc, char** argv) {
     if (argc > 1) {
         const std::filesystem::path gameDir(argv[1]);
         const auto tutorial = ss2::assets::readTutorialData(gameDir / "maps/single/--- TUTORIAL I ---.SSM");
+        testFallbackMatchesRetailCatalog(gameDir);
+        testRetailSpottingRows(tutorial, gameDir);
         FogGrid fog1(128, 128, tutorial.flags);
         assert(fog1.loadCirc64FromGame(gameDir));
         const auto run1 = runMatchedFieldsEncounter(std::move(fog1));
@@ -307,7 +364,7 @@ int main(int argc, char** argv) {
         }
         assert(sawPhrase18 && sawVictory);
 
-        std::cout << "gold_infantry_combat: PASS (real Tutorial I P-FLAGS + circ64.dat, 120 ticks, 21 events, final_rng=0xe06870c1, trigger[12..29] Victory OK)\n";
+        std::cout << "gold_infantry_combat: PASS (real Tutorial I P-FLAGS + circ64.dat, catalog sight parity, retail spotting rows 4/4, 120 ticks, 21 events, final_rng=0xe06870c1, trigger[12..29] Victory OK)\n";
         return 0;
     }
 

@@ -221,8 +221,9 @@ InfantryCombatDesc InfantryCombatDesc::dguner() {
     d.maxAmmo = 40;
     d.sightBase = 12;
     d.sightDelta = 1;
+    // Retail desc_common.sue: dguner crouchsight 9..9 (no experience gain).
     d.crouchSightBase = 9;
-    d.crouchSightDelta = 1;
+    d.crouchSightDelta = 0;
     d.radius = 5;
     d.damageBase = 49;
     d.damageDelta = 5;
@@ -262,13 +263,15 @@ InfantryCombatDesc InfantryCombatDesc::forUnitId(const std::string& id) {
     if (id == "dsmguner" || id == "rsmguner") {
         auto d = dguner();
         d.sightBase = 11;
-        d.crouchSightBase = 8;
+        d.crouchSightBase = 8; // retail crouchsight 8..9
+        d.crouchSightDelta = 1;
         return d;
     }
     if (id == "dofficer" || id == "aofficer") {
         auto d = dguner();
         d.sightBase = 13;
-        d.crouchSightBase = 10;
+        d.crouchSightBase = 9; // retail crouchsight 9..10
+        d.crouchSightDelta = 1;
         return d;
     }
     return dguner();
