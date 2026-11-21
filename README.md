@@ -79,28 +79,28 @@ For a bounded smoke run, use `./build/ss2 --frames 120`. For a timing run, selec
 Install the Khronos validation layer and configure a build with window tests enabled. A requested validation run fails if the layer is unavailable. SDL's offscreen driver plus Mesa lavapipe provides a headless test path on systems with headless surface support.
 
 ```sh
-cmake -S . -B build -DSS2_TEST_WINDOW=ON -DSS2_TEST_VALIDATION=ON
-cmake --build build
-ctest --test-dir build --output-on-failure
-# or, headless with the Vulkan validation layer:
-tools/ctest-validation.sh build
-./build/ss2 --validate --frames 16
+cmake --preset validation
+cmake --build --preset validation
+tools/ctest-validation.sh build-validation
+./build-validation/ss2 --validate --frames 16
+# Clang Debug ASan + UBSan sweep:
+cmake --preset sanitize && cmake --build --preset sanitize && tools/ctest-validation.sh build-sanitize
 ```
 
 On the original ARM64 development host the Fedora layer was staged privately. To use that copy, set `VK_LAYER_PATH="$HOME/ss2-private/tools/fedora-aarch64/usr/share/vulkan/explicit_layer.d"` and add `$HOME/ss2-private/tools/fedora-aarch64/usr/lib64` to `LD_LIBRARY_PATH`. The default build requires the layer only when validation is requested.
 
 ### What the suite contains
 
-Thirty-nine tests are registered. Which of them run depends on the configuration:
+Forty-eight tests are registered. Which of them run depends on the configuration:
 
 | Configuration | Tests | Notes |
 | --- | --- | --- |
-| Default | 18 | Asset fixtures, movement, combat, the parity test, movie/mission/string fixtures, clock and CLI checks |
-| `-DSS2_PRIVATE_GAME=DIR` | 28 | Adds the ten private-gated retail tests that need the Gold installation |
-| `-DSS2_TEST_WINDOW=ON` | 28 | Adds the ten window and WSI tests |
-| `-DSS2_TEST_WINDOW=ON -DSS2_TEST_VALIDATION=ON` | 29 | Adds the missing-layer test as the 11th validation/window check (requires the Khronos layer) |
-| `-DSS2_PRIVATE_GAME=DIR -DSS2_TEST_WINDOW=ON` | 38 | Both of the above |
-| All three | 39 | Everything, on a host with the validation layer |
+| Default (`--preset release`) | 24 | Asset fixtures, movement, combat, `combat_parity`, `command_replay` (`stateHash()`), HiDPI/frontend/movie/mission/string fixtures, clock and CLI checks |
+| `-DSS2_PRIVATE_GAME=DIR` | 35 | Adds the eleven private-gated retail tests that need the Gold installation |
+| `-DSS2_TEST_WINDOW=ON` | 35 | Adds the eleven window and WSI tests |
+| `-DSS2_TEST_WINDOW=ON -DSS2_TEST_VALIDATION=ON` (`--preset validation`) | 36 | Adds `missing_validation_layer` as the 12th validation/window check (requires the Khronos layer) |
+| `-DSS2_PRIVATE_GAME=DIR -DSS2_TEST_WINDOW=ON` | 47 | Both sets above plus `gold_cli_record_replay` (`--record` / `--replay` end-to-end check) |
+| All three | 48 | Everything, on a host with the validation layer |
 
 The ten private-gated retail tests are skipped without `-DSS2_PRIVATE_GAME` because they need the purchased installation, which is never committed. The ten window/WSI tests need a Vulkan WSI surface, and the 11th check (`missing_validation_layer`) needs the Khronos validation layer to be installed.
 
