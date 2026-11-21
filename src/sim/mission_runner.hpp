@@ -142,6 +142,10 @@ public:
     // Returns false if the log cannot be followed: a command lies in the past,
     // or the clock is held by a dialog or pause that the log never releases.
     bool replay(std::span<const cmd::RecordedCommand> log, std::uint32_t untilTick);
+    // 64-bit hash of the whole simulation: units, script VM and the runner's
+    // own sim-affecting state (mission_state_hash.cpp). Two runners with equal
+    // hashes evolve identically under the same commands.
+    std::uint64_t stateHash() const;
 private:
     struct ScheduledReinforcement {
         MissionEvent event;

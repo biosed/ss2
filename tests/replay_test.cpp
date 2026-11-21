@@ -247,12 +247,16 @@ void testDeterminism(const World& world) {
     auto a = world.manualRunner();
     auto b = world.manualRunner();
     const auto initial = a->takeSnapshot();
+    const auto initialHash = a->stateHash();
+    require(initialHash == b->stateHash(), "fresh ManualClock runners must start with equal stateHash");
     const auto logA = play(*a);
     const auto logB = play(*b);
     require(a->simTick() == endTick && b->simTick() == endTick, "manual runners must reach the end tick");
     const auto snapA = a->takeSnapshot();
+    const auto hashA = a->stateHash();
     require(snapA == b->takeSnapshot(), "identical scripts on two ManualClock runners diverged");
-    require(snapA != initial, "the scripted session must change the simulation");
+    require(hashA == b->stateHash(), "identical scripts produced different stateHash values");
+    require(snapA != initial && hashA != initialHash, "the scripted session must change the simulation");
     require(logA == logB && logA.size() == script().size(), "recordings of identical scripts differ");
     for (std::size_t i = 0; i < logA.size(); ++i) {
         require(logA[i].tick == script()[i].tick && logA[i].command == script()[i].command,
@@ -265,6 +269,7 @@ void testDeterminism(const World& world) {
     auto c = world.manualRunner();
     require(c->replay(*parsed, endTick), "replay rejected a recorded log");
     require(c->simTick() == endTick && c->takeSnapshot() == snapA, "replay diverged from the scripted run");
+    require(c->stateHash() == hashA, "replay stateHash diverged from the scripted run");
 
     // Advancing is gated by pause like the worker loop.
     auto d = world.manualRunner();
@@ -279,12 +284,15 @@ void testLiveReplay(const World& world) {
     using namespace std::chrono_literals;
     ss2::TutorialUnits::Snapshot initial;
     ss2::TutorialUnits::Snapshot live;
+    std::uint64_t initialHash = 0;
+    std::uint64_t liveHash = 0;
     std::uint32_t liveTick = 0;
     std::vector<cmd::RecordedCommand> log;
     {
         ss2::MissionRunner runner(world.data, 2u, world.units());
         runner.startRecording();
         initial = runner.takeSnapshot();
+        initialHash = runner.stateHash();
         (void)runner.move(std::array<std::size_t, 2>{0, 1}, 4300, 2200);
         (void)runner.attackVehicle(std::array<std::size_t, 1>{1}, 2);
         std::this_thread::sleep_for(40ms);
@@ -306,13 +314,14 @@ void testLiveReplay(const World& world) {
         // Paused: the worker keeps waking but cannot step any more.
         std::this_thread::sleep_for(30ms);
         live = runner.takeSnapshot();
+        liveHash = runner.stateHash();
         liveTick = runner.simTick();
         log = runner.takeRecording();
-        require(runner.simTick() == liveTick, "a paused runner must not advance");
+        require(runner.simTick() == liveTick && runner.stateHash() == liveHash, "a paused runner must not advance");
     }
     require(log.size() == 10, "every live order, including pauses, must be recorded");
     require(liveTick == live.tick && liveTick >= 10, "the live session must run for several ticks");
-    require(live != initial, "the live session must change the simulation");
+    require(live != initial && liveHash != initialHash, "the live session must change the simulation");
     for (std::size_t i = 1; i < log.size(); ++i) {
         require(log[i - 1].tick <= log[i].tick, "live ticks must be non-decreasing");
     }
@@ -324,6 +333,7 @@ void testLiveReplay(const World& world) {
     require(replayed->replay(*parsed, liveTick), "replay rejected the live log");
     require(replayed->simTick() == liveTick, "replay must stop at the live tick");
     require(replayed->takeSnapshot() == live, "replaying the live log diverged from the live simulation");
+    require(replayed->stateHash() == liveHash, "replaying the live log produced a different stateHash");
     std::cout << "Live-vs-replay parity (" << log.size() << " commands over " << liveTick << " ticks) PASSED\n";
 }
 
@@ -363,6 +373,7 @@ void testGoldTutorial(const std::filesystem::path& game) {
     }
     const auto liveTick = live->simTick();
     const auto snap = live->takeSnapshot();
+    const auto liveHash = live->stateHash();
     const auto log = live->takeRecording();
     require(dialogs >= 2 && rejectedWhileModal == dialogs, "Tutorial I must raise dialogs that hold orders");
     require(snap != initial, "Tutorial I session must change the simulation");
@@ -371,8 +382,106 @@ void testGoldTutorial(const std::filesystem::path& game) {
     auto replayed = makeRunner();
     require(replayed->replay(*parsed, liveTick), "Tutorial I replay rejected its log");
     require(replayed->takeSnapshot() == snap, "Tutorial I replay diverged");
+    require(replayed->stateHash() == liveHash, "Tutorial I replay stateHash diverged");
     std::cout << "Gold Tutorial I replay (" << dialogs << " dialogs, " << log.size() << " commands, " << liveTick
               << " ticks) PASSED\n";
+}
+
+// Replays a command log while sampling stateHash every stride ticks. Returns
+// the first sample tick whose hash differs from expectedTrace, or nullopt.
+std::optional<std::uint32_t> replayAndVerifyTrace(
+    ss2::MissionRunner& runner, std::span<const cmd::RecordedCommand> log, std::uint32_t untilTick,
+    std::uint32_t stride, std::span<const std::pair<std::uint32_t, std::uint64_t>> expectedTrace) {
+    std::size_t cmdIdx = 0;
+    std::size_t traceIdx = 0;
+    for (std::uint32_t target = 0; target <= untilTick; ++target) {
+        while (runner.simTick() < target) {
+            const auto before = runner.simTick();
+            runner.advanceTicks(1);
+            if (runner.simTick() == before) return target;
+        }
+        while (cmdIdx < log.size() && log[cmdIdx].tick == target) {
+            runner.apply(log[cmdIdx].command);
+            ++cmdIdx;
+        }
+        if (stride > 0 && (target % stride == 0 || target == untilTick)) {
+            if (traceIdx >= expectedTrace.size() || expectedTrace[traceIdx].first != target ||
+                expectedTrace[traceIdx].second != runner.stateHash()) {
+                return target;
+            }
+            ++traceIdx;
+        }
+    }
+    if (traceIdx != expectedTrace.size()) return untilTick;
+    return std::nullopt;
+}
+
+void testStateHashSensitivityAndTrace(const World& world) {
+    // (1) Issuing an order before any tick leaves Snapshot unchanged (positions,
+    // HP and ammo have not moved yet) while changing stateHash immediately.
+    auto r = world.manualRunner();
+    const auto snap0 = r->takeSnapshot();
+    const auto hash0 = r->stateHash();
+    require(r->move(std::array<std::size_t, 1>{0}, 4300, 2200).has_value(), "move order must be accepted");
+    const auto snapOrdered = r->takeSnapshot();
+    const auto hashOrdered = r->stateHash();
+    require(snapOrdered == snap0, "an unstepped move order does not alter Snapshot");
+    require(hashOrdered != hash0, "stateHash must change immediately when an order is queued");
+
+    // (2) Stepping one tick of movement changes stateHash again, and draining
+    // presentation buffers via poll*() does not change stateHash.
+    r->advanceTicks(1);
+    const auto hashTick1 = r->stateHash();
+    require(hashTick1 != hashOrdered && hashTick1 != hash0, "stateHash must change after one tick of movement");
+    (void)r->poll();
+    (void)r->pollPoses();
+    (void)r->pollVehiclePoses();
+    (void)r->pollFog();
+    require(r->stateHash() == hashTick1, "draining presentation buffers must not change stateHash");
+
+    // (3) Divergence detection: two runners given the same vehicle move order
+    // one tick apart diverge while the vehicle is in flight.
+    auto early = world.manualRunner();
+    auto late = world.manualRunner();
+    require(early->replay(std::array{cmd::RecordedCommand{1u, cmd::MoveVehicles{{0}, 3500, 1800, false}}}, 12u),
+            "early replay failed");
+    require(late->replay(std::array{cmd::RecordedCommand{2u, cmd::MoveVehicles{{0}, 3500, 1800, false}}}, 12u),
+            "late replay failed");
+    require(early->stateHash() != late->stateHash(),
+            "orders issued one tick apart must produce distinct stateHash values while in flight");
+
+    // (4) Periodic hash trace pinpoints the exact sample window where a
+    // perturbed command log diverges.
+    constexpr std::uint32_t endTick = 50;
+    constexpr std::uint32_t stride = 5;
+    std::vector<cmd::RecordedCommand> baseLog{
+        {0u, cmd::Move{{0, 1}, 4300, 2200, false}},
+        {20u, cmd::MoveVehicles{{0}, 3500, 1800, false}},
+        {35u, cmd::StopVehicles{{0}}},
+    };
+    auto ref = world.manualRunner();
+    std::vector<std::pair<std::uint32_t, std::uint64_t>> trace;
+    std::size_t idx = 0;
+    for (std::uint32_t t = 0; t <= endTick; ++t) {
+        while (ref->simTick() < t) ref->advanceTicks(1);
+        while (idx < baseLog.size() && baseLog[idx].tick == t) {
+            ref->apply(baseLog[idx].command);
+            ++idx;
+        }
+        if (t % stride == 0 || t == endTick) trace.emplace_back(t, ref->stateHash());
+    }
+
+    auto verifyOk = world.manualRunner();
+    require(!replayAndVerifyTrace(*verifyOk, baseLog, endTick, stride, trace).has_value(),
+            "periodic hash trace must match an identical replay");
+
+    auto perturbedLog = baseLog;
+    perturbedLog[1].tick = 21u; // shift tick-20 command to tick 21 -> diverges at sample tick 20
+    auto verifyPerturbed = world.manualRunner();
+    const auto badTick = replayAndVerifyTrace(*verifyPerturbed, perturbedLog, endTick, stride, trace);
+    require(badTick == 20u, "periodic hash trace must report tick 20 as the first divergent sample");
+
+    std::cout << "StateHash sensitivity, divergence and periodic trace PASSED\n";
 }
 }
 
@@ -380,6 +489,7 @@ int main(int argc, char** argv) try {
     testSerialization();
     const World world;
     testDeterminism(world);
+    testStateHashSensitivityAndTrace(world);
     testLiveReplay(world);
     if (argc == 2) testGoldTutorial(argv[1]);
     return 0;

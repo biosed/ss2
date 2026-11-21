@@ -347,6 +347,10 @@ public:
     std::optional<std::vector<std::uint8_t>> takeFogSnapshot();
     unsigned countInZone(std::span<const std::uint8_t> zones, unsigned zone, int owner = 0) const;
     unsigned countGroupInZone(std::span<const std::uint8_t> zones, unsigned zone, unsigned group) const;
+    // 64-bit hash of every member that can influence future simulation
+    // (tutorial_units_hash.cpp). Unlike Snapshot it covers orders, paths,
+    // queues, targets, timers, cooldowns and RNG state.
+    std::uint64_t stateHash() const;
 private:
     friend class MissionRunner;
     struct Soldier {

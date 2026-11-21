@@ -39,6 +39,8 @@ public:
     const assets::TutorialData& data() const { return data_; }
     uint32_t tick() const { return tick_; }
     std::vector<MissionEvent> takeEvents();
+    // 64-bit hash of the script VM state (mission_state_hash.cpp).
+    std::uint64_t stateHash() const;
 private:
     struct GroupAiState {
         uint32_t behavior{0};

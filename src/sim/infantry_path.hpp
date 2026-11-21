@@ -7,6 +7,8 @@
 #include <vector>
 
 namespace ss2 {
+class StateHasher;
+
 struct SubCell {
     int x{}, y{}; // 256x256 sub-cell coordinates: (u / 16, v / 16) -> tile (x>>1, y>>1), slot ((x&1) | ((y&1)<<1))
     bool operator==(const SubCell&) const = default;
@@ -61,6 +63,9 @@ public:
     static SubCell fromWorld(int u, int v);
     static std::pair<int, int> toWorldCenter(SubCell cell);
     static SubCell step(SubCell cell, std::uint8_t dir);
+
+    // Feeds terrain and occupancy into a state hash (tutorial_units_hash.cpp).
+    void hashState(StateHasher&) const;
 
 private:
     bool formationTile(int tileX, int tileY, SubCell source) const;

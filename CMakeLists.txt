@@ -49,7 +49,8 @@ target_include_directories(ss2_assets PUBLIC src)
 target_link_libraries(ss2_assets PRIVATE ZLIB::ZLIB JPEG::JPEG PNG::PNG)
 find_package(Threads REQUIRED)
 add_library(ss2_sim STATIC src/sim/tutorial.cpp src/sim/command.cpp src/sim/mission_runner.cpp src/sim/infantry_step.cpp
-    src/sim/tutorial_units.cpp src/sim/infantry_path.cpp src/sim/infantry_combat.cpp)
+    src/sim/tutorial_units.cpp src/sim/tutorial_units_hash.cpp src/sim/mission_state_hash.cpp
+    src/sim/infantry_path.cpp src/sim/infantry_combat.cpp)
 target_link_libraries(ss2_sim PUBLIC ss2_assets Threads::Threads)
 target_compile_options(ss2_sim PRIVATE ${SS2_WARNINGS})
 target_link_libraries(ss2 PRIVATE ss2_sim)

@@ -9,6 +9,7 @@
 #include <vector>
 
 namespace ss2 {
+class StateHasher;
 
 // Gold 2.2 fog-of-war grid (0x1064239c) and Bresenham LOS raycaster (0x1006c780 / 0x1006cab0).
 class FogGrid {
@@ -29,6 +30,9 @@ public:
     std::span<const std::uint8_t> raw() const { return fog_; }
     int width() const { return tileWidth_; }
     int height() const { return tileHeight_; }
+
+    // Feeds every member into a state hash (tutorial_units_hash.cpp).
+    void hashState(StateHasher&) const;
 
 private:
     int tileWidth_{};
