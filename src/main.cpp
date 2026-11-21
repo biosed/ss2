@@ -981,7 +981,10 @@ int runWindow(SDL_Window* window, ss2::ValidationReport* report, int limit, bool
                       << drawnVehicles << " vehicle placements\n";
         }
         ss2::FogGrid fog(data.width, data.height, data.flags);
-        fog.loadCirc64FromGame(gameDir);
+        if (!fog.loadCirc64FromGame(gameDir)) {
+            std::cerr << "Warning: failed to load CIRC64 visibility table from "
+                      << gameDir << "; falling back to approximate fog sight rings.\n";
+        }
         auto navigation = ss2::InfantryPathGrid::fromSubCellMasks(data.width, data.height, std::move(data.flags), std::move(data.obstacles));
         missionPlayerTeams = data.playerTeams;
         const auto initMines = data.mines;
