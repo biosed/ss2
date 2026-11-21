@@ -82,6 +82,8 @@ Install the Khronos validation layer and configure a build with window tests ena
 cmake -S . -B build -DSS2_TEST_WINDOW=ON -DSS2_TEST_VALIDATION=ON
 cmake --build build
 ctest --test-dir build --output-on-failure
+# or, headless with the Vulkan validation layer:
+tools/ctest-validation.sh build
 ./build/ss2 --validate --frames 16
 ```
 
