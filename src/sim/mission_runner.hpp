@@ -18,10 +18,17 @@ namespace ss2 {
 //
 // Every simulation mutation below is a thin wrapper that submits a cmd::Command.
 // Commands are applied between ticks under mutex_ and, while recording, logged
-// with the tick at which they were applied.
+// with the tick at which they were applied, so replay() on a ManualClock runner
+// reproduces a live session without any wall clock.
 class MissionRunner {
 public:
+    // Tag for a runner without a worker thread; time only advances through
+    // advanceTicks() or replay().
+    struct ManualClock {
+        explicit ManualClock() = default;
+    };
     MissionRunner(assets::TutorialData, unsigned delayMs, TutorialUnits);
+    MissionRunner(ManualClock, assets::TutorialData, TutorialUnits);
     bool canMove(std::span<const size_t> indices, int x, int y);
     std::optional<size_t> move(std::span<const size_t> indices, int mapX, int mapY, bool append = false);
     std::optional<size_t> attackMove(std::span<const size_t> indices, int mapX, int mapY, bool append = false);
@@ -128,6 +135,13 @@ public:
     void startRecording();
     // Stops recording and returns the log.
     std::vector<cmd::RecordedCommand> takeRecording();
+    // Runs n worker iterations: each steps once unless a dialog or pause holds
+    // the clock, as in live play. Meant for ManualClock runners.
+    void advanceTicks(unsigned n);
+    // Steps to each command's tick, applies it, then steps to untilTick.
+    // Returns false if the log cannot be followed: a command lies in the past,
+    // or the clock is held by a dialog or pause that the log never releases.
+    bool replay(std::span<const cmd::RecordedCommand> log, std::uint32_t untilTick);
 private:
     struct ScheduledReinforcement {
         MissionEvent event;
@@ -150,6 +164,9 @@ private:
         const std::array<std::vector<assets::ReinforcementUnit>, 64>& waves,
         std::span<const std::pair<int, int>> markers) const;
     void run(std::stop_token, unsigned delayMs);
+    void stepTickLocked();
+    void stepIfRunningLocked();
+    bool advanceToTickLocked(std::uint32_t tick);
     template<class C> typename C::Result submit(const C& c);
     template<class C> typename C::Result submitLocked(const C& c);
     cmd::Move::Result applyLocked(const cmd::Move&);

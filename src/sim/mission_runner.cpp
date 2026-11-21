@@ -50,6 +50,10 @@ std::vector<cmd::RecordedCommand> MissionRunner::takeRecording() {
 }
 
 MissionRunner::MissionRunner(assets::TutorialData data, unsigned delayMs, TutorialUnits units)
+    : MissionRunner(ManualClock{}, std::move(data), std::move(units)) {
+    worker_ = std::jthread([this, delayMs](std::stop_token stop) { run(stop, delayMs); });
+}
+MissionRunner::MissionRunner(ManualClock, assets::TutorialData data, TutorialUnits units)
     : units_(std::move(units)),
       spawnedReinforcementWaves_{},
       reinforcementWaveOwner_(extractReinforcementWaveOwners(data.scripts)),
@@ -58,7 +62,6 @@ MissionRunner::MissionRunner(assets::TutorialData data, unsigned delayMs, Tutori
     fog_ = units_.takeFogSnapshot();
     collect();
     collectVehiclePoses();
-    worker_ = std::jthread([this, delayMs](std::stop_token stop) { run(stop, delayMs); });
 }
 MissionRunner::~MissionRunner() {
     worker_.request_stop();
@@ -308,28 +311,59 @@ void MissionRunner::run(std::stop_token stop, unsigned delayMs) {
             // it resynchronizes to now; the intervening phases average the two times.
             deadline = (phase == 3 ? now : (deadline + now) / 2) + period;
             phase = (phase + 1) % 4;
-            if (!modal_ && !paused_) {
-                mergeSoldierPoses(units_.step());
-                collectVehiclePoses();
-                collectBuildingUpdates();
-                collectAirSorties();
-                auto newAir = units_.takeAirStrikeEvents();
-                if (!newAir.empty()) {
-                    airEvents_.insert(airEvents_.end(), newAir.begin(), newAir.end());
-                }
-                simTick_.store(units_.tick_, std::memory_order_relaxed);
-                auto newMines = units_.takeMineEvents();
-                if (!newMines.empty()) {
-                    mineEvents_.insert(mineEvents_.end(), newMines.begin(), newMines.end());
-                }
-                if (auto snap = units_.takeFogSnapshot()) fog_ = std::move(snap);
-                tutorial_.step(makeQueriesLocked(tutorial_.data().zones, tutorial_.data().reinforcements,
-                                                tutorial_.data().markers));
-                collect();
-                flushScheduledReinforcements();
-            }
+            stepIfRunningLocked();
         }
     } catch (...) { error_ = std::current_exception(); }
+}
+
+void MissionRunner::stepIfRunningLocked() {
+    if (!modal_ && !paused_) stepTickLocked();
+}
+
+void MissionRunner::stepTickLocked() {
+    mergeSoldierPoses(units_.step());
+    collectVehiclePoses();
+    collectBuildingUpdates();
+    collectAirSorties();
+    auto newAir = units_.takeAirStrikeEvents();
+    if (!newAir.empty()) {
+        airEvents_.insert(airEvents_.end(), newAir.begin(), newAir.end());
+    }
+    simTick_.store(units_.tick_, std::memory_order_relaxed);
+    auto newMines = units_.takeMineEvents();
+    if (!newMines.empty()) {
+        mineEvents_.insert(mineEvents_.end(), newMines.begin(), newMines.end());
+    }
+    if (auto snap = units_.takeFogSnapshot()) fog_ = std::move(snap);
+    tutorial_.step(makeQueriesLocked(tutorial_.data().zones, tutorial_.data().reinforcements,
+                                    tutorial_.data().markers));
+    collect();
+    flushScheduledReinforcements();
+}
+
+void MissionRunner::advanceTicks(unsigned n) {
+    std::lock_guard lock(mutex_);
+    if (error_) std::rethrow_exception(error_);
+    for (unsigned i = 0; i < n; ++i) stepIfRunningLocked();
+}
+
+// Each step advances units_.tick_ by exactly one, so stepping until the tick
+// matches reproduces the worker iterations that preceded a recorded command.
+bool MissionRunner::advanceToTickLocked(std::uint32_t tick) {
+    while (units_.tick_ < tick) {
+        if (modal_ || paused_) return false;
+        stepTickLocked();
+    }
+    return units_.tick_ == tick;
+}
+
+bool MissionRunner::replay(std::span<const cmd::RecordedCommand> log, std::uint32_t untilTick) {
+    std::lock_guard lock(mutex_);
+    for (const auto& rc : log) {
+        if (!advanceToTickLocked(rc.tick)) return false;
+        std::visit([this](const auto& c) { (void)submitLocked(c); }, rc.command);
+    }
+    return advanceToTickLocked(untilTick);
 }
 
 std::vector<MissionEvent> MissionRunner::poll() {
