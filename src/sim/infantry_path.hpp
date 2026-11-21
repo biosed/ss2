@@ -25,6 +25,8 @@ public:
     int height() const { return subHeight_; }
     bool inBounds(SubCell cell) const;
     bool walkable(SubCell cell) const;
+    bool walkableMask(SubCell cell, std::uint16_t forbiddenMask) const;
+    bool isShallows(SubCell cell) const;
 
     // 4-bit per-slot occupancy matching n2Game_Dll.dll 0x10036370 / 0x10056710.
     void clearOccupancy();
@@ -50,6 +52,8 @@ public:
               std::span<const std::uint8_t> prioritySlots, RouteState&, std::uint8_t random) const;
     struct AcceptedStep { SubCell cell; std::uint8_t direction; bool crossesTile; };
     std::vector<std::uint8_t> findTileDirections(SubCell start, SubCell goal, int maxSteps = 512) const;
+    std::vector<std::uint8_t> findTileDirectionsForMask(SubCell start, SubCell goal,
+                                                        std::uint16_t forbiddenMask, int maxSteps = 256) const;
     std::optional<AcceptedStep> acceptStep(SubCell from, std::uint8_t tileDirection) const;
     std::vector<std::uint8_t> findDirections(SubCell start, SubCell goal, int maxSteps = 512) const;
     std::vector<SubCell> findPath(SubCell start, SubCell goal, int maxSteps = 512) const;
@@ -73,8 +77,8 @@ private:
     int tileWidth_{}, tileHeight_{};
     int subWidth_{}, subHeight_{};
     int borderMargin_{0};
-    std::vector<std::uint32_t> flags_;     // P-FLAGS (128x128)
-    std::vector<std::uint16_t> obstacles_; // P-OBSTACLES (128x128)
+    std::vector<std::uint32_t> flags_;     // P-FLAGS (tileWidth x tileHeight)
+    std::vector<std::uint16_t> obstacles_; // P-OBSTACLES (tileWidth x tileHeight)
     std::vector<std::uint8_t> walkable_;   // Optional direct sub-cell mask when constructed via fromWalkable
     std::vector<std::uint32_t> occupancy_; // 4-bit refcount per slot (bits 4*s..4*s+3)
 };

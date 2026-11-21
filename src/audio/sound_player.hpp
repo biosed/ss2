@@ -1,6 +1,8 @@
 #pragma once
 #include "assets/sound_bank.hpp"
 #include <SDL3/SDL.h>
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -129,6 +131,32 @@ inline bool loadWavPcm(const std::filesystem::path& path, std::uint32_t& sampleR
     return false;
 }
 
+inline float clampVolume(float volume) {
+    return std::clamp(volume, 0.0f, 1.0f);
+}
+
+inline float scaledSfxGain(float cueGain, float masterVolume) {
+    const float master = clampVolume(masterVolume);
+    if (master <= 0.001f) return 0.0f;
+    return std::clamp(cueGain * master, 0.02f, 1.0f);
+}
+
+inline float spatialAttenuation(double dx, double dy, double viewportHalfDiag) {
+    const double inner = std::max(280.0, viewportHalfDiag * 0.90);
+    const double outer = std::max(1400.0, viewportHalfDiag * 2.80);
+    const double dist = std::hypot(dx, dy);
+    if (dist <= inner) return 1.0f;
+    if (dist >= outer || outer <= inner) return 0.0f;
+    const double t = (dist - inner) / (outer - inner);
+    return static_cast<float>((1.0 - t) * (1.0 - t));
+}
+
+inline float spatialGain(float baseGain, double dx, double dy, double viewportHalfDiag) {
+    if (baseGain <= 0.0f) return 0.0f;
+    const float g = baseGain * spatialAttenuation(dx, dy, viewportHalfDiag);
+    return g < 0.03f ? 0.0f : g;
+}
+
 // 48 kHz stereo SDL3 audio player for SOUNDS.RUS 16-bit PCM cues, optional 48 kHz
 // HD WAV overrides (hd-pack/audio-hd/), and streaming Ogg Vorbis background music.
 // Safe no-op when running headless or when no audio device is available.
@@ -143,6 +171,8 @@ public:
     void setHdAudioDir(const std::filesystem::path& dir);
     bool playGroup(const std::string& group, float gain = 0.65f,
                    VoicePriority priority = VoicePriority::Normal);
+    void setSfxVolume(float volume);
+    float sfxVolume() const { return sfxVolume_; }
 
     // Streaming background music (MUSIC/Track*.ogg or remastered tracks in audio-hd/music/).
     bool startMusic(const std::filesystem::path& musicDir, float gain = 0.28f);
@@ -150,6 +180,8 @@ public:
     bool toggleMusicMute();
     bool nextMusicTrack();
     bool musicPlaying() const;
+    void setMusicVolume(float volume);
+    float musicVolume() const { return musicGain_; }
 
 private:
     struct Voice {
@@ -173,6 +205,8 @@ private:
     std::uint64_t voiceSequence_{0};
     std::uint32_t variantCounter_{0};
     std::map<std::string, std::vector<HdClip>> hdClips_;
+    float sfxVolume_{1.0f};
+    float musicGain_{0.28f};
     std::unique_ptr<MusicState> music_;
 
     bool openMusicTrack(std::size_t index);

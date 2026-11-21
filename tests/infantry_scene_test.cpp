@@ -109,12 +109,40 @@ void checkAssetDepth(const std::filesystem::path& game, bool tree) {
         front != 0 || shadowOnly != (tree ? 4346 : 444) || (tree && (revealedBehind != 3900 || revealedEqual != 4065)))
         throw std::runtime_error("Scenery depth differs from the Gold renderer");
 }
+void checkHybridGpuSlots(const std::filesystem::path& game) {
+    const std::vector<Placement> units{{"dofficer",60,62,0,100,90,0,0}, {"dguner",64,60,0,100,90,0,0}};
+    std::map<std::string, unsigned> slots{{"dofficer", 0}};
+    InfantryScene hybrid(ground(), game, units, true, {}, {}, false, SceneryDepth(144,96), &slots);
+    const std::vector<Placement> fallback{units[1]};
+    InfantryScene cpuOnly(ground(), game, fallback, true);
+    const auto underlay = ground();
+    if (hybrid.compose().rgba == underlay.rgba)
+        throw std::runtime_error("Hybrid scene dropped the CPU fallback soldier");
+    if (hybrid.compose().rgba != cpuOnly.compose().rgba)
+        throw std::runtime_error("GPU-slotted soldier still painted on the CPU layer");
+    const auto gpuSpawn = hybrid.spawn({"dofficer", 80, 60, 0, 100, 90, 0, 0});
+    const auto cpuSpawn = hybrid.spawn({"dguner", 90, 60, 0, 100, 90, 0, 0});
+    if (!gpuSpawn || gpuSpawn->second.pixels.width)
+        throw std::runtime_error("GPU-spawned soldier produced a CPU patch");
+    if (!cpuSpawn || !cpuSpawn->second.pixels.width)
+        throw std::runtime_error("CPU-spawned soldier produced no patch");
+    if (hybrid.update(0, 61, 62, 1, 0, false).pixels.width)
+        throw std::runtime_error("GPU soldier update produced a CPU patch");
+    if (!hybrid.update(1, 65, 60, 1, 0, false).pixels.width)
+        throw std::runtime_error("CPU soldier update produced no patch");
+    slots.emplace("dguner", 1);
+    if (hybrid.update(1, 66, 60, 2, 0, false).pixels.width)
+        throw std::runtime_error("Lazily slotted soldier still produced a CPU patch");
+    if (hybrid.compose().rgba != underlay.rgba)
+        throw std::runtime_error("Lazily slotted soldier still painted on the CPU layer");
+}
 }
 
 int main(int argc, char** argv) try {
     if (argc != 2) return 1;
     checkAssetDepth(argv[1],false);
     checkAssetDepth(argv[1],true);
+    checkHybridGpuSlots(argv[1]);
     std::vector<Placement> units{{"dofficer",60,62,0,100,90,0,0}, {"dguner",64,60,0,100,90,0,0}};
     InfantryScene original(ground(), argv[1], units, true);
     for (int resolution : {1, 2}) {

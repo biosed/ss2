@@ -44,6 +44,16 @@ const std::string& Menu::highlighted() const {
     return highlight_ >= 0 && highlight_ < int(items_.size()) ? items_[highlight_].id : empty;
 }
 
+void Menu::highlight(const std::string& id) {
+    if (id.empty()) return;
+    for (int i = 0; i < int(items_.size()); ++i) {
+        if (items_[i].selectable && items_[i].id == id) {
+            if (highlight_ != i) { highlight_ = i; follow_ = true; render(); }
+            return;
+        }
+    }
+}
+
 void Menu::open(std::string title, std::vector<MenuItem> items) {
     title_ = std::move(title);
     items_ = std::move(items);

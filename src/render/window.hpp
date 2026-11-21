@@ -59,7 +59,7 @@ class VulkanWindow {
 public:
     explicit VulkanWindow(SDL_Window*, ValidationReport* = nullptr);
     ~VulkanWindow();
-    void setMap(const assets::MapImage&);
+    void setMap(const assets::MapImage&, unsigned maxTileSize = 0);
     // Replaces a rectangle of the current map with the same RGBA8 layout as setMap.
     // Patches are queued, applied in call order before the next presented frame, and
     // clipped to the map. Throws if there is no map or the patch is malformed.
@@ -74,6 +74,8 @@ public:
     // Replaces all gauges; an empty list removes them. Drawn above sprites, clipped to the
     // map area. Replacing the map removes them.
     void setBars(std::vector<MapBar>);
+    // Move the camera by screen-space window points (scaled by current zoom and clamped to map bounds).
+    void panMap(double screenDx, double screenDy);
     // Replaces all light streaks and flashes; an empty list removes them. Drawn above
     // every sprite and below gauges and outlines, clipped to the map area. One list may
     // use at most maxBeamColours different colours. Replacing the map removes them.
@@ -84,8 +86,9 @@ public:
     void setMapFilterLinear(bool linear);
     void setMarkers(std::vector<MapMarker>);
     // Sprite atlases: RGBA8 with straight (non-premultiplied) alpha, sampled with
-    // linear filtering. Replacing a slot is allowed at any time.
-    static constexpr unsigned spriteAtlasSlots = 16;
+    // linear filtering. Replacing a slot is allowed at any time. Slots [16,24) are
+    // reserved for plane sprites (7 live + 1 overflow); infantry/world stay below 16.
+    static constexpr unsigned spriteAtlasSlots = 24;
     void setSpriteAtlas(unsigned slot, const assets::MapImage& atlas);
     // Replaces all sprites. They are alpha blended in list order, clipped to the map's
     // on-screen rectangle, and follow the camera. Replacing the map removes them.

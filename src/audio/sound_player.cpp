@@ -110,13 +110,16 @@ void SoundPlayer::setHdAudioDir(const std::filesystem::path& dir) {
 }
 
 bool SoundPlayer::playGroup(const std::string& group, float gain, VoicePriority priority) {
-    if (!device_ || voices_.empty()) return false;
+    const float effectiveGain = scaledSfxGain(gain, sfxVolume_);
+    if (!device_ || voices_.empty() || effectiveGain <= 0.0f) return false;
     const std::uint32_t variant = variantCounter_++;
 
     const std::uint8_t* pcmData = nullptr;
     int pcmBytes = 0;
     int baseFreq = 22050;
     int channels = 1;
+
+    const bool isVoiceover = (priority == VoicePriority::High) || (!group.empty() && group[0] == '$');
 
     if (const auto it = hdClips_.find(group); it != hdClips_.end() && !it->second.empty()) {
         const auto& hc = it->second[variant % it->second.size()];
@@ -131,9 +134,11 @@ bool SoundPlayer::playGroup(const std::string& group, float gain, VoicePriority 
         pcmBytes = static_cast<int>(clip->pcm.size());
         baseFreq = static_cast<int>(clip->sampleRate ? clip->sampleRate : 22050u);
         channels = 1;
-        // Cap long retail ambient/death tails (e.g., 16s fall_small) so voices return cleanly to pool.
-        const int maxBytes = baseFreq * 2 * 3; // 3 seconds max for SFX
-        if (pcmBytes > maxBytes) pcmBytes = maxBytes;
+        if (!isVoiceover) {
+            // Cap long retail ambient/death tails (e.g., 16s fall_small) so voices return cleanly to pool.
+            const int maxBytes = baseFreq * 2 * 3; // 3 seconds max for non-VO SFX
+            if (pcmBytes > maxBytes) pcmBytes = maxBytes;
+        }
     }
 
     // Pick a pool slot: an idle voice first, otherwise steal the oldest voice
@@ -166,10 +171,10 @@ bool SoundPlayer::playGroup(const std::string& group, float gain, VoicePriority 
     SDL_AudioSpec src{};
     src.format = SDL_AUDIO_S16;
     src.channels = channels;
-    const float pitchMul = 0.97f + 0.015f * static_cast<float>(variant % 5u);
+    const float pitchMul = isVoiceover ? 1.0f : (0.97f + 0.015f * static_cast<float>(variant % 5u));
     src.freq = std::max(8000, static_cast<int>(static_cast<float>(baseFreq) * pitchMul));
     SDL_SetAudioStreamFormat(stream, &src, nullptr);
-    SDL_SetAudioStreamGain(stream, std::clamp(gain, 0.05f, 1.0f));
+    SDL_SetAudioStreamGain(stream, effectiveGain);
     SDL_ClearAudioStream(stream);
     if (!SDL_PutAudioStreamData(stream, pcmData, pcmBytes)) {
         voices_[voiceIndex].active = false;
@@ -258,7 +263,8 @@ bool SoundPlayer::startMusic(const std::filesystem::path& musicDir, float gain) 
     if (!st->stream || !SDL_BindAudioStream(device_, st->stream)) return false;
 
     st->playlist = std::move(playable);
-    st->gain = std::clamp(gain, 0.0f, 1.0f);
+    musicGain_ = clampVolume(gain);
+    st->gain = musicGain_;
     music_ = std::move(st);
     if (!openMusicTrack(0)) {
         music_.reset();
@@ -304,6 +310,20 @@ bool SoundPlayer::nextMusicTrack() {
 
 bool SoundPlayer::musicPlaying() const {
     return music_ && music_->vfOpen && !music_->muted;
+}
+
+void SoundPlayer::setSfxVolume(float volume) {
+    sfxVolume_ = clampVolume(volume);
+}
+
+void SoundPlayer::setMusicVolume(float volume) {
+    musicGain_ = clampVolume(volume);
+    if (music_) {
+        music_->gain = musicGain_;
+        if (music_->stream) {
+            SDL_SetAudioStreamGain(music_->stream, music_->muted ? 0.0f : music_->gain);
+        }
+    }
 }
 
 } // namespace ss2

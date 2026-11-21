@@ -20,7 +20,7 @@ std::uint32_t infantryRandom(std::uint32_t& state, std::uint32_t mask) {
     return (state >> 16) & mask;
 }
 
-void InfantryStep::advance(bool crouched, std::uint32_t& sharedRandomState) {
+void InfantryStep::advance(bool crouched, std::uint32_t& sharedRandomState, unsigned customBase) {
     if (!running) return;
     const auto bit = infantryRandom(sharedRandomState, 1);
     if (progress == 255) {
@@ -28,8 +28,7 @@ void InfantryStep::advance(bool crouched, std::uint32_t& sharedRandomState) {
         progress = 0;
         return;
     }
-    // All Tutorial I soldier definitions have zero experience delta for RUN.
-    const unsigned base = crouched ? 5 : 8;
+    const unsigned base = customBase > 0u ? std::clamp(customBase, 2u, 16u) : (crouched ? 5u : 8u);
     progress = std::min(255u, unsigned(progress) + base + bit);
 }
 }

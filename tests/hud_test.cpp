@@ -1,6 +1,7 @@
 // Command bar: layout, drawing, hit-testing, and its place in a rendered frame.
 #include "render/window.hpp"
 #include "ui/hud.hpp"
+#include "ui/strings.hpp"
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
@@ -87,7 +88,9 @@ int main(int argc, char** argv) {
         check(hud.width() == unsigned(pixelW), "bar spans the window");
         check(hud.height() >= 72 && hud.height() <= unsigned(pixelH) / 3, "bar height is bounded");
         check(hud.rgba().size() == std::size_t(hud.width()) * hud.height() * 4, "pixel count");
-        for (std::size_t i = 3; i < hud.rgba().size(); i += 4) check(hud.rgba()[i] == 255, "bar is opaque");
+        check(hud.rgba()[(std::size_t(3) * hud.width() + 3) * 4 + 3] == 255, "left console is opaque");
+        check(hud.rgba()[(std::size_t(hud.height() - 3) * hud.width() + hud.width() - 4) * 4 + 3] == 255, "bottom strip is opaque");
+        check(hud.rgba()[(std::size_t(3) * hud.width() + hud.width() - 4) * 4 + 3] == 0, "upper-right L-cutout is transparent");
 
         // Geometry: everything inside the bar, nothing overlapping.
         const auto minimap = hud.minimapRect();
@@ -106,11 +109,11 @@ int main(int argc, char** argv) {
         }
         check(hud.buttonRect(HudAction::moveCamera).width == 0, "moveCamera has no button");
 
-        // Minimap takes the shape of the map it is given.
+        // Minimap takes the shape of the map it is given (clipped inside an isometric diamond).
         hud.setMinimap(solid(200, 100, 40, 90, 50));
         const auto wide = hud.minimapRect();
         check(std::abs(double(wide.width) / wide.height - 2.0) < 0.1, "minimap keeps the map's shape");
-        check(countColour(hud, wide, 40, 90, 50, 3) > wide.width * wide.height / 2, "overview is drawn in the minimap");
+        check(countColour(hud, wide, 40, 90, 50, 3) > wide.width * wide.height / 3, "overview is drawn in the diamond minimap");
 
         // Dots and the view rectangle.
         ss2::HudState state;
@@ -132,10 +135,22 @@ int main(int argc, char** argv) {
         const auto before = hud.rgba();
         hud.update(state);
         check(hud.rgba() == before, "same state, same pixels");
+        // With nothing selected, unit-order slots (e.g. Stop) are blank and do not fire actions.
+        {
+            const auto stopEmpty = hud.buttonRect(HudAction::stop);
+            check(hud.handle(mouse.button(SDL_EVENT_MOUSE_BUTTON_DOWN, centreX(stopEmpty), centreY(stopEmpty))).action == HudAction::none,
+                  "blank unit slot press does not fire when nothing is selected");
+            check(hud.handle(mouse.button(SDL_EVENT_MOUSE_BUTTON_UP, centreX(stopEmpty), centreY(stopEmpty))).action == HudAction::none,
+                  "blank unit slot release does not fire when nothing is selected");
+        }
+        state.selection = {{"rifle", 12, 0.9f, 0.5f}};
+        hud.update(state);
+        const auto rifleOnly = hud.rgba();
+        check(rifleOnly != before, "selection changes the readout and lights up unit orders");
         state.selection = {{"rifle", 12, 0.9f, 0.5f}, {"officer", 1, 0.3f, 1.f}};
         state.losses = 3;
         hud.update(state);
-        check(hud.rgba() != before, "selection changes the readout");
+        check(hud.rgba() != rifleOnly, "adding a specialist (officer) updates the context-sensitive grid and readout");
         const auto withSelection = hud.rgba();
         state.holdFire = true;
         hud.update(state);
@@ -149,6 +164,13 @@ int main(int argc, char** argv) {
         hud.update(crowded);   // More classes than fit must not overflow or throw.
         hud.update(state);
 
+        // EX / L / M / A / R bottom meter lip renders proportional fills when hasSelection is true.
+        const auto beforeMeters = hud.rgba();
+        state.hasSelection = true;
+        state.meters = {0.8f, 0.9f, 0.7f, 0.6f, 1.0f};
+        hud.update(state);
+        check(hud.rgba() != beforeMeters, "EX/L/M/A/R meters visibly change the HUD pixels");
+
         // Buttons: the action is reported on release over the same button.
         for (auto a : actions) {
             const auto r = hud.buttonRect(a);
@@ -156,6 +178,66 @@ int main(int argc, char** argv) {
             check(down.consumed && down.action == HudAction::none, "press is consumed and reports nothing yet");
             auto up = hud.handle(mouse.button(SDL_EVENT_MOUSE_BUTTON_UP, centreX(r), centreY(r)));
             check(up.consumed && up.action == a, "release reports the button's action");
+        }
+        {
+            // Lowercase "officer" in state.selection activates Recon hit-testing and buttonRect().
+            const auto reconR = hud.buttonRect(HudAction::recon);
+            check(reconR.width >= 20 && reconR.height >= 20, "recon buttonRect active for lowercase officer selection");
+            auto down = hud.handle(mouse.button(SDL_EVENT_MOUSE_BUTTON_DOWN, centreX(reconR), centreY(reconR)));
+            check(down.consumed && down.action == HudAction::none, "recon press consumed");
+            auto up = hud.handle(mouse.button(SDL_EVENT_MOUSE_BUTTON_UP, centreX(reconR), centreY(reconR)));
+            check(up.consumed && up.action == HudAction::recon, "recon release reports HudAction::recon");
+        }
+        {
+            // Phase 4H interactive row-3 tactical grid: AttackMove, Patrol, Unload, Mine, Bombard.
+            ss2::HudState rState = state;
+            rState.selection = {{"rifle", 6, 1.f, 1.f}};
+            rState.binoculars = false;
+            hud.update(rState);
+            const auto amR = hud.buttonRect(HudAction::attackMove);
+            const auto patR = hud.buttonRect(HudAction::patrol);
+            check(amR.width >= 20 && patR.width >= 20, "standard selection exposes AttackMove and Patrol");
+            hud.handle(mouse.button(SDL_EVENT_MOUSE_BUTTON_DOWN, centreX(amR), centreY(amR)));
+            check(hud.handle(mouse.button(SDL_EVENT_MOUSE_BUTTON_UP, centreX(amR), centreY(amR))).action == HudAction::attackMove,
+                  "clicking row-3 col-0 fires HudAction::attackMove");
+            hud.handle(mouse.button(SDL_EVENT_MOUSE_BUTTON_DOWN, centreX(patR), centreY(patR)));
+            check(hud.handle(mouse.button(SDL_EVENT_MOUSE_BUTTON_UP, centreX(patR), centreY(patR))).action == HudAction::patrol,
+                  "clicking row-3 col-1 fires HudAction::patrol");
+            const auto unarmedPixels = hud.rgba();
+            rState.attackMoveArmed = true;
+            hud.update(rState);
+            check(hud.rgba() != unarmedPixels, "attackMoveArmed visibly highlights row-3 cell");
+
+            ss2::HudState sapState = rState;
+            sapState.attackMoveArmed = false;
+            sapState.hasSapper = true;
+            hud.update(sapState);
+            const auto mineR = hud.buttonRect(HudAction::mine);
+            const auto patR3 = hud.buttonRect(HudAction::patrol);
+            check(mineR.width >= 20 && patR3.width >= 20 && mineR.x != patR3.x, "sapper exposes Mine and shifts Patrol to col 2");
+            hud.handle(mouse.button(SDL_EVENT_MOUSE_BUTTON_DOWN, centreX(mineR), centreY(mineR)));
+            check(hud.handle(mouse.button(SDL_EVENT_MOUSE_BUTTON_UP, centreX(mineR), centreY(mineR))).action == HudAction::mine,
+                  "clicking Mine button fires HudAction::mine");
+
+            ss2::HudState vehState = rState;
+            vehState.attackMoveArmed = false;
+            vehState.hasCargo = true;
+            vehState.hasBombard = true;
+            hud.update(vehState);
+            const auto unlR = hud.buttonRect(HudAction::unload);
+            const auto bmbR = hud.buttonRect(HudAction::attackGround);
+            check(unlR.width >= 20 && bmbR.width >= 20, "cargo+armed vehicle exposes Unload and Bombard");
+            hud.handle(mouse.button(SDL_EVENT_MOUSE_BUTTON_DOWN, centreX(unlR), centreY(unlR)));
+            check(hud.handle(mouse.button(SDL_EVENT_MOUSE_BUTTON_UP, centreX(unlR), centreY(unlR))).action == HudAction::unload,
+                  "clicking Unload button fires HudAction::unload");
+            hud.handle(mouse.button(SDL_EVENT_MOUSE_BUTTON_DOWN, centreX(bmbR), centreY(bmbR)));
+            check(hud.handle(mouse.button(SDL_EVENT_MOUSE_BUTTON_UP, centreX(bmbR), centreY(bmbR))).action == HudAction::attackGround,
+                  "clicking Bombard button fires HudAction::attackGround");
+            const auto bmbBefore = hud.rgba();
+            vehState.attackGroundArmed = true;
+            hud.update(vehState);
+            check(hud.rgba() != bmbBefore, "attackGroundArmed visibly highlights Bombard button");
+            hud.update(state);
         }
         const auto stop = hud.buttonRect(HudAction::stop), crouch = hud.buttonRect(HudAction::crouch);
         hud.handle(mouse.button(SDL_EVENT_MOUSE_BUTTON_DOWN, centreX(stop), centreY(stop)));
@@ -211,6 +293,14 @@ int main(int argc, char** argv) {
         check(!hud.handle(mouse.button(SDL_EVENT_MOUSE_BUTTON_UP, 100, -50)).consumed, "release above the bar passes through");
         check(!hud.handle(mouse.motion(100, -50, false)).consumed, "motion above the bar passes through");
         check(hud.handle(mouse.motion(100, 10, false)).consumed, "motion over the bar is consumed");
+        check(!hud.handle(mouse.button(SDL_EVENT_MOUSE_BUTTON_DOWN, float(hud.width()) - 20, 4)).consumed,
+              "click in transparent upper-right L-cutout passes through to the map");
+        {
+            const auto cutoutPt = mouse.at(float(hud.width()) - 20.f, 4.f);
+            check(!hud.opaqueAtWindow(cutoutPt.x, cutoutPt.y), "opaqueAtWindow false in transparent upper-right L-cutout");
+            const auto trayPt = mouse.at(float(hud.width()) - 20.f, float(hud.height()) - 10.f);
+            check(hud.opaqueAtWindow(trayPt.x, trayPt.y), "opaqueAtWindow true in bottom-right status tray");
+        }
         SDL_Event key{};
         key.type = SDL_EVENT_KEY_DOWN;
         key.key.key = SDLK_S;
@@ -230,6 +320,13 @@ int main(int argc, char** argv) {
         check(!hud.handle(mouse.motion(m.x + m.width * 3.f, -300, true)).consumed, "no drag after release");
         auto noButton = hud.handle(mouse.motion(m.x + 4, m.y + 4, false));
         check(noButton.consumed && noButton.action == HudAction::none, "hover over the minimap does not move the camera");
+        // Lower-left power emblem opens the pause menu; extreme bounding corner outside diamond does not move camera.
+        auto corner = hud.handle(mouse.button(SDL_EVENT_MOUSE_BUTTON_DOWN, float(m.x + 1), float(m.y + 1)));
+        check(corner.consumed && corner.action == HudAction::none, "corner outside minimap diamond does not move camera");
+        hud.handle(mouse.button(SDL_EVENT_MOUSE_BUTTON_UP, float(m.x + 1), float(m.y + 1)));
+        const float powerX = float(m.x) + 11.f, powerY = float(m.y + m.height) - 22.f;
+        check(hud.handle(mouse.button(SDL_EVENT_MOUSE_BUTTON_DOWN, powerX, powerY)).consumed, "power emblem press consumed");
+        check(hud.handle(mouse.button(SDL_EVENT_MOUSE_BUTTON_UP, powerX, powerY)).action == HudAction::menu, "power emblem opens menu");
 
         // Bad input is rejected.
         try { hud.setMinimap({4, 4, std::vector<std::uint8_t>(8)}); check(false, "short minimap accepted"); } catch (const std::invalid_argument&) {}
@@ -239,15 +336,21 @@ int main(int argc, char** argv) {
         // In a frame: the bar is flush with the bottom, the notice sits above it, the panel is on top.
         const bool validate = argc == 2 && std::string_view(argv[1]) == "--validate";
         ss2::VulkanWindow renderer(window.get(), validate ? &report : nullptr);
-        renderer.setMap(solid(64, 48, 90, 90, 90));
+        renderer.setMap(solid(960, 600, 90, 90, 90));
         hud.draw(renderer);
         auto frame = renderer.captureFrame();
         const auto framePixel = [&](int x, int y) { return &frame.rgba[(std::size_t(y) * frame.width + std::size_t(x)) * 4]; };
         const int barTop = int(frame.height) - int(hud.height());
-        for (auto [x, y] : {std::pair{3, 3}, {int(hud.width()) / 2, int(hud.height()) / 2}, {int(hud.width()) - 4, int(hud.height()) - 2}}) {
+        for (auto [x, y] : {std::pair{3, 3}, {int(hud.width()) / 2, int(hud.height()) - 12}, {int(hud.width()) - 4, int(hud.height()) - 2}}) {
             const auto* want = &hud.rgba()[(std::size_t(y) * hud.width() + std::size_t(x)) * 4];
             const auto* got = framePixel(x, barTop + y);
-            check(got[0] == want[0] && got[1] == want[1] && got[2] == want[2], "bar pixels reach the screen unchanged");
+            check(std::abs(int(got[0]) - int(want[0])) <= 1 && std::abs(int(got[1]) - int(want[1])) <= 1 &&
+                  std::abs(int(got[2]) - int(want[2])) <= 1, "opaque HUD pixels reach the screen unchanged");
+        }
+        // The transparent upper-right L-cutout reveals the underlying map (90, 90, 90).
+        {
+            const auto* cutout = framePixel(int(hud.width()) * 3 / 4, barTop + 4);
+            check(cutout[0] == 90 && cutout[1] == 90 && cutout[2] == 90, "L-cutout shows the live map beneath");
         }
         renderer.setOverlay(60, 20, solid(60, 20, 1, 2, 3).rgba, ss2::OverlaySlot::notice);
         frame = renderer.captureFrame();
@@ -280,6 +383,24 @@ int main(int argc, char** argv) {
         hud.draw(renderer);
         frame = renderer.captureFrame();
         check(frame.width == unsigned(pixelW), "frame follows a resize");
+        check(countColour(hud, {0, 0, int(hud.width()), int(hud.height())}, 250, 10, 250, 3) > 16, "portrait stays drawn at 640x400");
+
+        // Changing the interface language redraws the bar on the next update, at the same size.
+        {
+            hud.update(state);
+            const auto english = hud.rgba();
+            const auto wide = hud.width(), tall = hud.height();
+            ss2::setLanguage(ss2::Language::french);
+            hud.update(state);
+            const auto french = hud.rgba();
+            check(french != english && hud.width() == wide && hud.height() == tall, "French redraws the bar at the same size");
+            ss2::setLanguage(ss2::Language::spanish);
+            hud.update(state);
+            check(hud.rgba() != french && hud.rgba() != english, "Spanish differs from both");
+            ss2::setLanguage(ss2::Language::english);
+            hud.update(state);
+            check(hud.rgba() == english, "back to English restores the picture");
+        }
 
         // The window changes size and nobody passes the bar the event (a caller may route
         // events elsewhere while a dialog is open). It must still fit the new window, and
@@ -316,6 +437,184 @@ int main(int argc, char** argv) {
             SDL_GetWindowSizeInPixels(window.get(), &pixelW, &pixelH);
             hud.update(state);
             check(hud.width() == unsigned(pixelW), "update fits the bar to the window");
+        }
+        {
+            int w{}, h{}, pixelW{}, pixelH{};
+            SDL_GetWindowSize(window.get(), &w, &h);
+            SDL_GetWindowSizeInPixels(window.get(), &pixelW, &pixelH);
+            const auto beforePings = hud.rgba();
+            const auto m = hud.minimapRect();
+            const int barTop = pixelH - int(hud.height());
+            SDL_Event rclick{};
+            rclick.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+            rclick.button.button = SDL_BUTTON_RIGHT;
+            rclick.button.x = float(m.x + m.width / 2) * w / pixelW;
+            rclick.button.y = float(barTop + m.y + m.height / 2) * h / pixelH;
+            const auto rres = hud.handle(rclick);
+            check(rres.consumed && rres.action == ss2::HudAction::orderMinimap,
+                  "right-click inside minimap issues orderMinimap action");
+            check(std::abs(rres.u - 0.5f) < 0.08f && std::abs(rres.v - 0.5f) < 0.08f,
+                  "minimap right-click reports normalized map coordinates");
+
+            auto pingState = state;
+            pingState.pings = {{0.5f, 0.5f, true, 0.75f}};
+            pingState.dots.push_back({0.4f, 0.5f, false, true, false});
+            pingState.dots.push_back({0.6f, 0.5f, false, false, true});
+            hud.update(pingState);
+            check(hud.rgba() != beforePings, "minimap tactical ping and allied/neutral dots redraw the HUD");
+
+            const auto beforeAir = hud.rgba();
+            auto airState = pingState;
+            airState.airReady = {2, 1, 0, 1, 0};
+            airState.armedAir = 0;
+            airState.planes = {{0.35f, 0.45f, false}, {0.65f, 0.55f, true}};
+            hud.update(airState);
+            check(hud.rgba() != beforeAir, "air support pills and minimap aircraft blips redraw the HUD");
+            const auto r0 = hud.airButtonRect(0);
+            const auto r1 = hud.airButtonRect(1);
+            const auto r3 = hud.airButtonRect(3);
+            check(r0.width > 0 && r0.height > 0 && r1.width > 0 && r1.height > 0 && r3.width > 0 && r3.height > 0,
+                  "available air support slots have positive hit rects");
+            check(hud.airButtonRect(2).width == 0 && hud.airButtonRect(4).width == 0,
+                  "zero-count air support slots have empty hit rects");
+            const auto downAir = hud.handle(mouse.button(SDL_EVENT_MOUSE_BUTTON_DOWN, centreX(r1), centreY(r1)));
+            check(downAir.consumed, "air support pill press is consumed");
+            const auto upAir = hud.handle(mouse.button(SDL_EVENT_MOUSE_BUTTON_UP, centreX(r1), centreY(r1)));
+            check(upAir.consumed && upAir.action == ss2::HudAction::airSupport && upAir.airSlot == 1,
+                  "clicking air support pill reports HudAction::airSupport and slot index");
+            hud.draw(renderer);
+            frame = renderer.captureFrame();
+            const int curBarTop = int(frame.height) - int(hud.height());
+            const auto* cutoutAfter = framePixel(int(hud.width()) * 3 / 4, curBarTop + 4);
+            check(cutoutAfter[0] == 90 && cutoutAfter[1] == 90 && cutoutAfter[2] == 90,
+                  "air support strip stays strictly below the transparent upper-right L-cutout");
+        }
+        {
+            // Phase 4J: minimap objective marker star, clickable group chips & class filter cards, Scatter button.
+            if (!SDL_SetWindowSize(window.get(), 1100, 700)) throw std::runtime_error(SDL_GetError());
+            SDL_SyncWindow(window.get());
+            SDL_PumpEvents();
+            SDL_FlushEvents(SDL_EVENT_FIRST, SDL_EVENT_LAST);
+            ss2::HudState p4jState;
+            p4jState.hasSelection = true;
+            p4jState.hasInfantry = true;
+            p4jState.selection = {{"rifle", 12, 0.9f, 0.8f}, {"officer", 1, 1.0f, 1.0f}};
+            p4jState.groups = {{1, 8}, {4, 3}};
+            p4jState.hasObjectiveMarker = true;
+            p4jState.objectiveU = 0.5f;
+            p4jState.objectiveV = 0.5f;
+            hud.update(p4jState);
+
+            check(countColour(hud, hud.minimapRect(), 246, 216, 84, 15) > 4,
+                  "Phase 4J minimap objective marker star is rendered");
+
+            const auto g1 = hud.groupChipRect(1);
+            const auto g4 = hud.groupChipRect(4);
+            check(g1.width > 0 && g1.height > 0 && g4.width > 0 && g4.height > 0,
+                  "Phase 4J control group chips have valid rects");
+            check(g1.x + g1.width <= g4.x, "Phase 4J group chips do not overlap");
+            check(hud.handle(mouse.button(SDL_EVENT_MOUSE_BUTTON_DOWN, centreX(g1), centreY(g1))).consumed,
+                  "group chip 1 press consumed");
+            const auto g1Up = hud.handle(mouse.button(SDL_EVENT_MOUSE_BUTTON_UP, centreX(g1), centreY(g1)));
+            check(g1Up.consumed && g1Up.action == HudAction::recallGroup && g1Up.groupDigit == 1,
+                  "clicking group chip 1 emits HudAction::recallGroup digit 1");
+            check(hud.handle(mouse.button(SDL_EVENT_MOUSE_BUTTON_DOWN, centreX(g4), centreY(g4))).consumed,
+                  "group chip 4 press consumed");
+            const auto g4Up = hud.handle(mouse.button(SDL_EVENT_MOUSE_BUTTON_UP, centreX(g4), centreY(g4)));
+            check(g4Up.consumed && g4Up.action == HudAction::recallGroup && g4Up.groupDigit == 4,
+                  "clicking group chip 4 emits HudAction::recallGroup digit 4");
+
+            const auto c0 = hud.classCardRect(0);
+            const auto c1 = hud.classCardRect(1);
+            check(c0.width > 0 && c0.height > 0 && c1.width > 0 && c1.height > 0,
+                  "Phase 4J class cards have valid rects");
+            check(c0.x + c0.width <= c1.x, "Phase 4J class cards do not overlap");
+            check(hud.handle(mouse.button(SDL_EVENT_MOUSE_BUTTON_DOWN, centreX(c0), centreY(c0))).consumed,
+                  "class card 0 press consumed");
+            const auto c0Up = hud.handle(mouse.button(SDL_EVENT_MOUSE_BUTTON_UP, centreX(c0), centreY(c0)));
+            check(c0Up.consumed && c0Up.action == HudAction::selectClass && c0Up.classLabel == "rifle",
+                  "clicking class card 0 emits HudAction::selectClass for rifle");
+            check(hud.handle(mouse.button(SDL_EVENT_MOUSE_BUTTON_DOWN, centreX(c1), centreY(c1))).consumed,
+                  "class card 1 press consumed");
+            const auto c1Up = hud.handle(mouse.button(SDL_EVENT_MOUSE_BUTTON_UP, centreX(c1), centreY(c1)));
+            check(c1Up.consumed && c1Up.action == HudAction::selectClass && c1Up.classLabel == "officer",
+                  "clicking class card 1 emits HudAction::selectClass for officer");
+
+            const auto scR = hud.buttonRect(HudAction::scatter);
+            check(scR.width >= 20 && scR.height >= 20, "Phase 4J infantry selection exposes Scatter button");
+            check(hud.handle(mouse.button(SDL_EVENT_MOUSE_BUTTON_DOWN, centreX(scR), centreY(scR))).consumed,
+                  "Scatter button press consumed");
+            check(hud.handle(mouse.button(SDL_EVENT_MOUSE_BUTTON_UP, centreX(scR), centreY(scR))).action == HudAction::scatter,
+                  "clicking Scatter button emits HudAction::scatter");
+
+            auto crowded4j = p4jState;
+            crowded4j.selection.clear();
+            for (int i = 0; i < 40; ++i) crowded4j.selection.push_back({"class" + std::to_string(i), 1u, 1.f, 1.f});
+            hud.update(crowded4j);
+            std::size_t lastClickable = 0;
+            while (lastClickable < crowded4j.selection.size() && hud.classCardRect(lastClickable).width > 0) {
+                ++lastClickable;
+            }
+            check(lastClickable > 0 && lastClickable < crowded4j.selection.size(),
+                  "crowded overflow card has empty classCardRect");
+            const auto prevCard = hud.classCardRect(lastClickable - 1);
+            const auto stepX = prevCard.width + 4;
+            const auto overResDown = hud.handle(mouse.button(SDL_EVENT_MOUSE_BUTTON_DOWN, centreX(prevCard) + float(stepX), centreY(prevCard)));
+            const auto overResUp = hud.handle(mouse.button(SDL_EVENT_MOUSE_BUTTON_UP, centreX(prevCard) + float(stepX), centreY(prevCard)));
+            check(overResDown.consumed && overResUp.action == HudAction::none,
+                  "clicking +N more overflow card does not emit selectClass");
+            std::cout << "Phase 4J interactive HUD cards, group chips, minimap star & scatter PASSED\n";
+
+            // Phase 4S: Interactive HUD command-bar tooltips & cancelMinimapDrag.
+            auto p4sState = p4jState;
+            p4sState.airReady = {2, 0, 1, 0, 0};
+            hud.update(p4sState);
+            const auto tipAtRect = [&](ss2::Hud::Rect r) {
+                const auto pt = mouse.at(centreX(r), centreY(r));
+                return hud.tooltipAtWindow(pt.x, pt.y);
+            };
+            const auto stopTip = tipAtRect(hud.buttonRect(HudAction::stop));
+            check(stopTip && stopTip->title == "Stop (S)" && !stopTip->lines.empty(),
+                  "Phase 4S stop button tooltip mismatch");
+            const auto scTip = tipAtRect(hud.buttonRect(HudAction::scatter));
+            check(scTip && scTip->title == "Scatter (D)", "Phase 4S scatter button tooltip mismatch");
+            const auto airTip = tipAtRect(hud.airButtonRect(0));
+            check(airTip && airTip->title.find("Recon Plane") != std::string::npos &&
+                  !airTip->lines.empty() && airTip->lines[0].find("2") != std::string::npos,
+                  "Phase 4S air support tooltip mismatch");
+            const auto grpTip = tipAtRect(hud.groupChipRect(1));
+            check(grpTip && grpTip->title == "Control Group 1" &&
+                  !grpTip->lines.empty() && grpTip->lines[0].find("8") != std::string::npos,
+                  "Phase 4S group chip tooltip mismatch");
+            const auto clsTip = tipAtRect(hud.classCardRect(0));
+            check(clsTip && clsTip->title == "rifle" && !clsTip->lines.empty(),
+                  "Phase 4S class card tooltip mismatch");
+            check(!tipAtRect(hud.minimapRect()).has_value(),
+                  "Phase 4S minimap should not emit button tooltip");
+
+            const auto mmR = hud.minimapRect();
+            const auto mmDown = hud.handle(mouse.button(SDL_EVENT_MOUSE_BUTTON_DOWN, centreX(mmR), centreY(mmR)));
+            check(mmDown.consumed && mmDown.action == HudAction::moveCamera,
+                  "Phase 4S minimap click did not start camera move");
+            hud.cancelMinimapDrag();
+            const auto mmDrag = hud.handle(mouse.motion(centreX(mmR) + 4.f, centreY(mmR) + 2.f, true));
+            check(mmDrag.action == HudAction::none, "Phase 4S cancelMinimapDrag did not suppress drag");
+            std::cout << "Phase 4S HUD command-bar tooltips & cancelMinimapDrag PASSED\n";
+
+            // Phase 4W: Right-click class card emits HudAction::selectClass with shiftHeld=true (exclude).
+            const auto cls0 = hud.classCardRect(0);
+            SDL_Event rDown{};
+            rDown.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+            rDown.button.windowID = SDL_GetWindowID(window.get());
+            rDown.button.button = SDL_BUTTON_RIGHT;
+            const auto rPt = mouse.at(centreX(cls0), centreY(cls0));
+            rDown.button.x = rPt.x;
+            rDown.button.y = rPt.y;
+            const auto rRes = hud.handle(rDown);
+            check(rRes.consumed && rRes.action == HudAction::selectClass &&
+                  rRes.classLabel == "rifle" && rRes.shiftHeld,
+                  "Phase 4W right-click class card did not emit exclude selectClass");
+            std::cout << "Phase 4W HUD class card right-click exclude PASSED\n";
         }
     } catch (const std::exception& e) {
         std::cerr << e.what() << '\n';

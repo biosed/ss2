@@ -1,11 +1,15 @@
 #include "sim/infantry_path.hpp"
+#include "sim/infantry_combat.hpp"
+#include "sim/tutorial_units.hpp"
 #include "assets/mission.hpp"
 #include "assets/placement.hpp"
+#include "assets/infantry.hpp"
 #include <algorithm>
 #include <array>
 #include <zlib.h>
 #include <cassert>
 #include <iostream>
+#include <stdexcept>
 #include <vector>
 
 // Same ordering and delimiter as verify_infantry_route.py --all-zone.
@@ -97,6 +101,61 @@ static void checkBlockedRouteRetry(ss2::InfantryPathGrid grid) {
     }
 }
 
+// Size-driven 256/512 tile maps: the Bug2 search deque must grow past the old
+// 128-slot ring and the iteration guard must scale with map area.
+static void checkLargeMapPathing() {
+    for (int side : {256, 512}) {
+        const std::size_t n = std::size_t(side) * std::size_t(side);
+        std::vector<std::uint32_t> flags(n, 0u);
+        std::vector<std::uint16_t> obstacles(n, 0x000Fu);
+        auto grid = ss2::InfantryPathGrid::fromSubCellMasks(side, side, flags, obstacles, 4);
+        assert(grid.width() == side*2 && grid.height() == side*2);
+        const ss2::SubCell start{2*(side-60), 2*(side-60)}, goal{2*(side-30), 2*(side-60)};
+        auto path = grid.findPath(start, goal);
+        assert(!path.empty() && path.back() == goal);
+        for (const auto& c : path) assert(grid.walkable(c));
+        const ss2::SubCell a{8, 8}, b{2*(side-8), 2*(side-8)};
+        auto longPath = grid.findPath(a, b);
+        assert(!longPath.empty());
+        for (const auto& c : longPath) assert(grid.walkable(c));
+        std::vector<ss2::SubCell> sources{{2*(side/2), 2*(side/2)}, {2*(side/2+1), 2*(side/2)}};
+        auto assigned = grid.formationDestinations(sources, {2*(side/2+3), 2*(side/2)});
+        assert(assigned.size() == sources.size());
+        for (const auto& c : assigned) assert(grid.inBounds(c));
+    }
+    std::cout << "Large-map (256/512) infantry_path tests PASSED\n";
+}
+
+// FogGrid and TutorialUnits::countInZone must scale to non-128 mission grids.
+static void checkLargeFogZones() {
+    ss2::FogGrid fog(512, 512, std::vector<std::uint32_t>(512u*512u, 0u));
+    fog.buildFallbackCirc64();
+    fog.revealCircle(400, 400, 10, 0);
+    assert(fog.raw().size() == 512u*512u);
+    assert(fog.tile(400, 400) != 0);
+    assert(fog.tile(0, 0) == 0 && fog.tile(511, 511) == 0);
+
+    const int side = 256;
+    auto grid = ss2::InfantryPathGrid::fromSubCellMasks(side, side,
+        std::vector<std::uint32_t>(side*side, 0u), std::vector<std::uint16_t>(side*side, 0x000Fu), 4);
+    const int tileX = 120, tileY = 100, originX = side*32;
+    const auto [u, v] = ss2::InfantryPathGrid::toWorldCenter({tileX*2, tileY*2});
+    ss2::assets::Infantry inf{};
+    inf.id = "aguner"; inf.x = originX + u - v; inf.y = (u + v)/2;
+    inf.owner = 0; inf.hp = 100; inf.ammo = 40; inf.group = 0;
+    const std::array<ss2::assets::Infantry, 1> units{inf};
+    ss2::TutorialUnits soldiers(std::move(grid), units, {}, std::nullopt);
+    std::vector<std::uint8_t> zones(std::size_t(side)*side, 0u);
+    zones[std::size_t(tileY)*side + tileX] = 5u;
+    assert(soldiers.countInZone(zones, 5u, 0) == 1u);
+    assert(soldiers.countInZone(zones, 6u, 0) == 0u);
+    bool threw = false;
+    try { soldiers.countInZone(std::vector<std::uint8_t>(128u*128u, 0u), 5u, 0); }
+    catch (const std::invalid_argument&) { threw = true; }
+    assert(threw);
+    std::cout << "Large-grid fog + countInZone tests PASSED\n";
+}
+
 int main(int argc, char** argv) {
     // Gold's closest fallback lies around this wall, adjacent to an inaccessible target.
     // Scoring only squared distance and step count stops at the near side of the wall.
@@ -173,7 +232,25 @@ int main(int argc, char** argv) {
     auto boxed = ss2::InfantryPathGrid::fromSubCellMasks(16, 16, boxedFlags, obstacles, 4);
     assert(boxed.findDirections({10, 12}, {20, 12}).empty());
 
+    checkLargeMapPathing();
+    checkLargeFogZones();
+
     std::cout << "Synthetic infantry_path tests PASSED\n";
+
+    // Naval mask passability & findTileDirectionsForMask (0x000Fu = water+shallows passable, dry ground blocked).
+    {
+        std::vector<std::uint32_t> nflags(16 * 16, 0u);
+        std::vector<std::uint16_t> nobst(16 * 16, 0x000Fu); // dry ground everywhere
+        for (int tx = 5; tx <= 8; ++tx) nobst[8 * 16 + tx] = 0x00F0u; // deep water channel
+        nobst[8 * 16 + 9] = 0x0F00u;                                 // shallows landing bank
+        auto navGrid = ss2::InfantryPathGrid::fromSubCellMasks(16, 16, nflags, nobst, 4);
+        assert(navGrid.walkableMask({10, 16}, 0x000Fu));
+        assert(navGrid.walkableMask({18, 16}, 0x000Fu));  // shallows passable to naval craft
+        assert(!navGrid.walkableMask({20, 16}, 0x000Fu)); // dry ground blocked to naval craft
+        const auto waterDirs = navGrid.findTileDirectionsForMask({10, 16}, {18, 16}, 0x000Fu, 64);
+        assert(waterDirs.size() == 4u && std::all_of(waterDirs.begin(), waterDirs.end(), [](std::uint8_t d) { return d == 0u; }));
+        assert(navGrid.findTileDirectionsForMask({10, 16}, {20, 16}, 0x000Fu, 64).empty());
+    }
 
     if (argc > 1) {
         const auto checksum = objectiveRouteChecksum(argv[1]);

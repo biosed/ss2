@@ -80,7 +80,8 @@ bool FogGrid::loadCirc64(std::span<const std::uint8_t> data) {
 }
 
 bool FogGrid::loadCirc64FromGame(const std::filesystem::path& gameDir) {
-    const auto bytes = assets::readSueEntry(gameDir / "game_common.sue", "CIRC64.DAT");
+    const auto archive = assets::resolveCaseInsensitivePath(gameDir, "game_common.sue");
+    const auto bytes = assets::readSueEntry(archive, "CIRC64.DAT");
     return loadCirc64(bytes);
 }
 
@@ -208,6 +209,12 @@ std::uint8_t FogGrid::tile(int tileX, int tileY) const {
     return fog_[static_cast<std::size_t>(tileY) * static_cast<std::size_t>(tileWidth_) + static_cast<std::size_t>(tileX)];
 }
 
+bool FogGrid::isElevated(int tileX, int tileY) const {
+    if (tileX < 0 || tileY < 0 || tileX >= tileWidth_ || tileY >= tileHeight_) return false;
+    return (flags_[static_cast<std::size_t>(tileY) * static_cast<std::size_t>(tileWidth_) +
+                   static_cast<std::size_t>(tileX)] & 0x2000u) != 0;
+}
+
 InfantryCombatDesc InfantryCombatDesc::dguner() {
     InfantryCombatDesc d;
     d.maxHp = 100;
@@ -273,6 +280,8 @@ int effectiveSightRadius(const InfantryCombatDesc& desc, int expa, bool crouched
     int r = scaleByExpa(base, delta, expa);
     if (difficulty == 1 && owner == 0) {
         r = (r * 130) / 100;
+    } else if (difficulty == 3 && owner != 0 && owner != 3) {
+        r = (r * 115) / 100;
     }
     return std::clamp(r, 1, 63);
 }

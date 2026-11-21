@@ -2,29 +2,50 @@ name: Linux Vulkan
 on: [push, pull_request]
 jobs:
   build-and-test:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
     container: fedora:44
     strategy:
       matrix:
         include:
-          - type: Release
+          - runner: ubuntu-24.04
+            icd_arch: x86_64
+            type: Release
             compiler: g++
             flags: ""
-          - type: Debug
+          - runner: ubuntu-24.04
+            icd_arch: x86_64
+            type: Debug
+            compiler: clang++
+            flags: "-fsanitize=address,undefined -fno-omit-frame-pointer"
+          - runner: ubuntu-24.04-arm
+            icd_arch: aarch64
+            type: Release
+            compiler: g++
+            flags: ""
+          - runner: ubuntu-24.04-arm
+            icd_arch: aarch64
+            type: Debug
             compiler: clang++
             flags: "-fsanitize=address,undefined -fno-omit-frame-pointer"
     steps:
-      - run: dnf install -y git gcc-c++ zlib-ng-compat-devel libjpeg-turbo-devel libpng-devel python3 clang compiler-rt cmake ninja-build SDL3-devel pango-devel fontconfig google-noto-sans-fonts vulkan-headers vulkan-loader-devel mesa-vulkan-drivers vulkan-validation-layers
+      - run: dnf install -y git gcc-c++ zlib-ng-compat-devel libjpeg-turbo-devel libpng-devel python3 clang compiler-rt cmake ninja-build ccache SDL3-devel pango-devel fontconfig google-noto-sans-fonts ffmpeg-free-devel vulkan-headers vulkan-loader-devel mesa-vulkan-drivers vulkan-validation-layers
       - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-${{ matrix.icd_arch }}-${{ matrix.compiler }}-${{ matrix.type }}-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ matrix.icd_arch }}-${{ matrix.compiler }}-${{ matrix.type }}-
       - run: >
           cmake -S . -B build -G Ninja
           -DCMAKE_BUILD_TYPE=${{ matrix.type }}
           -DCMAKE_CXX_COMPILER=${{ matrix.compiler }}
+          -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
           "-DCMAKE_CXX_FLAGS=${{ matrix.flags }}"
           -DSS2_TEST_WINDOW=ON -DSS2_TEST_VALIDATION=ON
       - run: cmake --build build
-      - run: ctest --test-dir build --output-on-failure
+      - run: ctest --test-dir build --output-on-failure --no-tests=error
         env:
           SDL_VIDEO_DRIVER: offscreen
-          VK_DRIVER_FILES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+          VK_DRIVER_FILES: /usr/share/vulkan/icd.d/lvp_icd.${{ matrix.icd_arch }}.json
           UBSAN_OPTIONS: halt_on_error=1

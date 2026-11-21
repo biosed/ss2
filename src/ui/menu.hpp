@@ -38,6 +38,7 @@ public:
     void close();
     bool active() const { return active_; }
     const std::string& highlighted() const;        // id of the highlighted row, or empty
+    void highlight(const std::string& id);         // move the highlight to a row by id, if selectable
 
     // Up/Down move, Enter or Space choose, Escape closes. The mouse highlights the row
     // under it and chooses on a left click released over the same row. A list taller

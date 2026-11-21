@@ -12,6 +12,6 @@ struct InfantryStep {
     bool running{true};
     // Destination tile/slot and step direction are supplied by the route consumer.
     std::pair<int, int> position() const;
-    void advance(bool crouched, std::uint32_t& sharedRandomState);
+    void advance(bool crouched, std::uint32_t& sharedRandomState, unsigned customBase = 0u);
 };
 }

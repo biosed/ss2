@@ -32,6 +32,18 @@ void checkSize(SDL_Window* window, ss2::VulkanWindow& renderer, int width, int h
     if (sizeOverridden) throw WindowSizeOverridden{};
     throw std::runtime_error("Presentation did not reach the resized drawable extent");
 }
+
+void presentFrame(ss2::VulkanWindow& renderer) {
+    using namespace std::chrono_literals;
+    const auto deadline = std::chrono::steady_clock::now() + 4s;
+    do {
+        SDL_Event event;
+        while (SDL_PollEvent(&event)) renderer.handleEvent(event);
+        if (renderer.present({})) return;
+        SDL_Delay(5);
+    } while (std::chrono::steady_clock::now() < deadline);
+    throw std::runtime_error("Timed out waiting to present frame");
+}
 }
 
 int main(int argc, char** argv) {
@@ -71,6 +83,28 @@ int main(int argc, char** argv) {
                 std::cout << "Minimize and restore observed\n";
             } else std::cout << "Window manager did not acknowledge minimize\n";
         }
+        constexpr unsigned panMapW = 1024, panMapH = 512;
+        renderer.setMap({panMapW, panMapH, std::vector<std::uint8_t>(std::size_t(panMapW) * panMapH * 4, 96)});
+        presentFrame(renderer);
+        int winW{}, winH{};
+        if (!SDL_GetWindowSize(window.get(), &winW, &winH)) throw std::runtime_error(SDL_GetError());
+        const float centerWinX = float(winW) * 0.5f, centerWinY = float(winH) * 0.5f;
+        const auto [beforeX, beforeY] = renderer.mapPosition(centerWinX, centerWinY);
+        if (!std::isfinite(beforeX) || !std::isfinite(beforeY))
+            throw std::runtime_error("Initial mapPosition is not finite");
+        renderer.panMap(120.0, 60.0);
+        presentFrame(renderer);
+        const auto [pannedX, pannedY] = renderer.mapPosition(centerWinX, centerWinY);
+        if (!std::isfinite(pannedX) || !std::isfinite(pannedY) ||
+            pannedX <= beforeX || pannedY <= beforeY)
+            throw std::runtime_error("panMap did not shift mapPosition positively in both X and Y");
+        renderer.panMap(1e6, 1e6);
+        presentFrame(renderer);
+        const auto [clampedX, clampedY] = renderer.mapPosition(centerWinX, centerWinY);
+        if (!std::isfinite(clampedX) || !std::isfinite(clampedY) ||
+            clampedX < 0.0 || clampedX > double(panMapW) ||
+            clampedY < 0.0 || clampedY > double(panMapH))
+            throw std::runtime_error("panMap failed to clamp mapPosition within map bounds");
     } catch (const WindowSizeOverridden&) {
         std::cout << "Compositor overrode requested window size; matching actual drawable presented\n";
         result = 77;

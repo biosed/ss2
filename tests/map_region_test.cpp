@@ -172,6 +172,25 @@ int main(int argc, char** argv) {
         renderer.setMarkers({{{1, 1, 4, 4}, MarkerKind::attack}});
         renderer.setMap(reference);  // Replacing the map drops its markers.
         present(renderer);
+
+        // Multi-tile map (forced 32x32 tiles over 96x72 -> 3x3 tiles): verify cross-seam patches & frame capture.
+        auto tiledRef = pattern(96, 72, 131);
+        renderer.setMap(tiledRef, 32);
+        same(renderer, tiledRef, "tiled initial upload");
+        const auto tiledUpdate = [&](int x, int y, const MapImage& patch) {
+            renderer.updateMapRegion(x, y, patch);
+            apply(tiledRef, x, y, patch);
+        };
+        tiledUpdate(28, 10, pattern(10, 8, 141));  // Straddles x=32 vertical seam.
+        tiledUpdate(10, 29, pattern(12, 9, 149));  // Straddles y=32 horizontal seam.
+        tiledUpdate(29, 29, pattern(8, 8, 157));   // Straddles 4-tile corner at (32, 32).
+        tiledUpdate(60, 60, pattern(10, 10, 163)); // Straddles far tile seams + bottom edge.
+        tiledUpdate(-3, 30, pattern(8, 6, 173));   // Left edge + y=32 seam.
+        present(renderer);
+        same(renderer, tiledRef, "tiled cross-seam patches");
+        const auto tiledFrame = renderer.captureFrame();
+        if (tiledFrame.width == 0 || tiledFrame.height == 0 || tiledFrame.rgba.empty())
+            throw std::runtime_error("tiled frame capture empty");
     } catch (const std::exception& e) {
         std::cerr << e.what() << '\n';
         status = 1;

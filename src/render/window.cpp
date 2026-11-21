@@ -65,8 +65,14 @@ struct VulkanWindow::Impl {
     // Window size in pixels that the current swapchain was built for.
     int builtWidth = 0, builtHeight = 0;
     bool dirty = true;
-    vk::UniqueDeviceMemory mapMemory;
-    vk::UniqueImage map;
+    struct MapTile {
+        int x{}, y{};
+        unsigned width{}, height{};
+        vk::UniqueDeviceMemory memory;
+        vk::UniqueImage image;
+    };
+    std::vector<MapTile> mapTiles;
+    bool hasMap() const { return !mapTiles.empty(); }
     vk::Extent2D mapSize;
     vk::UniqueDeviceMemory outlineMemory;
     vk::UniqueBuffer outline;
@@ -87,6 +93,7 @@ struct VulkanWindow::Impl {
         unsigned width{}, height{};
         int left{}, top{};   // used by slots without a fixed place
         bool stale = false;
+        bool hasAlpha = false;
     };
     // Indexed by OverlaySlot and drawn back to front: the bar, the notice, the panel, the menu.
     std::array<Overlay, 5> overlays;
@@ -114,11 +121,18 @@ struct VulkanWindow::Impl {
         unsigned width{}, height{};
         vk::Format format{};
         std::vector<std::uint8_t> pixels;   // kept so the atlas can follow a surface format change
+        vk::UniqueDeviceMemory stagingMemory;
+        vk::UniqueBuffer stagingBuffer;
+        vk::DeviceSize stagingCapacity{};
+        bool pendingUpload = false;
     };
-    // The caller's slots, then one of our own that holds the glow shapes for beams.
+    // The caller's slots, one for beam glows, and one for alpha-blended HUD overlays.
     static constexpr unsigned beamAtlas = VulkanWindow::spriteAtlasSlots;
+    static constexpr unsigned hudAtlas = VulkanWindow::spriteAtlasSlots + 1;
     static constexpr unsigned beamBlock = 16;   // texels per side of one colour's glow
-    std::array<Atlas, VulkanWindow::spriteAtlasSlots + 1> atlases;
+    std::array<Atlas, VulkanWindow::spriteAtlasSlots + 2> atlases;
+    vk::UniqueDeviceMemory hudQuadMemory;
+    vk::UniqueBuffer hudQuadBuffer;
     std::vector<Sprite> sprites;
     std::vector<MapBeam> beams;
     std::vector<std::array<std::uint8_t, 3>> beamPalette;
@@ -279,9 +293,9 @@ struct VulkanWindow::Impl {
                 {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}}));
         rendered.clear();
         for (size_t i = 0; i < images.size(); ++i) rendered.push_back(device->createSemaphoreUnique({}));
-        if (map && !(gpu.getFormatProperties(format.format).optimalTilingFeatures & vk::FormatFeatureFlagBits::eBlitDst))
+        if (hasMap() && !(gpu.getFormatProperties(format.format).optimalTilingFeatures & vk::FormatFeatureFlagBits::eBlitDst))
             throw std::runtime_error("Surface format cannot display the map");
-        if (map && surfaceFormat != format.format)
+        if (hasMap() && surfaceFormat != format.format)
             throw std::runtime_error("Map surface format changed during resize");
         const bool formatChanged = surfaceFormat != format.format;
         surfaceFormat = format.format;
@@ -309,10 +323,9 @@ struct VulkanWindow::Impl {
         throw std::runtime_error("No compatible Vulkan map memory");
     }
 
-    void setMap(const assets::MapImage& data) {
+    void setMap(const assets::MapImage& data, unsigned maxTileSize = 0) {
         const auto limit = gpu.getProperties().limits.maxImageDimension2D;
-        if (!data.width || !data.height || data.width > limit || data.height > limit ||
-            uint64_t(data.width) * data.height * 4 != data.rgba.size())
+        if (!data.width || !data.height || uint64_t(data.width) * data.height * 4 != data.rgba.size())
             throw std::runtime_error("Unsupported map dimensions or pixel count");
         if (dirty && !rebuild()) throw std::runtime_error("Map needs a drawable window");
         const bool srgb = surfaceFormat == vk::Format::eR8G8B8A8Srgb || surfaceFormat == vk::Format::eB8G8R8A8Srgb;
@@ -323,14 +336,6 @@ struct VulkanWindow::Impl {
             !(gpu.getFormatProperties(surfaceFormat).optimalTilingFeatures & vk::FormatFeatureFlagBits::eBlitDst))
             throw std::runtime_error("GPU cannot blit map pixels to the window");
         device->waitIdle();
-        vk::UniqueDeviceMemory stagingMemory;
-        auto staging = device->createBufferUnique({{}, data.rgba.size(), vk::BufferUsageFlagBits::eTransferSrc});
-        stagingMemory = allocate(device->getBufferMemoryRequirements(*staging),
-            vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
-        device->bindBufferMemory(*staging, *stagingMemory, 0);
-        auto mapped = device->mapMemory(*stagingMemory, 0, data.rgba.size());
-        std::memcpy(mapped, data.rgba.data(), data.rgba.size());
-        device->unmapMemory(*stagingMemory);
         if (!outline) {
             // One band of solid colour per MarkerKind plus a dark one for gauge backgrounds,
             // written in the surface's byte order.
@@ -354,30 +359,60 @@ struct VulkanWindow::Impl {
             outline = std::move(buffer);
             outlineMemory = std::move(memory);
         }
-        const vk::Extent3D size(data.width, data.height, 1);
-        vk::UniqueDeviceMemory memory;
-        auto image = device->createImageUnique({{}, vk::ImageType::e2D, format, size, 1, 1, vk::SampleCountFlagBits::e1,
-            vk::ImageTiling::eOptimal, transfer | vk::ImageUsageFlagBits::eTransferSrc});
-        memory = allocate(device->getImageMemoryRequirements(*image), vk::MemoryPropertyFlagBits::eDeviceLocal);
-        device->bindImageMemory(*image, *memory, 0);
-        command.reset();
-        command.begin({vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+
+        const unsigned tileMax = std::clamp(maxTileSize ? maxTileSize : 4096u, 16u, limit);
+        const std::size_t maxStagingW = std::min(data.width, tileMax);
+        const std::size_t maxStagingH = std::min(data.height, tileMax);
+        const vk::DeviceSize stagingBytes = vk::DeviceSize(maxStagingW) * maxStagingH * 4;
+        auto staging = device->createBufferUnique({{}, stagingBytes, vk::BufferUsageFlagBits::eTransferSrc});
+        auto stagingMemory = allocate(device->getBufferMemoryRequirements(*staging),
+            vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+        device->bindBufferMemory(*staging, *stagingMemory, 0);
+
         const vk::ImageSubresourceRange range(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1);
-        vk::ImageMemoryBarrier barrier({}, vk::AccessFlagBits::eTransferWrite,
-            vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal,
-            VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, *image, range);
-        command.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe, transferStage, {}, {}, {}, barrier);
         const vk::ImageSubresourceLayers layer(vk::ImageAspectFlagBits::eColor, 0, 0, 1);
-        command.copyBufferToImage(*staging, *image, vk::ImageLayout::eTransferDstOptimal,
-                                  vk::BufferImageCopy(0, 0, 0, layer, {}, size));
-        barrier.setOldLayout(vk::ImageLayout::eTransferDstOptimal).setNewLayout(vk::ImageLayout::eTransferSrcOptimal)
-               .setSrcAccessMask(vk::AccessFlagBits::eTransferWrite).setDstAccessMask(vk::AccessFlagBits::eTransferRead);
-        command.pipelineBarrier(transferStage, transferStage, {}, {}, {}, barrier);
-        command.end();
-        queue.submit(vk::SubmitInfo({}, {}, command));
-        queue.waitIdle();
-        map = std::move(image);
-        mapMemory = std::move(memory);
+        std::vector<MapTile> newTiles;
+        const unsigned cols = (data.width + tileMax - 1) / tileMax;
+        const unsigned rows = (data.height + tileMax - 1) / tileMax;
+        newTiles.reserve(std::size_t(cols) * rows);
+
+        for (unsigned ty = 0; ty < rows; ++ty) {
+            const unsigned tileY = ty * tileMax;
+            const unsigned th = std::min(tileMax, data.height - tileY);
+            for (unsigned tx = 0; tx < cols; ++tx) {
+                const unsigned tileX = tx * tileMax;
+                const unsigned tw = std::min(tileMax, data.width - tileX);
+                const std::size_t tileBytes = std::size_t(tw) * th * 4;
+                auto* dst = static_cast<std::uint8_t*>(device->mapMemory(*stagingMemory, 0, tileBytes));
+                for (unsigned row = 0; row < th; ++row) {
+                    const auto* srcRow = data.rgba.data() + (std::size_t(tileY + row) * data.width + tileX) * 4;
+                    std::memcpy(dst + std::size_t(row) * tw * 4, srcRow, std::size_t(tw) * 4);
+                }
+                device->unmapMemory(*stagingMemory);
+
+                const vk::Extent3D size(tw, th, 1);
+                auto image = device->createImageUnique({{}, vk::ImageType::e2D, format, size, 1, 1, vk::SampleCountFlagBits::e1,
+                    vk::ImageTiling::eOptimal, transfer | vk::ImageUsageFlagBits::eTransferSrc});
+                auto memory = allocate(device->getImageMemoryRequirements(*image), vk::MemoryPropertyFlagBits::eDeviceLocal);
+                device->bindImageMemory(*image, *memory, 0);
+                command.reset();
+                command.begin({vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+                vk::ImageMemoryBarrier barrier({}, vk::AccessFlagBits::eTransferWrite,
+                    vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal,
+                    VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, *image, range);
+                command.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe, transferStage, {}, {}, {}, barrier);
+                command.copyBufferToImage(*staging, *image, vk::ImageLayout::eTransferDstOptimal,
+                                          vk::BufferImageCopy(0, 0, 0, layer, {}, size));
+                barrier.setOldLayout(vk::ImageLayout::eTransferDstOptimal).setNewLayout(vk::ImageLayout::eTransferSrcOptimal)
+                       .setSrcAccessMask(vk::AccessFlagBits::eTransferWrite).setDstAccessMask(vk::AccessFlagBits::eTransferRead);
+                command.pipelineBarrier(transferStage, transferStage, {}, {}, {}, barrier);
+                command.end();
+                queue.submit(vk::SubmitInfo({}, {}, command));
+                queue.waitIdle();
+                newTiles.push_back({int(tileX), int(tileY), tw, th, std::move(memory), std::move(image)});
+            }
+        }
+        mapTiles = std::move(newTiles);
         mapFormat = format;
         patches.clear();
         patchPixels.clear();
@@ -396,7 +431,7 @@ struct VulkanWindow::Impl {
     }
 
     void queuePatch(int x, int y, const assets::MapImage& patch) {
-        if (!map) throw std::invalid_argument("Map region update without a map");
+        if (!hasMap()) throw std::invalid_argument("Map region update without a map");
         if (!patch.width || !patch.height || std::uint64_t(patch.width) * patch.height * 4 != patch.rgba.size())
             throw std::invalid_argument("Unsupported map patch dimensions or pixel count");
         // Clip in 64 bits: the origin and size together can exceed int.
@@ -413,7 +448,7 @@ struct VulkanWindow::Impl {
         }
         patches.push_back({offset, int(left), int(top), unsigned(width), unsigned(height)});
         // Without presentation (a minimized window) the queue would grow without bound.
-        const auto budget = std::max<std::size_t>(std::size_t(mapSize.width) * mapSize.height * 4, 1u << 20);
+        const auto budget = std::clamp<std::size_t>(std::size_t(mapSize.width) * mapSize.height * 4, 1u << 20, 64u << 20);
         if (patchPixels.size() > budget) flushPatches();
     }
 
@@ -438,23 +473,54 @@ struct VulkanWindow::Impl {
 
     // Records the staged patches into the open command buffer. The map is left readable again.
     void recordPatches() {
+        std::vector<bool> touched(mapTiles.size(), false);
+        for (const auto& p : patches) {
+            const int px1 = p.x + int(p.width);
+            const int py1 = p.y + int(p.height);
+            for (std::size_t ti = 0; ti < mapTiles.size(); ++ti) {
+                const auto& t = mapTiles[ti];
+                if (px1 > t.x && p.x < t.x + int(t.width) && py1 > t.y && p.y < t.y + int(t.height))
+                    touched[ti] = true;
+            }
+        }
         const vk::ImageSubresourceRange range(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1);
-        vk::ImageMemoryBarrier barrier(vk::AccessFlagBits::eTransferRead, vk::AccessFlagBits::eTransferWrite,
-            vk::ImageLayout::eTransferSrcOptimal, vk::ImageLayout::eTransferDstOptimal,
-            VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, *map, range);
-        command.pipelineBarrier(transferStage, transferStage, {}, {}, {}, barrier);
+        std::vector<vk::ImageMemoryBarrier> toDst;
+        std::vector<vk::ImageMemoryBarrier> toSrc;
+        for (std::size_t ti = 0; ti < mapTiles.size(); ++ti) {
+            if (!touched[ti]) continue;
+            toDst.emplace_back(vk::AccessFlagBits::eTransferRead, vk::AccessFlagBits::eTransferWrite,
+                vk::ImageLayout::eTransferSrcOptimal, vk::ImageLayout::eTransferDstOptimal,
+                VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, *mapTiles[ti].image, range);
+            toSrc.emplace_back(vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eTransferRead,
+                vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eTransferSrcOptimal,
+                VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, *mapTiles[ti].image, range);
+        }
+        if (toDst.empty()) return;
+        command.pipelineBarrier(transferStage, transferStage, {}, {}, {}, toDst);
         const vk::ImageSubresourceLayers layer(vk::ImageAspectFlagBits::eColor, 0, 0, 1);
         const vk::MemoryBarrier ordered(vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eTransferWrite);
         bool first = true;
         for (const auto& p : patches) {
             // Later patches may overlap earlier ones and must land on top of them.
             if (!std::exchange(first, false)) command.pipelineBarrier(transferStage, transferStage, {}, ordered, {}, {});
-            command.copyBufferToImage(*patchBuffer, *map, vk::ImageLayout::eTransferDstOptimal,
-                vk::BufferImageCopy(p.offset, 0, 0, layer, {p.x, p.y, 0}, {p.width, p.height, 1}));
+            const int px1 = p.x + int(p.width);
+            const int py1 = p.y + int(p.height);
+            for (std::size_t ti = 0; ti < mapTiles.size(); ++ti) {
+                if (!touched[ti]) continue;
+                const auto& tile = mapTiles[ti];
+                const int ix0 = std::max(p.x, tile.x);
+                const int iy0 = std::max(p.y, tile.y);
+                const int ix1 = std::min(px1, tile.x + int(tile.width));
+                const int iy1 = std::min(py1, tile.y + int(tile.height));
+                if (ix1 <= ix0 || iy1 <= iy0) continue;
+                const vk::DeviceSize bufOff = p.offset +
+                    (vk::DeviceSize(iy0 - p.y) * p.width + vk::DeviceSize(ix0 - p.x)) * 4;
+                command.copyBufferToImage(*patchBuffer, *tile.image, vk::ImageLayout::eTransferDstOptimal,
+                    vk::BufferImageCopy(bufOff, p.width, 0, layer, {ix0 - tile.x, iy0 - tile.y, 0},
+                                        {unsigned(ix1 - ix0), unsigned(iy1 - iy0), 1}));
+            }
         }
-        barrier.setOldLayout(vk::ImageLayout::eTransferDstOptimal).setNewLayout(vk::ImageLayout::eTransferSrcOptimal)
-               .setSrcAccessMask(vk::AccessFlagBits::eTransferWrite).setDstAccessMask(vk::AccessFlagBits::eTransferRead);
-        command.pipelineBarrier(transferStage, transferStage, {}, {}, {}, barrier);
+        command.pipelineBarrier(transferStage, transferStage, {}, {}, {}, toSrc);
     }
 
     // Applies the queue now instead of with the next frame.
@@ -473,33 +539,45 @@ struct VulkanWindow::Impl {
     }
 
     assets::MapImage captureMap() {
-        if (!map) throw std::invalid_argument("Map capture without a map");
+        if (!hasMap()) throw std::invalid_argument("Map capture without a map");
         flushPatches();
         device->waitIdle();
         assets::MapImage result{mapSize.width, mapSize.height, {}};
         result.rgba.resize(std::size_t(mapSize.width) * mapSize.height * 4);
+        vk::DeviceSize maxTileBytes = 0;
+        for (const auto& t : mapTiles) {
+            maxTileBytes = std::max(maxTileBytes, vk::DeviceSize(t.width) * t.height * 4);
+        }
         vk::UniqueDeviceMemory memory;
-        auto buffer = device->createBufferUnique({{}, result.rgba.size(), vk::BufferUsageFlagBits::eTransferDst});
+        auto buffer = device->createBufferUnique({{}, maxTileBytes, vk::BufferUsageFlagBits::eTransferDst});
         memory = allocate(device->getBufferMemoryRequirements(*buffer),
             vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
         device->bindBufferMemory(*buffer, *memory, 0);
-        command.reset();
-        command.begin({vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
         const vk::ImageSubresourceLayers layer(vk::ImageAspectFlagBits::eColor, 0, 0, 1);
-        command.copyImageToBuffer(*map, vk::ImageLayout::eTransferSrcOptimal, *buffer,
-            vk::BufferImageCopy(0, 0, 0, layer, {}, {mapSize.width, mapSize.height, 1}));
-        command.end();
-        queue.submit(vk::SubmitInfo({}, {}, command));
-        queue.waitIdle();
-        const auto* pixels = device->mapMemory(*memory, 0, result.rgba.size());
-        std::memcpy(result.rgba.data(), pixels, result.rgba.size());
-        device->unmapMemory(*memory);
+        for (const auto& tile : mapTiles) {
+            command.reset();
+            command.begin({vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+            command.copyImageToBuffer(*tile.image, vk::ImageLayout::eTransferSrcOptimal, *buffer,
+                vk::BufferImageCopy(0, 0, 0, layer, {}, {tile.width, tile.height, 1}));
+            command.end();
+            queue.submit(vk::SubmitInfo({}, {}, command));
+            queue.waitIdle();
+            const std::size_t tileBytes = std::size_t(tile.width) * tile.height * 4;
+            const auto* pixels = static_cast<const std::uint8_t*>(device->mapMemory(*memory, 0, tileBytes));
+            for (unsigned row = 0; row < tile.height; ++row) {
+                auto* dstRow = result.rgba.data() +
+                    (std::size_t(tile.y + int(row)) * mapSize.width + std::size_t(tile.x)) * 4;
+                std::memcpy(dstRow, pixels + std::size_t(row) * tile.width * 4, std::size_t(tile.width) * 4);
+            }
+            device->unmapMemory(*memory);
+        }
         return result;
     }
 
-    // The map occupies the window above the command bar, when there is one.
+    // The map occupies the full window beneath a transparent HUD, or the area above an opaque bar.
     int viewHeight() const {
-        const int bar = int(overlays[std::size_t(OverlaySlot::hud)].height);
+        const auto& hud = overlays[std::size_t(OverlaySlot::hud)];
+        const int bar = hud.hasAlpha ? 0 : int(hud.height);
         return std::max(1, int(activeExtent.height) - bar);
     }
 
@@ -508,7 +586,7 @@ struct VulkanWindow::Impl {
     }
 
     void cameraEvent(const SDL_Event& event) {
-        if (!map) return;
+        if (!hasMap()) return;
         if (event.type == SDL_EVENT_MOUSE_WHEEL) {
             double delta = event.wheel.direction == SDL_MOUSEWHEEL_FLIPPED ? -event.wheel.y : event.wheel.y;
             scale = std::clamp(scale * std::pow(1.25, delta), std::min(1.0, fitScale()), 8.0);
@@ -545,13 +623,30 @@ struct VulkanWindow::Impl {
         scaleY = double(dstH) / srcH;
         screenLeft = left - x * scaleX;
         screenTop = top - y * scaleY;
-        const vk::ImageBlit region(layer, {vk::Offset3D(x, y, 0), vk::Offset3D(x + srcW, y + srcH, 1)},
-            layer, {vk::Offset3D(left, top, 0), vk::Offset3D(left + dstW, top + dstH, 1)});
         // Linear only where the map format supports it; otherwise stay with nearest.
         const bool linear = mapLinear && bool(gpu.getFormatProperties(mapFormat).optimalTilingFeatures &
                                               vk::FormatFeatureFlagBits::eSampledImageFilterLinear);
-        command.blitImage(*map, vk::ImageLayout::eTransferSrcOptimal, destination,
-                          vk::ImageLayout::eTransferDstOptimal, region, linear ? vk::Filter::eLinear : vk::Filter::eNearest);
+        const auto filter = linear ? vk::Filter::eLinear : vk::Filter::eNearest;
+        const int srcX1 = x + srcW, srcY1 = y + srcH;
+        for (const auto& tile : mapTiles) {
+            const int sx0 = std::max(x, tile.x);
+            const int sy0 = std::max(y, tile.y);
+            const int sx1 = std::min(srcX1, tile.x + int(tile.width));
+            const int sy1 = std::min(srcY1, tile.y + int(tile.height));
+            if (sx1 <= sx0 || sy1 <= sy0) continue;
+            const int dx0 = std::clamp(int(std::lround(screenLeft + sx0 * scaleX)), left, left + dstW);
+            const int dy0 = std::clamp(int(std::lround(screenTop + sy0 * scaleY)), top, top + dstH);
+            const int dx1 = std::clamp(int(std::lround(screenLeft + sx1 * scaleX)), left, left + dstW);
+            const int dy1 = std::clamp(int(std::lround(screenTop + sy1 * scaleY)), top, top + dstH);
+            if (dx1 <= dx0 || dy1 <= dy0) continue;
+            const vk::ImageBlit region(
+                layer,
+                {vk::Offset3D(sx0 - tile.x, sy0 - tile.y, 0), vk::Offset3D(sx1 - tile.x, sy1 - tile.y, 1)},
+                layer,
+                {vk::Offset3D(dx0, dy0, 0), vk::Offset3D(dx1, dy1, 1)});
+            command.blitImage(*tile.image, vk::ImageLayout::eTransferSrcOptimal, destination,
+                              vk::ImageLayout::eTransferDstOptimal, region, filter);
+        }
         mapScreenRect = vk::Rect2D({left, top}, {unsigned(dstW), unsigned(dstH)});
     }
 
@@ -671,6 +766,60 @@ struct VulkanWindow::Impl {
         spritePipelineFormat = surfaceFormat;
     }
 
+    static void premultiplyInto(const std::vector<std::uint8_t>& src, std::uint8_t* dst, bool srgb) {
+        // Callers supply straight alpha. Stored premultiplied, so linear filtering cannot
+        // pull the colour of transparent texels into an edge. For an sRGB image the
+        // multiply happens in linear light, using a precomputed 64 KiB exact [alpha][value] LUT.
+        static const auto srgbPremul = [] {
+            std::array<float, 256> toLinear{};
+            for (int i = 0; i < 256; ++i) {
+                const float c = i / 255.f;
+                toLinear[i] = c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f);
+            }
+            std::array<std::uint8_t, 256 * 256> lut{};
+            for (int a = 0; a < 256; ++a) {
+                const float af = a / 255.f;
+                for (int v = 0; v < 256; ++v) {
+                    if (a == 255) lut[a * 256 + v] = std::uint8_t(v);
+                    else if (a == 0) lut[a * 256 + v] = 0;
+                    else {
+                        const float linear = toLinear[v] * af;
+                        const float encoded = linear <= 0.0031308f ? linear * 12.92f : 1.055f * std::pow(linear, 1 / 2.4f) - 0.055f;
+                        lut[a * 256 + v] = std::uint8_t(std::lround(std::clamp(encoded, 0.f, 1.f) * 255));
+                    }
+                }
+            }
+            return lut;
+        }();
+        const std::size_t n = src.size();
+        if (srgb) {
+            for (std::size_t i = 0; i < n; i += 4) {
+                const unsigned alpha = src[i + 3];
+                const auto* row = &srgbPremul[alpha * 256];
+                dst[i + 0] = row[src[i + 0]];
+                dst[i + 1] = row[src[i + 1]];
+                dst[i + 2] = row[src[i + 2]];
+                dst[i + 3] = std::uint8_t(alpha);
+            }
+        } else {
+            for (std::size_t i = 0; i < n; i += 4) {
+                const unsigned alpha = src[i + 3];
+                if (alpha == 255) {
+                    dst[i + 0] = src[i + 0];
+                    dst[i + 1] = src[i + 1];
+                    dst[i + 2] = src[i + 2];
+                } else if (!alpha) {
+                    dst[i + 0] = dst[i + 1] = dst[i + 2] = 0;
+                } else {
+                    dst[i + 0] = std::uint8_t((unsigned(src[i + 0]) * alpha + 127) / 255);
+                    dst[i + 1] = std::uint8_t((unsigned(src[i + 1]) * alpha + 127) / 255);
+                    dst[i + 2] = std::uint8_t((unsigned(src[i + 2]) * alpha + 127) / 255);
+                }
+                dst[i + 3] = std::uint8_t(alpha);
+            }
+        }
+    }
+
     // Creates or replaces the GPU image for a slot from its kept pixels.
     void uploadAtlas(unsigned slot) {
         auto& atlas = atlases[slot];
@@ -688,31 +837,7 @@ struct VulkanWindow::Impl {
             vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
         device->bindBufferMemory(*staging, *stagingMemory, 0);
         auto* mapped = static_cast<std::uint8_t*>(device->mapMemory(*stagingMemory, 0, atlas.pixels.size()));
-        // Callers supply straight alpha. Stored premultiplied, so linear filtering cannot
-        // pull the colour of transparent texels into an edge. For an sRGB image the
-        // multiply happens in linear light, which is where the sampler filters.
-        static const auto toLinear = [] {
-            std::array<float, 256> table{};
-            for (int i = 0; i < 256; ++i) {
-                const float c = i / 255.f;
-                table[i] = c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f);
-            }
-            return table;
-        }();
-        for (std::size_t i = 0; i < atlas.pixels.size(); i += 4) {
-            const unsigned alpha = atlas.pixels[i + 3];
-            for (int c = 0; c < 3; ++c) {
-                const unsigned value = atlas.pixels[i + c];
-                if (alpha == 255) mapped[i + c] = std::uint8_t(value);
-                else if (!alpha) mapped[i + c] = 0;
-                else if (srgb) {
-                    const float linear = toLinear[value] * (alpha / 255.f);
-                    const float encoded = linear <= 0.0031308f ? linear * 12.92f : 1.055f * std::pow(linear, 1 / 2.4f) - 0.055f;
-                    mapped[i + c] = std::uint8_t(std::lround(std::clamp(encoded, 0.f, 1.f) * 255));
-                } else mapped[i + c] = std::uint8_t((value * alpha + 127) / 255);
-            }
-            mapped[i + 3] = std::uint8_t(alpha);
-        }
+        premultiplyInto(atlas.pixels, mapped, srgb);
         device->unmapMemory(*stagingMemory);
         const vk::Extent3D size(atlas.width, atlas.height, 1);
         vk::UniqueDeviceMemory memory;
@@ -744,6 +869,7 @@ struct VulkanWindow::Impl {
         atlas.image = std::move(image);
         atlas.memory = std::move(memory);
         atlas.format = format;
+        atlas.pendingUpload = false;
     }
 
     void setSpriteAtlas(unsigned slot, const assets::MapImage& data) {
@@ -948,9 +1074,50 @@ struct VulkanWindow::Impl {
     }
 
     // Called with no submitted work pending, so the buffer can be replaced.
-    void uploadOverlay(Overlay& overlay) {
+    void uploadOverlay(Overlay& overlay, OverlaySlot slot) {
         overlay.stale = false;
         if (!overlay.width) return;
+        if (slot == OverlaySlot::hud && overlay.hasAlpha) {
+            if (!hudQuadBuffer) {
+                const vk::DeviceSize bytes = 6 * sizeof(SpriteVertex);
+                auto buffer = device->createBufferUnique({{}, bytes, vk::BufferUsageFlagBits::eVertexBuffer});
+                auto memory = allocate(device->getBufferMemoryRequirements(*buffer),
+                    vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+                device->bindBufferMemory(*buffer, *memory, 0);
+                hudQuadBuffer = std::move(buffer);
+                hudQuadMemory = std::move(memory);
+            }
+            const bool srgb = srgbSurface();
+            const bool unorm = surfaceFormat == vk::Format::eR8G8B8A8Unorm || surfaceFormat == vk::Format::eB8G8R8A8Unorm;
+            if (!srgb && !unorm) throw std::runtime_error("Sprites require an RGBA8 or BGRA8 surface");
+            const auto format = unorm ? vk::Format::eR8G8B8A8Unorm : vk::Format::eR8G8B8A8Srgb;
+            auto& atlas = atlases[hudAtlas];
+            if (atlas.image && atlas.width == overlay.width && atlas.height == overlay.height && atlas.format == format) {
+                ensureSpritePipeline();
+                if (overlay.pixels.size() > atlas.stagingCapacity) {
+                    const vk::DeviceSize cap = std::max<vk::DeviceSize>(overlay.pixels.size(), atlas.stagingCapacity * 2);
+                    auto buffer = device->createBufferUnique({{}, cap, vk::BufferUsageFlagBits::eTransferSrc});
+                    auto memory = allocate(device->getBufferMemoryRequirements(*buffer),
+                        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+                    device->bindBufferMemory(*buffer, *memory, 0);
+                    atlas.stagingBuffer = std::move(buffer);
+                    atlas.stagingMemory = std::move(memory);
+                    atlas.stagingCapacity = cap;
+                }
+                auto* mapped = static_cast<std::uint8_t*>(device->mapMemory(*atlas.stagingMemory, 0, overlay.pixels.size()));
+                premultiplyInto(overlay.pixels, mapped, srgb);
+                device->unmapMemory(*atlas.stagingMemory);
+                atlas.pixels = overlay.pixels;
+                atlas.pendingUpload = true;
+                return;
+            }
+            atlas.pixels = overlay.pixels;
+            atlas.width = overlay.width;
+            atlas.height = overlay.height;
+            atlas.pendingUpload = false;
+            uploadAtlas(hudAtlas);
+            return;
+        }
         const bool bgr = surfaceFormat == vk::Format::eB8G8R8A8Srgb || surfaceFormat == vk::Format::eB8G8R8A8Unorm;
         if (!bgr && surfaceFormat != vk::Format::eR8G8B8A8Srgb && surfaceFormat != vk::Format::eR8G8B8A8Unorm)
             throw std::runtime_error("Overlay requires an RGBA8 or BGRA8 surface");
@@ -995,6 +1162,58 @@ struct VulkanWindow::Impl {
                 {dstX, dstY, 0}, {unsigned(copyW), unsigned(copyH), 1}));
     }
 
+    void stageHudQuad(const Overlay& overlay) {
+        if (!overlay.width || !overlay.hasAlpha || !hudQuadMemory) return;
+        const float left = float((int(activeExtent.width) - int(overlay.width)) / 2);
+        const float top = float(int(activeExtent.height) - int(overlay.height));
+        const float right = left + float(overlay.width);
+        const float bottom = top + float(overlay.height);
+        const SpriteVertex corners[4] = {
+            {left, top, 0.f, 0.f, 1.f, 1.f},
+            {right, top, 1.f, 0.f, 1.f, 1.f},
+            {right, bottom, 1.f, 1.f, 1.f, 1.f},
+            {left, bottom, 0.f, 1.f, 1.f, 1.f},
+        };
+        auto* out = static_cast<SpriteVertex*>(device->mapMemory(*hudQuadMemory, 0, 6 * sizeof(SpriteVertex)));
+        for (int corner : {0, 1, 2, 0, 2, 3}) *out++ = corners[corner];
+        device->unmapMemory(*hudQuadMemory);
+    }
+
+    void drawHudOverlay(vk::Image destination, vk::ImageView view, const Overlay& overlay) {
+        if (!overlay.width || !hudQuadBuffer || !spritePipeline || !atlases[hudAtlas].set) return;
+        const vk::ImageSubresourceRange range(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1);
+        const auto colourAccess = vk::AccessFlagBits::eColorAttachmentRead | vk::AccessFlagBits::eColorAttachmentWrite;
+        vk::ImageMemoryBarrier barrier(vk::AccessFlagBits::eTransferWrite, colourAccess,
+            vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eColorAttachmentOptimal,
+            VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, destination, range);
+        command.pipelineBarrier(transferStage, vk::PipelineStageFlagBits::eColorAttachmentOutput, {}, {}, {}, barrier);
+        vk::RenderingAttachmentInfo target;
+        target.imageView = view;
+        target.imageLayout = vk::ImageLayout::eColorAttachmentOptimal;
+        target.loadOp = vk::AttachmentLoadOp::eLoad;
+        target.storeOp = vk::AttachmentStoreOp::eStore;
+        vk::RenderingInfo rendering;
+        rendering.renderArea = vk::Rect2D({0, 0}, activeExtent);
+        rendering.layerCount = 1;
+        rendering.colorAttachmentCount = 1;
+        rendering.pColorAttachments = &target;
+        command.beginRendering(rendering);
+        command.bindPipeline(vk::PipelineBindPoint::eGraphics, *spritePipeline);
+        command.setViewport(0, vk::Viewport(0, 0, float(activeExtent.width), float(activeExtent.height), 0, 1));
+        command.setScissor(0, vk::Rect2D({0, 0}, activeExtent));
+        const float push[5] = {2.f / float(activeExtent.width), 2.f / float(activeExtent.height),
+                               -1.f, -1.f, srgbSurface() ? 1.f : 0.f};
+        command.pushConstants(*spritePipelineLayout, vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
+                              0, sizeof push, push);
+        command.bindVertexBuffers(0, *hudQuadBuffer, vk::DeviceSize(0));
+        command.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, *spritePipelineLayout, 0, atlases[hudAtlas].set, {});
+        command.draw(6, 1, 0, 0);
+        command.endRendering();
+        barrier.setOldLayout(vk::ImageLayout::eColorAttachmentOptimal).setNewLayout(vk::ImageLayout::eTransferDstOptimal)
+               .setSrcAccessMask(colourAccess).setDstAccessMask(vk::AccessFlagBits::eTransferWrite);
+        command.pipelineBarrier(vk::PipelineStageFlagBits::eColorAttachmentOutput, transferStage, {}, {}, {}, barrier);
+    }
+
     void record(vk::Image image, vk::ImageView view, vk::Buffer capture = {}) {
         command.reset();
         command.begin({vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
@@ -1003,10 +1222,26 @@ struct VulkanWindow::Impl {
             vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal,
             VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, image, range);
         command.pipelineBarrier(transferStage, transferStage, {}, {}, {}, barrier);
-        if (map && !patches.empty()) recordPatches();
+        if (hasMap() && !patches.empty()) recordPatches();
+        if (atlases[hudAtlas].pendingUpload && atlases[hudAtlas].image && atlases[hudAtlas].stagingBuffer) {
+            auto& hudA = atlases[hudAtlas];
+            const vk::ImageSubresourceRange hudRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1);
+            vk::ImageMemoryBarrier toDst({}, vk::AccessFlagBits::eTransferWrite,
+                vk::ImageLayout::eShaderReadOnlyOptimal, vk::ImageLayout::eTransferDstOptimal,
+                VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, *hudA.image, hudRange);
+            command.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe, transferStage, {}, {}, {}, toDst);
+            command.copyBufferToImage(*hudA.stagingBuffer, *hudA.image, vk::ImageLayout::eTransferDstOptimal,
+                vk::BufferImageCopy(0, 0, 0, {vk::ImageAspectFlagBits::eColor, 0, 0, 1}, {},
+                                    {hudA.width, hudA.height, 1}));
+            vk::ImageMemoryBarrier toRead(vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eShaderRead,
+                vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal,
+                VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, *hudA.image, hudRange);
+            command.pipelineBarrier(transferStage, vk::PipelineStageFlagBits::eFragmentShader, {}, {}, {}, toRead);
+            hudA.pendingUpload = false;
+        }
         const vk::ClearColorValue color(std::array<float, 4>{0.055f, 0.12f, 0.16f, 1.f});
         command.clearColorImage(image, vk::ImageLayout::eTransferDstOptimal, color, range);
-        if (map) {
+        if (hasMap()) {
             const vk::MemoryBarrier clearFinished(vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eTransferWrite);
             command.pipelineBarrier(transferStage, transferStage, {}, clearFinished, {}, {});
             drawMap(image);
@@ -1014,8 +1249,12 @@ struct VulkanWindow::Impl {
             drawBars(image);
             drawOutlines(image);
         }
-        for (auto slot : {OverlaySlot::hud, OverlaySlot::tooltip, OverlaySlot::notice, OverlaySlot::panel, OverlaySlot::menu})
-            if (const auto& overlay = overlays[std::size_t(slot)]; overlay.width) drawOverlay(image, overlay, slot);
+        for (auto slot : {OverlaySlot::hud, OverlaySlot::tooltip, OverlaySlot::notice, OverlaySlot::panel, OverlaySlot::menu}) {
+            if (const auto& overlay = overlays[std::size_t(slot)]; overlay.width) {
+                if (slot == OverlaySlot::hud && overlay.hasAlpha) drawHudOverlay(image, view, overlay);
+                else drawOverlay(image, overlay, slot);
+            }
+        }
         auto finalLayout = vk::ImageLayout::eTransferDstOptimal;
         auto finalAccess = vk::AccessFlags(vk::AccessFlagBits::eTransferWrite);
         if (capture) {
@@ -1040,7 +1279,9 @@ struct VulkanWindow::Impl {
         try {
             if (dirty && !rebuild()) return false;
             if (device->waitForFences(*submitted, true, acquireTimeoutNs) != vk::Result::eSuccess) return false;
-            for (auto& overlay : overlays) if (overlay.stale) uploadOverlay(overlay);
+            for (std::size_t s = 0; s < overlays.size(); ++s)
+                if (overlays[s].stale) uploadOverlay(overlays[s], OverlaySlot(s));
+            stageHudQuad(overlays[std::size_t(OverlaySlot::hud)]);
             stagePatches();
             if (spritesStale) stageSprites();
             auto [status, index] = device->acquireNextImageKHR(*chain, acquireTimeoutNs, *acquired);
@@ -1101,7 +1342,7 @@ struct VulkanWindow::Impl {
 
 VulkanWindow::VulkanWindow(SDL_Window* w, ValidationReport* report) : impl_(std::make_unique<Impl>(w, report)) {}
 VulkanWindow::~VulkanWindow() = default;
-void VulkanWindow::setMap(const assets::MapImage& map) { impl_->setMap(map); }
+void VulkanWindow::setMap(const assets::MapImage& map, unsigned maxTileSize) { impl_->setMap(map, maxTileSize); }
 void VulkanWindow::updateMapRegion(int x, int y, const assets::MapImage& patch) { impl_->queuePatch(x, y, patch); }
 assets::MapImage VulkanWindow::captureMap() { return impl_->captureMap(); }
 void VulkanWindow::focusMap(int x, int y, bool zoomFromOverview) {
@@ -1109,6 +1350,12 @@ void VulkanWindow::focusMap(int x, int y, bool zoomFromOverview) {
         impl_->scale = std::max(1.0,impl_->scale);
     impl_->centerX = x;
     impl_->centerY = y;
+}
+void VulkanWindow::panMap(double screenDx, double screenDy) {
+    if (!impl_->hasMap() || (screenDx == 0.0 && screenDy == 0.0)) return;
+    const auto [sx, sy] = impl_->windowScale();
+    impl_->centerX += screenDx * sx / impl_->scale;
+    impl_->centerY += screenDy * sy / impl_->scale;
 }
 std::pair<double, double> VulkanWindow::mapPosition(float x, float y) const {
     if (!impl_->transformReady) return {-1, -1};
@@ -1189,12 +1436,19 @@ void VulkanWindow::setOverlay(unsigned width, unsigned height, std::span<const s
     overlay.pixels.assign(rgba.begin(), rgba.end());
     overlay.width = width;
     overlay.height = height;
+    overlay.hasAlpha = false;
+    if (slot == OverlaySlot::hud) {
+        for (std::size_t i = 3; i < rgba.size(); i += 4) {
+            if (rgba[i] < 255) { overlay.hasAlpha = true; break; }
+        }
+    }
     overlay.stale = true;
 }
 void VulkanWindow::clearOverlay(OverlaySlot slot) {
     auto& overlay = impl_->overlays.at(std::size_t(slot));
     overlay.width = overlay.height = 0;
     overlay.stale = false;
+    overlay.hasAlpha = false;
 }
 void VulkanWindow::moveOverlay(OverlaySlot slot, int left, int top) {
     auto& overlay = impl_->overlays.at(std::size_t(slot));

@@ -1,4 +1,5 @@
 #include "audio/sound_player.hpp"
+#include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -203,6 +204,47 @@ int main() {
         std::vector<std::uint8_t> pcm;
         if (ss2::loadWavPcm(path, sampleRate, channels, pcm))
             throw std::runtime_error("a file without a RIFF header must be rejected");
+    }
+
+    {
+        if (ss2::clampVolume(-0.5f) != 0.0f) throw std::runtime_error("clampVolume negative did not clamp to 0");
+        if (ss2::clampVolume(2.5f) != 1.0f) throw std::runtime_error("clampVolume overflow did not clamp to 1");
+        if (std::abs(ss2::clampVolume(0.4f) - 0.4f) > 0.001f) {
+            throw std::runtime_error("clampVolume 0.4 mismatch");
+        }
+        if (ss2::scaledSfxGain(0.8f, 0.0f) != 0.0f || ss2::scaledSfxGain(0.8f, 0.0005f) != 0.0f) {
+            throw std::runtime_error("scaledSfxGain muted master must yield 0");
+        }
+        if (std::abs(ss2::scaledSfxGain(0.65f, 0.5f) - 0.325f) > 0.001f) {
+            throw std::runtime_error("scaledSfxGain 0.65 * 0.5 mismatch");
+        }
+        if (std::abs(ss2::scaledSfxGain(0.01f, 0.5f) - 0.02f) > 0.001f) {
+            throw std::runtime_error("scaledSfxGain minimum clamp 0.02 mismatch");
+        }
+        if (ss2::scaledSfxGain(2.0f, 2.0f) != 1.0f) {
+            throw std::runtime_error("scaledSfxGain maximum clamp 1.0 mismatch");
+        }
+    }
+
+    {
+        if (ss2::spatialAttenuation(0.0, 0.0, 600.0) != 1.0f ||
+            ss2::spatialAttenuation(250.0, 0.0, 600.0) != 1.0f) {
+            throw std::runtime_error("spatialAttenuation inside viewport must be 1.0");
+        }
+        const float mid = ss2::spatialAttenuation(1110.0, 0.0, 600.0);
+        if (mid <= 0.20f || mid >= 0.30f) {
+            throw std::runtime_error("spatialAttenuation mid-distance quadratic rolloff mismatch");
+        }
+        if (ss2::spatialAttenuation(5000.0, 0.0, 600.0) != 0.0f) {
+            throw std::runtime_error("spatialAttenuation far off-screen must be 0.0");
+        }
+        if (ss2::spatialGain(0.5f, 5000.0, 0.0, 600.0) != 0.0f ||
+            ss2::spatialGain(0.5f, 1450.0, 0.0, 600.0) != 0.0f) {
+            throw std::runtime_error("spatialGain off-screen / sub-threshold culling mismatch");
+        }
+        if (std::abs(ss2::spatialGain(0.5f, 100.0, 100.0, 600.0) - 0.5f) > 0.001f) {
+            throw std::runtime_error("spatialGain in-view gain mismatch");
+        }
     }
 
     std::cout << "sound_player_test: ok\n";

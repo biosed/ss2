@@ -1,4 +1,5 @@
 #include "assets/sound_bank.hpp"
+#include "assets/sprite.hpp"
 #include <algorithm>
 #include <cctype>
 #include <fstream>
@@ -37,8 +38,8 @@ std::vector<std::uint8_t> readFileBytes(const std::filesystem::path& path) {
 } // namespace
 
 SoundBank SoundBank::load(const std::filesystem::path& gameDir) {
-    const auto hdr = readFileBytes(gameDir / "SOUNDS.HDR");
-    const auto rus = readFileBytes(gameDir / "SOUNDS.RUS");
+    const auto hdr = readFileBytes(resolveCaseInsensitivePath(gameDir, "SOUNDS.HDR"));
+    const auto rus = readFileBytes(resolveCaseInsensitivePath(gameDir, "SOUNDS.RUS"));
     return fromMemory(hdr, rus);
 }
 

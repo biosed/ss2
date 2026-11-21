@@ -6,8 +6,10 @@
 #include "assets/sprite.hpp"
 #include <algorithm>
 #include <map>
+#include <optional>
 #include <set>
 #include <stdexcept>
+#include <string_view>
 
 namespace ss2::assets {
 namespace {
@@ -19,6 +21,91 @@ int u16(View data, size_t pos) {
 }
 std::uint32_t u32(View data, size_t pos) {
     return unsigned(u16(data, pos)) | (unsigned(u16(data, pos + 2)) << 16);
+}
+
+std::optional<Bytes> tryReadSue(const std::filesystem::path& archive, std::string_view entry) {
+    try {
+        return readSueEntry(archive, entry);
+    } catch (const std::runtime_error& err) {
+        if (std::string_view(err.what()) == "SUE entry not found") return std::nullopt;
+        throw;
+    }
+}
+
+std::optional<std::string> resolveUnitStem(const std::filesystem::path& descArchive, bool hasDesc,
+                                           std::string_view unitId) {
+    if (hasDesc) {
+        if (const auto bytes = tryReadSue(descArchive, "UNITS\\" + std::string(unitId))) {
+            std::string_view text(reinterpret_cast<const char*>(bytes->data()), bytes->size());
+            while (!text.empty()) {
+                const auto eol = text.find_first_of("\r\n");
+                std::string_view line = (eol == std::string_view::npos) ? text : text.substr(0, eol);
+                text = (eol == std::string_view::npos) ? std::string_view{} : text.substr(eol + 1);
+                while (!line.empty() && (line.front() == ' ' || line.front() == '\t'))
+                    line.remove_prefix(1);
+                if (line.size() > 4 && equalsIgnoreCaseAscii(line.substr(0, 4), "file") &&
+                    (line[4] == ' ' || line[4] == '\t')) {
+                    line.remove_prefix(5);
+                    while (!line.empty() && (line.front() == ' ' || line.front() == '\t'))
+                        line.remove_prefix(1);
+                    const auto end = line.find_first_of(" \t\r\n");
+                    const auto stem = (end == std::string_view::npos) ? line : line.substr(0, end);
+                    if (stem.empty() || equalsIgnoreCaseAscii(stem, "nofile")) return std::nullopt;
+                    return std::string(stem);
+                }
+            }
+        }
+    }
+    return std::string(unitId);
+}
+
+std::optional<Bytes> tryLoadInfantryRs2(const std::filesystem::path& descArchive, bool hasDesc,
+                                        const std::filesystem::path& gameArchive,
+                                        std::string_view unitId) {
+    const auto stem = resolveUnitStem(descArchive, hasDesc, unitId);
+    if (!stem) return std::nullopt;
+    return tryReadSue(gameArchive, *stem + ".RS2");
+}
+
+InfantryPoses decodeRs2Poses(View rest, View palette, bool originalSize, int resolution,
+                             std::array<int, 4>* firstBounds = nullptr) {
+    const auto scaled = [originalSize](int edge) { return originalSize ? edge : int(std::lround(edge * 1.25)); };
+    InfantryPoses set;
+    // Gold indexes its group table by (2*animationState + stance)*8 + facing.
+    for (unsigned group = 0; group < 40; ++group) {
+        const auto count = u32(rest, 0), size = u32(rest, 4);
+        rest = rest.subspan(8);
+        if (count > 256 || size < count * 4 || size > rest.size())
+            throw std::runtime_error("Invalid RS2 group");
+        auto payload = rest.first(size);
+        rest = rest.subspan(size);
+        if (group >= 8 && group < 32) continue;
+        if (!count) {
+            if (group < 8) throw std::runtime_error("Missing standing infantry pose");
+            set[group - 24] = set[group - 32];
+            continue;
+        }
+        auto& frames = set[group < 8 ? group : group - 24];
+        for (unsigned i = 0; i < count; ++i) {
+            const auto begin = u32(payload, i * 4);
+            const auto end = i + 1 == count ? size : u32(payload, (i + 1) * 4);
+            if (begin < count * 4 || end < begin || end > size)
+                throw std::runtime_error("Invalid RS2 frame");
+            const auto sprite = payload.subspan(begin, end - begin);
+            const int x = std::int16_t(u16(sprite, 0)), y = std::int16_t(u16(sprite, 2));
+            const int w = u16(sprite, 4), h = u16(sprite, 6);
+            if (!w || !h || w > 2048 || h > 2048)
+                throw std::runtime_error("Invalid infantry frame dimensions");
+            if (firstBounds && group == 0 && i == 0) *firstBounds = {x, y, w, h};
+            MapImage decoded{unsigned(w), unsigned(h), std::vector<std::uint8_t>(size_t(w) * h * 4)};
+            drawIndexedFrame(decoded, -x, -y, sprite, palette);
+            InfantryPose pose{scaled(x), scaled(y), scaled(x + w) - scaled(x), scaled(y + h) - scaled(y), {}};
+            if (originalSize && resolution == 1) pose.pixels = std::move(decoded);
+            else pose.pixels = resampleInfantry(decoded, pose.width * resolution, pose.height * resolution);
+            frames.push_back(std::move(pose));
+        }
+    }
+    return set;
 }
 
 // The v1 HD pack bakes the first standing frame of every soldier into its map.
@@ -51,76 +138,90 @@ void restoreFootprint(MapImage& hd, const MapImage& ground, int x, int y, int w,
 
 InfantryScene::InfantryScene(MapImage background, const std::filesystem::path& gameDir, std::span<const Placement> source,
                              bool originalSize, MapImage bakedHd, const std::filesystem::path& atlases, bool cleanGround,
-                             SceneryDepth depth, bool gpuSprites)
-    : resolution_(bakedHd.width ? 2 : 1), ground_(resolution_ == 2 ? std::move(bakedHd) : std::move(background)),
-      depth_(std::move(depth)), gpuSprites_(gpuSprites) {
+                             SceneryDepth depth, const std::map<std::string, unsigned>* gpuSlots, unsigned fogW, unsigned fogH)
+    : gameDir_(gameDir), originalSize_(originalSize), atlases_(atlases),
+      resolution_(bakedHd.width ? 2 : 1), ground_(resolution_ == 2 ? std::move(bakedHd) : std::move(background)),
+      depth_(std::move(depth)), fogW_(fogW), fogH_(fogH), gpuSlots_(gpuSlots) {
+    if (!fogW_ || !fogH_ || fogW_ > 512u || fogH_ > 512u)
+        throw std::runtime_error("Fog grid dimensions out of range");
     if (resolution_ == 2 && (ground_.width != background.width*2 || ground_.height != background.height*2))
         throw std::runtime_error("HD pack dimensions do not match 2x Tutorial I map");
-    if (!atlases.empty() && (resolution_ != 2 || !cleanGround))
+    if (!atlases_.empty() && (resolution_ != 2 || !cleanGround))
         throw std::runtime_error("Painted infantry require a clean 2x ground layer");
+    if (!gameDir_.empty()) {
+        archive_ = resolveCaseInsensitivePath(gameDir_, "game_common.sue");
+        descArchive_ = resolveCaseInsensitivePath(gameDir_, "desc_common.sue");
+        std::error_code ec;
+        hasArchive_ = std::filesystem::is_regular_file(archive_, ec);
+        hasDesc_ = std::filesystem::is_regular_file(descArchive_, ec);
+    }
     std::map<std::string, std::array<int,4>> bakedBounds;
-    std::set<std::string> paintedTypes;
-    const auto scaled = [originalSize](int edge) { return originalSize ? edge : int(std::lround(edge * 1.25)); };
-    // Original UNITS definitions in desc_common.sue give the file stem for each ID.
-    const std::map<std::string, std::string> names{
-        {"aguner", "A-2CASQ.RS2"}, {"aofficer", "AOfice.rs2"}, {"cmedic", "ALRUSMED.RS2"},
-        {"dflamer", "A-4.RS2"}, {"dguner", "DGuner.rs2"}, {"dofficer", "DOficer.rs2"},
-        {"dsmguner", "DMGun.rs2"}, {"rsmguner", "RMGun.rs2"}};
-    const auto archive = gameDir / "game_common.sue";
-    std::vector<std::uint8_t> palette;
     // mapunits is the opening live-list order. Simulation, formation dispatch
     // and equal-distance picking use it. The paint pass sorts its visible units.
     for (const auto& unit : source) {
-        if (!names.contains(unit.id)) continue;
-        if (!poses_.contains(unit.id) && !originalSize && !atlases.empty()) {
-            const auto path = atlases / (unit.id + ".png");
-            if (std::filesystem::is_regular_file(path)) {
-                poses_.emplace(unit.id, loadInfantryAtlas(path));
-                paintedTypes.insert(unit.id);
-            }
-        }
-        if (paintedTypes.contains(unit.id)) ++painted_;
-        if (!poses_.contains(unit.id)) {
-            if (palette.empty()) palette = readSueEntry(archive, "SOLD.PL");
-            const auto file = readSueEntry(archive, names.at(unit.id));
-            View rest = file;
-            auto& set = poses_[unit.id];
-            // Gold indexes its group table by (2*animationState + stance)*8 + facing.
-            for (unsigned group = 0; group < 40; ++group) {
-                const auto count = u32(rest, 0), size = u32(rest, 4);
-                rest = rest.subspan(8);
-                if (count > 256 || size < count*4 || size > rest.size())
-                    throw std::runtime_error("Invalid RS2 group");
-                auto payload = rest.first(size);
-                rest = rest.subspan(size);
-                if (group >= 8 && group < 32) continue;
-                if (!count) throw std::runtime_error("Missing standing infantry pose");
-                auto& frames = set[group < 8 ? group : group - 24];
-                for (unsigned i = 0; i < count; ++i) {
-                    const auto begin = u32(payload, i*4), end = i+1 == count ? size : u32(payload, (i+1)*4);
-                    if (begin < count*4 || end < begin || end > size) throw std::runtime_error("Invalid RS2 frame");
-                    const auto sprite = payload.subspan(begin, end-begin);
-                    const int x = std::int16_t(u16(sprite,0)), y = std::int16_t(u16(sprite,2));
-                    const int w = u16(sprite,4), h = u16(sprite,6);
-                    if (!w || !h || w > 2048 || h > 2048) throw std::runtime_error("Invalid infantry frame dimensions");
-                    if (group == 0 && i == 0) bakedBounds[unit.id] = {x,y,w,h};
-                    MapImage decoded{unsigned(w), unsigned(h), std::vector<std::uint8_t>(size_t(w)*h*4)};
-                    drawIndexedFrame(decoded, -x, -y, sprite, palette);
-                    InfantryPose pose{scaled(x), scaled(y), scaled(x+w)-scaled(x), scaled(y+h)-scaled(y), {}};
-                    if (originalSize && resolution_ == 1) pose.pixels = std::move(decoded);
-                    else pose.pixels = resampleInfantry(decoded, pose.width*resolution_, pose.height*resolution_);
-                    frames.push_back(std::move(pose));
-                }
-            }
+        std::array<int, 4> firstBounds{};
+        const bool hadPose = poses_.contains(unit.id);
+        if (!ensureClassLoaded(unit.id, &firstBounds)) continue;
+        if (!hadPose && !paintedTypes_.contains(unit.id)) {
+            bakedBounds[unit.id] = firstBounds;
         }
         units_.push_back({unit.id, unit.x, unit.y, unit.hp, unit.ammo, unit.group, unit.owner,
                           0,0,0,0, unsigned(unit.direction) & 7u});
+        units_.back().expa = unit.expa;
         bounds(units_.back());
         if (resolution_ == 2 && !cleanGround) {
             const auto [x,y,w,h] = bakedBounds.at(unit.id);
             restoreFootprint(ground_, background, unit.x+x, unit.y+y, w, h);
         }
     }
+}
+
+bool InfantryScene::ensureClassLoaded(const std::string& id, std::array<int, 4>* firstBounds) {
+    if (skippedTypes_.contains(id)) return false;
+    if (!poses_.contains(id)) {
+        if (!originalSize_ && !atlases_.empty()) {
+            const auto path = resolveCaseInsensitivePath(atlases_, id + ".png");
+            std::error_code ec;
+            if (std::filesystem::is_regular_file(path, ec)) {
+                poses_.emplace(id, loadInfantryAtlas(path));
+                paintedTypes_.insert(id);
+            }
+        }
+        if (!poses_.contains(id)) {
+            if (!hasArchive_) {
+                if (gameDir_.empty() && !atlases_.empty()) {
+                    skippedTypes_.insert(id);
+                    return false;
+                }
+                throw std::runtime_error("Cannot open SUE archive");
+            }
+            const auto file = tryLoadInfantryRs2(descArchive_, hasDesc_, archive_, id);
+            if (!file) {
+                skippedTypes_.insert(id);
+                return false;
+            }
+            if (palette_.empty()) palette_ = readSueEntry(archive_, "SOLD.PL");
+            std::array<int, 4> fb{};
+            poses_.emplace(id, decodeRs2Poses(*file, palette_, originalSize_, resolution_, &fb));
+            if (firstBounds) *firstBounds = fb;
+        }
+    }
+    if (paintedTypes_.contains(id)) ++painted_;
+    return true;
+}
+
+std::optional<std::pair<size_t, MapPatch>> InfantryScene::spawn(const Placement& p) {
+    if (!ensureClassLoaded(p.id)) return std::nullopt;
+    const size_t index = units_.size();
+    units_.push_back({p.id, p.x, p.y, p.hp, p.ammo, p.group, p.owner,
+                      0, 0, 0, 0, unsigned(p.direction) & 7u});
+    units_.back().expa = p.expa;
+    bounds(units_.back());
+    if (gpuDrawn(p.id)) return std::make_pair(index, MapPatch{0, 0, {}});
+    const auto& u = units_.back();
+    return std::make_pair(index, repaint(u.left * resolution_, u.top * resolution_,
+                                         (u.left + u.width) * resolution_,
+                                         (u.top + u.height) * resolution_));
 }
 
 const InfantryPose& InfantryScene::frame(const Infantry& unit) const {
@@ -146,11 +247,11 @@ bool revealed(const Infantry& unit, std::size_t index, const std::set<std::size_
 }
 
 std::vector<MapPatch> InfantryScene::setInspection(const std::set<std::size_t>& selected, Cursor cursor, int checkerPhase) {
-    if (gpuSprites_) return {};
     if (selected == selected_ && cursor == cursor_ && checkerPhase == checkerPhase_) return {};
     std::vector<std::size_t> changed;
     for (std::size_t i = 0; i < units_.size(); ++i) {
         const auto& u = units_[i];
+        if (gpuDrawn(u.id)) continue;
         const bool after = revealed(u,i,selected,cursor);
         if ((after != revealed(u,i,selected_,cursor_) || (after && checkerPhase != checkerPhase_)) &&
             depth_.intersects(u.left,u.top,u.width,u.height)) changed.push_back(i);
@@ -168,11 +269,101 @@ std::vector<MapPatch> InfantryScene::setInspection(const std::set<std::size_t>& 
     return result;
 }
 
+void InfantryScene::setVehicleLayer(VehicleLayer layer) {
+    vehicleLayer_ = std::move(layer);
+}
+
+MapPatch InfantryScene::repaintRegion(int left, int top, int right, int bottom) const {
+    return repaint(left, top, right, bottom);
+}
+
+MapPatch InfantryScene::stampGroundPatch(int x, int y, const MapImage& patch) {
+    if (!patch.width || !patch.height || patch.rgba.size() < std::size_t(patch.width) * patch.height * 4u) {
+        return {0, 0, {}};
+    }
+    depth_.clearRect(x, y, int(patch.width), int(patch.height));
+    const int dstLeft = std::clamp(x * resolution_, 0, int(ground_.width));
+    const int dstTop = std::clamp(y * resolution_, 0, int(ground_.height));
+    const int dstRight = std::clamp((x + int(patch.width)) * resolution_, dstLeft, int(ground_.width));
+    const int dstBottom = std::clamp((y + int(patch.height)) * resolution_, dstTop, int(ground_.height));
+    for (int dy = dstTop; dy < dstBottom; ++dy) {
+        const int sy = (dy / resolution_) - y;
+        if (sy < 0 || sy >= int(patch.height)) continue;
+        for (int dx = dstLeft; dx < dstRight; ++dx) {
+            const int sx = (dx / resolution_) - x;
+            if (sx < 0 || sx >= int(patch.width)) continue;
+            const auto* src = patch.rgba.data() + (std::size_t(sy) * patch.width + static_cast<std::size_t>(sx)) * 4u;
+            auto* dst = ground_.rgba.data() + (std::size_t(dy) * ground_.width + static_cast<std::size_t>(dx)) * 4u;
+            std::copy_n(src, 4u, dst);
+        }
+    }
+    return repaint(dstLeft, dstTop, dstRight, dstBottom);
+}
+
+MapImage InfantryScene::copyGroundRect(int x, int y, int width, int height) const {
+    if (width <= 0 || height <= 0 || ground_.width == 0 || ground_.height == 0) return {};
+    MapImage out{
+        static_cast<unsigned>(width),
+        static_cast<unsigned>(height),
+        std::vector<std::uint8_t>(std::size_t(width) * static_cast<std::size_t>(height) * 4u, 0)
+    };
+    for (int dy = 0; dy < height; ++dy) {
+        const int gy = (y + dy) * resolution_;
+        if (gy < 0 || gy >= int(ground_.height)) continue;
+        for (int dx = 0; dx < width; ++dx) {
+            const int gx = (x + dx) * resolution_;
+            if (gx < 0 || gx >= int(ground_.width)) continue;
+            const auto* src = ground_.rgba.data() + (std::size_t(gy) * ground_.width + static_cast<std::size_t>(gx)) * 4u;
+            auto* dst = out.rgba.data() + (std::size_t(dy) * out.width + static_cast<std::size_t>(dx)) * 4u;
+            std::copy_n(src, 4u, dst);
+        }
+    }
+    return out;
+}
+
+MapPatch InfantryScene::stampAlphaOverlay(int centerX, int centerY, const MapImage& sprite) {
+    if (!sprite.width || !sprite.height ||
+        sprite.rgba.size() < std::size_t(sprite.width) * sprite.height * 4u ||
+        !ground_.width || !ground_.height) {
+        return {0, 0, {}};
+    }
+    const int ox = centerX - int(sprite.width / 2);
+    const int oy = centerY - int(sprite.height / 2);
+    const int dstLeft = std::clamp(ox * resolution_, 0, int(ground_.width));
+    const int dstTop = std::clamp(oy * resolution_, 0, int(ground_.height));
+    const int dstRight = std::clamp((ox + int(sprite.width)) * resolution_, dstLeft, int(ground_.width));
+    const int dstBottom = std::clamp((oy + int(sprite.height)) * resolution_, dstTop, int(ground_.height));
+    if (dstLeft >= dstRight || dstTop >= dstBottom) return {0, 0, {}};
+    for (int dy = dstTop; dy < dstBottom; ++dy) {
+        const int sy = (dy / resolution_) - oy;
+        if (sy < 0 || sy >= int(sprite.height)) continue;
+        for (int dx = dstLeft; dx < dstRight; ++dx) {
+            const int sx = (dx / resolution_) - ox;
+            if (sx < 0 || sx >= int(sprite.width)) continue;
+            const auto* src = sprite.rgba.data() + (std::size_t(sy) * sprite.width + static_cast<std::size_t>(sx)) * 4u;
+            const unsigned a = src[3];
+            if (a == 0u) continue;
+            auto* dst = ground_.rgba.data() + (std::size_t(dy) * ground_.width + static_cast<std::size_t>(dx)) * 4u;
+            if (a == 255u) {
+                std::copy_n(src, 4u, dst);
+            } else {
+                const unsigned invA = 255u - a;
+                for (unsigned c = 0; c < 3u; ++c) {
+                    dst[c] = static_cast<std::uint8_t>((unsigned(src[c]) * a + unsigned(dst[c]) * invA + 127u) / 255u);
+                }
+                dst[3] = 255u;
+            }
+        }
+    }
+    return repaint(dstLeft, dstTop, dstRight, dstBottom);
+}
+
 void InfantryScene::paint(MapImage& target, int x, int y) const {
-    if (gpuSprites_) return;
+    if (!target.width || !target.height) return;
+    if (vehicleLayer_) vehicleLayer_(target, x, y, &depth_);
     std::vector<const Infantry*> visible;
     for (const auto& unit : units_)
-        if (unit.hp > 0 && unit.visible &&
+        if (unit.hp > 0 && unit.visible && !gpuDrawn(unit.id) &&
             unit.left*resolution_ < x + int(target.width) && unit.top*resolution_ < y + int(target.height) &&
             (unit.left+unit.width)*resolution_ > x && (unit.top+unit.height)*resolution_ > y) visible.push_back(&unit);
     std::stable_sort(visible.begin(), visible.end(), [](const auto* a, const auto* b) { return a->y < b->y; });
@@ -203,20 +394,22 @@ MapImage InfantryScene::compose() const {
     return result;
 }
 
-MapPatch InfantryScene::updateFog(std::span<const std::uint8_t> fog128x128) {
-    if (fog128x128.size() != 128u * 128u) return {0, 0, {}};
+MapPatch InfantryScene::updateFog(std::span<const std::uint8_t> fog) {
+    const std::size_t expectedSize = std::size_t(fogW_) * std::size_t(fogH_);
+    if (fog.size() != expectedSize) return {0, 0, {}};
     if (fog_.empty()) {
-        fog_.assign(fog128x128.begin(), fog128x128.end());
+        fog_.assign(fog.begin(), fog.end());
         return repaint(0, 0, int(ground_.width), int(ground_.height));
     }
+    const int originX = int(fogH_) * 32;
     int minX = int(ground_.width), minY = int(ground_.height), maxX = 0, maxY = 0;
-    for (int ty = 0; ty < 128; ++ty) {
-        for (int tx = 0; tx < 128; ++tx) {
-            const std::size_t idx = std::size_t(ty) * 128u + std::size_t(tx);
-            if ((fog_[idx] & 0x11u) == (fog128x128[idx] & 0x11u)) continue;
-            fog_[idx] = fog128x128[idx];
-            const int cx = 4096 + (tx - ty) * 32;
-            const int cy = (tx + ty) * 16 + 16;
+    for (unsigned ty = 0; ty < fogH_; ++ty) {
+        for (unsigned tx = 0; tx < fogW_; ++tx) {
+            const std::size_t idx = std::size_t(ty) * std::size_t(fogW_) + std::size_t(tx);
+            if ((fog_[idx] & 0x11u) == (fog[idx] & 0x11u)) continue;
+            fog_[idx] = fog[idx];
+            const int cx = originX + (int(tx) - int(ty)) * 32;
+            const int cy = (int(tx) + int(ty)) * 16 + 16;
             minX = std::min(minX, (cx - 32) * resolution_);
             maxX = std::max(maxX, (cx + 32) * resolution_);
             minY = std::min(minY, (cy - 16) * resolution_);
@@ -227,7 +420,7 @@ MapPatch InfantryScene::updateFog(std::span<const std::uint8_t> fog128x128) {
     return repaint(minX, minY, maxX, maxY);
 }
 
-MapPatch InfantryScene::update(size_t index, int x, int y, unsigned direction, unsigned progress, bool walking, int hp, int visible) {
+MapPatch InfantryScene::update(size_t index, int x, int y, unsigned direction, unsigned progress, bool walking, int hp, int visible, int ammo) {
     auto& unit = units_.at(index);
     auto next = unit;
     next.x = x;
@@ -237,12 +430,14 @@ MapPatch InfantryScene::update(size_t index, int x, int y, unsigned direction, u
     next.walking = walking;
     if (hp >= 0) next.hp = hp;
     if (visible >= 0) next.visible = visible != 0;
+    if (ammo >= 0) next.ammo = ammo;
     bounds(next);
     const int left = std::min(unit.left,next.left)*resolution_, top = std::min(unit.top,next.top)*resolution_;
     const int right = std::max(unit.left+unit.width,next.left+next.width)*resolution_;
     const int bottom = std::max(unit.top+unit.height,next.top+next.height)*resolution_;
     unit = std::move(next);
-    if (gpuSprites_) return {0, 0, {}};
+    // GPU units are overlay-only (paint/compose/spawn skip them) and slotted pre-spawn, so a move dirties no ground_ pixels.
+    if (gpuDrawn(unit.id)) return {0, 0, {}};
     return repaint(left,top,right,bottom);
 }
 
@@ -257,16 +452,21 @@ MapPatch InfantryScene::repaint(int left, int top, int right, int bottom) const 
         const auto begin = ground_.rgba.begin() + ((row+top)*std::size_t(ground_.width)+left)*4;
         auto* dst = patch.rgba.data() + row * std::size_t(patch.width) * 4;
         std::copy_n(begin, patch.width*4, dst);
-        if (!fog_.empty()) {
+    }
+    paint(patch, left, top);
+    if (!fog_.empty()) {
+        const int originX = int(fogH_) * 32;
+        for (unsigned row = 0; row < patch.height; ++row) {
             const int my = (int(row) + top) / resolution_;
+            auto* dst = patch.rgba.data() + row * std::size_t(patch.width) * 4;
             for (unsigned col = 0; col < patch.width; ++col) {
                 const int mx = (int(col) + left) / resolution_;
-                const int halfX = (mx - 4096) >> 1;
+                const int halfX = (mx - originX) >> 1;
                 const int tx = (my + halfX) >> 5;
                 const int ty = (my - halfX) >> 5;
                 unsigned scale = 112u; // unexplored shroud (~44%)
-                if (tx >= 0 && tx < 128 && ty >= 0 && ty < 128) {
-                    const std::uint8_t f = fog_[std::size_t(ty) * 128u + std::size_t(tx)];
+                if (tx >= 0 && tx < int(fogW_) && ty >= 0 && ty < int(fogH_)) {
+                    const std::uint8_t f = fog_[std::size_t(ty) * std::size_t(fogW_) + std::size_t(tx)];
                     if ((f & 0x01u) != 0) scale = 256u;      // visible
                     else if ((f & 0x10u) != 0) scale = 178u; // explored fog (~70%)
                 }
@@ -279,7 +479,131 @@ MapPatch InfantryScene::repaint(int left, int top, int right, int bottom) const 
             }
         }
     }
-    paint(patch, left, top);
     return {left, top, std::move(patch)};
+}
+
+std::vector<Infantry> loadMissionInfantry(const std::filesystem::path& gameDir,
+                                          const std::filesystem::path& missionPath) {
+    const auto placements = readMissionPlacements(missionPath);
+    if (placements.empty()) return {};
+    const auto archive = resolveCaseInsensitivePath(gameDir, "game_common.sue");
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(archive, ec))
+        throw std::runtime_error("Cannot open SUE archive");
+    const auto descArchive = resolveCaseInsensitivePath(gameDir, "desc_common.sue");
+    const bool hasDesc = std::filesystem::is_regular_file(descArchive, ec);
+
+    std::vector<std::uint8_t> palette;
+    std::map<std::string, std::optional<InfantryPoses>> cache;
+    std::vector<Infantry> units;
+    for (const auto& unit : placements) {
+        auto it = cache.find(unit.id);
+        if (it == cache.end()) {
+            std::optional<InfantryPoses> decoded;
+            if (const auto file = tryLoadInfantryRs2(descArchive, hasDesc, archive, unit.id)) {
+                if (palette.empty()) palette = readSueEntry(archive, "SOLD.PL");
+                decoded = decodeRs2Poses(*file, palette, false, 1);
+            }
+            it = cache.emplace(unit.id, std::move(decoded)).first;
+        }
+        if (!it->second) continue;
+        const unsigned dir = unsigned(unit.direction) & 7u;
+        const auto& pose = (*it->second)[dir].at(0);
+        units.push_back({unit.id, unit.x, unit.y, unit.hp, unit.ammo, unit.group, unit.owner,
+                         unit.x + pose.left, unit.y + pose.top, pose.width, pose.height, dir});
+    }
+    return units;
+}
+
+std::optional<MapImage> InfantryScene::renderUnitPortrait(const std::string& id, unsigned size) const {
+    if (size == 0u || id.empty()) return std::nullopt;
+    const auto it = poses_.find(id);
+    if (it == poses_.end()) return std::nullopt;
+
+    const InfantryPose* picked = nullptr;
+    if (!it->second[3].empty() && it->second[3][0].pixels.width > 0 && it->second[3][0].pixels.height > 0) {
+        picked = &it->second[3][0];
+    } else {
+        for (unsigned d = 0; d < 8u; ++d) {
+            if (!it->second[d].empty() && it->second[d][0].pixels.width > 0 && it->second[d][0].pixels.height > 0) {
+                picked = &it->second[d][0];
+                break;
+            }
+        }
+    }
+    if (!picked) return std::nullopt;
+
+    const auto& src = picked->pixels;
+    int minX = static_cast<int>(src.width), minY = static_cast<int>(src.height), maxX = -1, maxY = -1;
+    for (int y = 0; y < static_cast<int>(src.height); ++y) {
+        for (int x = 0; x < static_cast<int>(src.width); ++x) {
+            const auto a = src.rgba[(static_cast<std::size_t>(y) * src.width + static_cast<std::size_t>(x)) * 4u + 3u];
+            if (a > 8u) {
+                minX = std::min(minX, x);
+                minY = std::min(minY, y);
+                maxX = std::max(maxX, x);
+                maxY = std::max(maxY, y);
+            }
+        }
+    }
+    if (maxX < minX || maxY < minY) {
+        minX = 0;
+        minY = 0;
+        maxX = static_cast<int>(src.width) - 1;
+        maxY = static_cast<int>(src.height) - 1;
+    }
+    const int cw = maxX - minX + 1;
+    const int ch = maxY - minY + 1;
+    if (cw <= 0 || ch <= 0) return std::nullopt;
+
+    MapImage out{size, size, std::vector<std::uint8_t>(static_cast<std::size_t>(size) * size * 4u, 255u)};
+    const double half = static_cast<double>(size) * 0.5;
+    for (unsigned y = 0; y < size; ++y) {
+        for (unsigned x = 0; x < size; ++x) {
+            const double nx = (static_cast<double>(x) + 0.5 - half) / std::max(1.0, half);
+            const double ny = (static_cast<double>(y) + 0.5 - half) / std::max(1.0, half);
+            const double t = std::clamp(std::sqrt(nx * nx + ny * ny) * 0.72, 0.0, 1.0);
+            const std::size_t di = (static_cast<std::size_t>(y) * size + x) * 4u;
+            out.rgba[di + 0u] = static_cast<std::uint8_t>(std::lround(54.0 - 30.0 * t));
+            out.rgba[di + 1u] = static_cast<std::uint8_t>(std::lround(62.0 - 33.0 * t));
+            out.rgba[di + 2u] = static_cast<std::uint8_t>(std::lround(50.0 - 26.0 * t));
+            out.rgba[di + 3u] = 255u;
+        }
+    }
+
+    const unsigned pad = std::min(3u, size / 8u);
+    const unsigned inner = std::max(4u, size > 2u * pad ? size - 2u * pad : size);
+    const double scale = std::min(static_cast<double>(inner) / static_cast<double>(cw),
+                                  static_cast<double>(inner) / static_cast<double>(ch));
+    const unsigned dstW = std::max(1u, static_cast<unsigned>(std::lround(static_cast<double>(cw) * scale)));
+    const unsigned dstH = std::max(1u, static_cast<unsigned>(std::lround(static_cast<double>(ch) * scale)));
+    const int offX = (static_cast<int>(size) - static_cast<int>(dstW)) / 2;
+    const int offY = (static_cast<int>(size) - static_cast<int>(dstH)) / 2;
+    for (unsigned dy = 0; dy < dstH; ++dy) {
+        const int py = offY + static_cast<int>(dy);
+        if (py < 0 || py >= static_cast<int>(size)) continue;
+        const int sy = minY + std::min<int>(static_cast<int>((dy * static_cast<unsigned>(ch)) / dstH), ch - 1);
+        for (unsigned dx = 0; dx < dstW; ++dx) {
+            const int px = offX + static_cast<int>(dx);
+            if (px < 0 || px >= static_cast<int>(size)) continue;
+            const int sx = minX + std::min<int>(static_cast<int>((dx * static_cast<unsigned>(cw)) / dstW), cw - 1);
+            const std::size_t si = (static_cast<std::size_t>(sy) * src.width + static_cast<std::size_t>(sx)) * 4u;
+            const unsigned sa = src.rgba[si + 3u];
+            if (sa == 0u) continue;
+            const std::size_t di = (static_cast<std::size_t>(py) * size + static_cast<unsigned>(px)) * 4u;
+            if (sa == 255u) {
+                out.rgba[di + 0u] = src.rgba[si + 0u];
+                out.rgba[di + 1u] = src.rgba[si + 1u];
+                out.rgba[di + 2u] = src.rgba[si + 2u];
+            } else {
+                const unsigned inv = 255u - sa;
+                out.rgba[di + 0u] = static_cast<std::uint8_t>(std::min(255u, src.rgba[si + 0u] + (out.rgba[di + 0u] * inv) / 255u));
+                out.rgba[di + 1u] = static_cast<std::uint8_t>(std::min(255u, src.rgba[si + 1u] + (out.rgba[di + 1u] * inv) / 255u));
+                out.rgba[di + 2u] = static_cast<std::uint8_t>(std::min(255u, src.rgba[si + 2u] + (out.rgba[di + 2u] * inv) / 255u));
+            }
+            out.rgba[di + 3u] = 255u;
+        }
+    }
+    return out;
 }
 }

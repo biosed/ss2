@@ -9,3 +9,5 @@
 *.gpr
 *.rep/
 /.claude/
+/.qwen/
+/Testing/

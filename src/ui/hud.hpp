@@ -2,6 +2,7 @@
 
 #include "assets/map_image.hpp"
 #include <SDL3/SDL.h>
+#include <array>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -26,7 +27,17 @@ struct HudClass {
 struct HudDot {
     float u = 0, v = 0;
     bool hostile = false;
+    bool allied = false;
+    bool neutral = false;
     bool operator==(const HudDot&) const = default;
+};
+
+// A fading radar pulse on the minimap (red for contact/loss, cyan for reinforcements/rally).
+struct HudPing {
+    float u = 0, v = 0;
+    bool hostile = false;
+    float intensity = 1.0f;
+    bool operator==(const HudPing&) const = default;
 };
 
 // A saved control group: the digit that recalls it and how many units it holds.
@@ -35,23 +46,53 @@ struct HudGroup {
     bool operator==(const HudGroup&) const = default;
 };
 
+struct HudPlane {
+    float u = 0, v = 0;
+    bool hostile = false;
+    bool operator==(const HudPlane&) const = default;
+};
+
 struct HudState {
     std::string objective;                // one line; shown in the strip along the top of the bar
     std::vector<HudGroup> groups;         // only groups that exist
     std::vector<HudClass> selection;
+    std::array<float, 5> meters{};        // EX, L, M, A, R in 0..1
+    bool hasSelection = false;
     unsigned losses = 0;
-    bool crouched = false, holdFire = false, paused = false;
+    bool crouched = false, holdFire = false, paused = false, binoculars = false;
+    bool attackMoveArmed = false, patrolArmed = false, attackGroundArmed = false, mineArmed = false;
+    bool hasCargo = false, hasBombard = false, hasSapper = false, hasInfantry = false;
     std::vector<HudDot> dots;
     float viewU = 0, viewV = 0, viewW = 1, viewH = 1;   // camera rectangle as map fractions
+    std::vector<HudPing> pings;
+    bool hasObjectiveMarker = false;
+    float objectiveU = 0.0f, objectiveV = 0.0f;
+    std::array<int, 5> airReady{};
+    int armedAir = -1;
+    std::vector<HudPlane> planes;
     bool operator==(const HudState&) const = default;
 };
 
-enum class HudAction { none, stop, holdFire, crouch, mission, pause, log, moveCamera };
+enum class HudAction {
+    none, stop, holdFire, crouch, mission, pause, log, moveCamera, menu, recon,
+    orderMinimap, airSupport, attackMove, patrol, attackGround, unload, mine,
+    scatter, recallGroup, selectClass
+};
 
 struct HudResult {
     bool consumed = false;              // the event belongs to the bar; do not pass it on
     HudAction action = HudAction::none;
     float u = 0, v = 0;                 // map fraction, for moveCamera
+    int airSlot = -1;                   // 0..4, for airSupport
+    int groupDigit = -1;                // 0..9, for recallGroup
+    std::string classLabel;             // HudClass::label, for selectClass
+    bool shiftHeld = false;             // Shift modifier on click release
+};
+
+struct HudTip {
+    std::string title;
+    std::vector<std::string> lines;
+    bool operator==(const HudTip&) const = default;
 };
 
 // A command bar along the bottom of the parent window: minimap, selection readout and
@@ -86,13 +127,26 @@ public:
     struct Rect { int x = 0, y = 0, width = 0, height = 0; };
     Rect minimapRect() const { return minimap_; }
     Rect buttonRect(HudAction) const;
+    Rect airButtonRect(int slot) const;
+    Rect groupChipRect(unsigned digit) const;
+    Rect classCardRect(std::size_t index) const;
+    bool opaqueAtWindow(float windowX, float windowY) const;
+    std::optional<HudTip> tooltipAtWindow(float windowX, float windowY) const;
+    void cancelMinimapDrag() { draggingMinimap_ = false; }
 
 private:
     void layout();
     void render();
     void refit();   // lays the bar out again when the window's pixel size no longer matches
+    Rect reconButtonRect() const;
+    Rect row3Rect(int col) const;
+    std::optional<HudAction> row3Action(int col) const;
+    bool opaqueAtBarPoint(const std::optional<SDL_FPoint>& p) const;
     std::optional<SDL_FPoint> barPoint(float windowX, float windowY) const;
     std::optional<HudAction> buttonAt(float x, float y) const;
+    std::optional<int> airAt(float x, float y) const;
+    std::optional<unsigned> groupAt(float x, float y) const;
+    std::optional<std::string> classAt(float x, float y) const;
     bool minimapPoint(float x, float y, float& u, float& v, bool clampOutside) const;
 
     SDL_Window* parent_;
@@ -106,7 +160,11 @@ private:
     struct Button { HudAction action; const char* label; const char* key; Rect rect; };
     std::vector<Button> buttons_;
     std::optional<HudAction> pressed_, hovered_;
+    std::optional<int> pressedAir_, hoveredAir_;
+    std::optional<unsigned> pressedGroup_, hoveredGroup_;
+    std::optional<std::string> pressedClass_, hoveredClass_;
     std::vector<std::string> messages_;
+    int language_ = -1;                  // the interface language the picture was drawn in
     int strip_ = 0;                      // height of the strip along the top of the bar
     bool draggingMinimap_ = false;
     std::vector<std::uint8_t> rgba_;

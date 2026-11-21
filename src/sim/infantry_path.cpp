@@ -1,15 +1,17 @@
 #include "sim/infantry_path.hpp"
 #include "assets/mission.hpp"
+#include "assets/sprite.hpp"
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <deque>
 #include <limits>
 #include <stdexcept>
 #include <utility>
 
 namespace ss2 {
 namespace {
-constexpr int kMaxTileSide = 128;
+constexpr int kMaxTileSide = 512;
 constexpr std::uint16_t kInfantryForbiddenMask = 0x00F0u; // walkonground=1, walkonwater=0, walkonshallows=1 (0x10061d25)
 
 // n2Game_Dll.dll 0x100fbcb4: 8-direction table.
@@ -60,8 +62,9 @@ std::uint8_t directionFromDelta(int dx, int dy) {
 } // namespace
 
 InfantryPathGrid InfantryPathGrid::loadTutorial(const std::filesystem::path& gameDir) {
-    auto data = assets::readTutorialData(gameDir / "maps/single/--- TUTORIAL I ---.SSM");
-    return fromSubCellMasks(128, 128, std::move(data.flags), std::move(data.obstacles));
+    const auto mission = assets::resolveCaseInsensitivePath(gameDir, "maps/single/--- TUTORIAL I ---.SSM");
+    auto data = assets::readTutorialData(mission);
+    return fromSubCellMasks(int(data.width), int(data.height), std::move(data.flags), std::move(data.obstacles));
 }
 
 InfantryPathGrid InfantryPathGrid::fromSubCellMasks(int tileWidth, int tileHeight,
@@ -131,6 +134,28 @@ bool InfantryPathGrid::walkable(SubCell cell) const {
     return (blocked & slotBit) == 0;
 }
 
+bool InfantryPathGrid::walkableMask(SubCell cell, std::uint16_t forbiddenMask) const {
+    if (!inBounds(cell)) return false;
+    if (!walkable_.empty())
+        return walkable_[std::size_t(cell.y) * std::size_t(subWidth_) + std::size_t(cell.x)] != 0;
+
+    const std::size_t idx = std::size_t(cell.y >> 1) * std::size_t(tileWidth_) + std::size_t(cell.x >> 1);
+    const unsigned slot = unsigned((cell.x & 1) | ((cell.y & 1) << 1));
+    const unsigned slotBit = 1u << slot;
+
+    const std::uint32_t pf = flags_[idx];
+    if ((pf & 0x4000u) != 0 || ((pf & slotBit) & 0xFu) != 0) return false;
+    const std::uint16_t obst = obstacles_[idx] & forbiddenMask;
+    const unsigned blocked = unsigned(obst | (obst >> 4) | (obst >> 8) | (obst >> 12)) & 0xFu;
+    return (blocked & slotBit) == 0;
+}
+
+bool InfantryPathGrid::isShallows(SubCell cell) const {
+    if (!inBounds(cell) || obstacles_.empty()) return false;
+    const std::size_t idx = std::size_t(cell.y >> 1) * std::size_t(tileWidth_) + std::size_t(cell.x >> 1);
+    return idx < obstacles_.size() && (obstacles_[idx] & 0x0F00u) != 0;
+}
+
 void InfantryPathGrid::clearOccupancy() {
     std::fill(occupancy_.begin(), occupancy_.end(), 0u);
 }
@@ -175,7 +200,7 @@ std::vector<SubCell> InfantryPathGrid::formationDestinations(
         std::span<const SubCell> sources, SubCell target) const {
     if (sources.empty() || !inBounds(target)) return {};
     // Standard ground order 0x100866c0, group centroid and spread at 0x100845b0.
-    int minX=128, maxX=0, minY=128, maxY=0, sumX=0, sumY=0;
+    int minX=tileWidth_, maxX=0, minY=tileHeight_, maxY=0, sumX=0, sumY=0;
     for (const auto cell : sources) {
         if (!inBounds(cell)) return {};
         const int x = cell.x/2, y = cell.y/2;
@@ -332,16 +357,9 @@ InfantryPathGrid::Search InfantryPathGrid::searchTiles(SubCell start, SubCell go
             int mode; // 0 = ray march, 1 = CCW wall follow, 2 = CW wall follow
             std::uint16_t rayMark;
         };
-        std::array<Agent, 128> q{};
-        int head = 0, tail = 0;
-        const auto pushBack = [&](const Agent& a) {
-            q[std::size_t(tail)] = a;
-            tail = (tail + 1) & 127;
-        };
-        const auto pushFront = [&](const Agent& a) {
-            head = (head - 1) & 127;
-            q[std::size_t(head)] = a;
-        };
+        std::deque<Agent> q;
+        const auto pushBack = [&](const Agent& a) { q.push_back(a); };
+        const auto pushFront = [&](const Agent& a) { q.push_front(a); };
 
         distGrid[idxOf(startTx, startTy)] = 2u;
         pushBack({startTx, startTy, directionFromDelta(goalTx - startTx, goalTy - startTy), 2, 0, 1u});
@@ -368,10 +386,10 @@ InfantryPathGrid::Search InfantryPathGrid::searchTiles(SubCell start, SubCell go
         };
 
         int iterGuard = 0;
-        constexpr int kMaxIters = 16384;
-        while (head != tail && ++iterGuard <= kMaxIters) {
-            const Agent cur = q[std::size_t(head)];
-            head = (head + 1) & 127;
+        const int kMaxIters = std::max(16384, int(N));
+        while (!q.empty() && ++iterGuard <= kMaxIters) {
+            const Agent cur = q.front();
+            q.pop_front();
             if (cur.dist >= 0xfff) continue;
 
             if (cur.tx == goalTx && cur.ty == goalTy) {
@@ -659,5 +677,74 @@ std::pair<int, int> InfantryPathGrid::toWorldCenter(SubCell cell) {
 SubCell InfantryPathGrid::step(SubCell cell, std::uint8_t dir) {
     if (dir >= 8) return cell;
     return {cell.x + kDx[dir], cell.y + kDy[dir]};
+}
+
+std::vector<std::uint8_t> InfantryPathGrid::findTileDirectionsForMask(
+        SubCell start, SubCell goal, std::uint16_t forbiddenMask, int maxSteps) const {
+    if (forbiddenMask == kInfantryForbiddenMask) {
+        return findTileDirections(start, goal, maxSteps);
+    }
+    if (!inBounds(start) || !inBounds(goal) || maxSteps <= 0) return {};
+    const int startTx = start.x >> 1;
+    const int startTy = start.y >> 1;
+    const int goalTx = goal.x >> 1;
+    const int goalTy = goal.y >> 1;
+    if (startTx == goalTx && startTy == goalTy) return {};
+
+    auto tilePassable = [&](int tx, int ty) -> bool {
+        if (tx < 0 || ty < 0 || tx >= tileWidth_ || ty >= tileHeight_) return false;
+        for (int s = 0; s < 4; ++s) {
+            if (walkableMask({tx * 2 + (s & 1), ty * 2 + (s >> 1)}, forbiddenMask)) return true;
+        }
+        return false;
+    };
+    if (!tilePassable(goalTx, goalTy)) return {};
+
+    const std::size_t n = std::size_t(tileWidth_) * std::size_t(tileHeight_);
+    std::vector<std::uint8_t> parentDir(n, 255u);
+    std::deque<int> q;
+    const int startIdx = startTy * tileWidth_ + startTx;
+    const int goalIdx = goalTy * tileWidth_ + goalTx;
+    parentDir[static_cast<std::size_t>(startIdx)] = 254u;
+    q.push_back(startIdx);
+
+    bool found = false;
+    while (!q.empty()) {
+        const int cur = q.front();
+        q.pop_front();
+        if (cur == goalIdx) {
+            found = true;
+            break;
+        }
+        const int cx = cur % tileWidth_;
+        const int cy = cur / tileWidth_;
+        for (std::uint8_t d = 0; d < 8; ++d) {
+            const int nx = cx + kDx[d];
+            const int ny = cy + kDy[d];
+            if (!tilePassable(nx, ny)) continue;
+            if (kDx[d] != 0 && kDy[d] != 0) {
+                if (!tilePassable(cx + kDx[d], cy) || !tilePassable(cx, cy + kDy[d])) continue;
+            }
+            const int nIdx = ny * tileWidth_ + nx;
+            if (parentDir[static_cast<std::size_t>(nIdx)] != 255u) continue;
+            parentDir[static_cast<std::size_t>(nIdx)] = d;
+            q.push_back(nIdx);
+        }
+    }
+    if (!found) return {};
+
+    std::vector<std::uint8_t> dirs;
+    int cur = goalIdx;
+    while (cur != startIdx) {
+        const std::uint8_t d = parentDir[static_cast<std::size_t>(cur)];
+        if (d >= 8u) break;
+        dirs.push_back(d);
+        const int cx = cur % tileWidth_;
+        const int cy = cur / tileWidth_;
+        cur = (cy - kDy[d]) * tileWidth_ + (cx - kDx[d]);
+    }
+    std::reverse(dirs.begin(), dirs.end());
+    if (int(dirs.size()) > maxSteps) dirs.resize(static_cast<std::size_t>(maxSteps));
+    return dirs;
 }
 } // namespace ss2
