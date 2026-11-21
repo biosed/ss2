@@ -156,6 +156,7 @@ public:
     struct ReserveUnit {
         std::string id;
         int owner{0}, group{0}, hp{100}, ammo{100}, expa{0}, pool{0};
+        bool operator==(const ReserveUnit&) const = default;
     };
     struct Snapshot {
         struct SoldierState {

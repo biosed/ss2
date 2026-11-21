@@ -24,6 +24,7 @@ struct Infantry {
     bool walking{};
     bool visible{true};
     int expa{0};
+    bool operator==(const Infantry&) const = default;
 };
 
 struct MapPatch {

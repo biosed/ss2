@@ -26,6 +26,7 @@ struct VehicleUnit {
     int left{0}, top{0}, width{0}, height{0};
     bool alive{true}, visible{true}, hasCrew{true};
     int expa{0};
+    bool operator==(const VehicleUnit&) const = default;
 };
 
 class VehicleScene {
