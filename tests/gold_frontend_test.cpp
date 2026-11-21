@@ -230,6 +230,61 @@ void testFallbackInteraction() {
     check(!rfe.creditsPaused(), "Second Space resumes Credits scroll");
     rfe.handleMouseDown(600.0, 529.0, 1);  // CANCEL [542,512,118,35]
     check(rfe.state().screen() == ss2::FrontEnd::Screen::MainMenu, "Cancel returns from Credits to MainMenu");
+
+    // Synthetic Options flow: live language preview + Cancel revert, then Skip Intro & Smooth Terrain + OK commit.
+    ss2::GoldFrontEnd ofe(nullptr, {});
+    ss2::UserSettings initCfg{};
+    initCfg.difficulty = 2;
+    initCfg.skipIntro = false;
+    initCfg.smoothTerrain = false;
+    ofe.setSettings(initCfg);
+    ofe.handleMouseDown(185.0, 262.0, 1);  // OPTIONS [115,245,141,35]
+    check(ofe.state().screen() == ss2::FrontEnd::Screen::Options, "clicked Options -> Options");
+    ofe.renderToBuffer(1280, 720, buf);
+    check(buf.size() == 1280u * 720u * 4u, "fallback Options buffer size");
+    // Toggle language row (index 1: y=94+42+4=140..168) -> increments Language::english -> french.
+    ofe.handleMouseDown(674.0, 154.0, 1);
+    check(ss2::language() == ss2::Language::french, "Options live-previews Language");
+    // Toggle Skip Intro row (index 8: y=94+8*42+4=434..462)
+    ofe.handleMouseDown(674.0, 448.0, 1);
+    ofe.handleKey(SDLK_ESCAPE);
+    check(ofe.state().screen() == ss2::FrontEnd::Screen::MainMenu, "Esc returns from Options to MainMenu");
+    check(ss2::language() == ss2::Language::english, "Cancel/Esc reverts live Language preview");
+    check(!ofe.takeSettingsSaved() && !ofe.settings().skipIntro, "Cancel/Esc discards unsaved Options edits");
+
+    ofe.handleKey(SDLK_O);
+    check(ofe.state().screen() == ss2::FrontEnd::Screen::Options, "O reopens Options");
+    // Use exact keyboard navigation on Options: start focused on opt_difficulty -> 6x Down (opt_smooth), Right, 2x Down (opt_skip_intro), Right, Return (OK)
+    for (int k = 0; k < 6; ++k) ofe.handleKey(SDLK_DOWN);
+    ofe.handleKey(SDLK_RIGHT);
+    for (int k = 0; k < 2; ++k) ofe.handleKey(SDLK_DOWN);
+    ofe.handleKey(SDLK_RIGHT);
+    ofe.handleMouseDown(188.0, 529.0, 1);  // OK [132,512,112,35]
+    check(ofe.state().screen() == ss2::FrontEnd::Screen::MainMenu, "OK returns from Options to MainMenu");
+    check(ofe.takeSettingsSaved() && ofe.settings().smoothTerrain && ofe.settings().skipIntro,
+          "OK commits Options edits and sets takeSettingsSaved()");
+
+    // Synthetic Replay Browser flow: empty notice, then populate 2 replays and launch via double-click.
+    ofe.handleKey(SDLK_P);
+    check(ofe.state().screen() == ss2::FrontEnd::Screen::Replays, "P opens Replays");
+    ofe.renderToBuffer(1280, 720, buf);
+    ofe.handleKey(SDLK_R);
+    check(ofe.state().screen() == ss2::FrontEnd::Screen::Replays && !ofe.activeNotice().empty(),
+          "Empty Replay button stays on Replays with a notice");
+    ofe.setReplays({
+        {"tutorial1_full", "/tmp/tutorial1_full.ss2rep", "maps/single/--- TUTORIAL I ---.SSM",
+         "0xb72cfe2bbab46f1a", 12, 3734, 2, true},
+        {"russian1_smoke", "/tmp/russian1_smoke.ss2rep", "maps/campaign/000000.ssc",
+         "0x1234abcd", 6, 150, 3, false},
+    });
+    ofe.renderToBuffer(1280, 720, buf);
+    check(buf.size() == 1280u * 720u * 4u, "fallback Replays buffer size");
+    ofe.handleMouseDown(120.0, 168.0, 1);  // Row 1 [kListY+6+20 = 160..180]
+    check(ofe.state().selectedReplay() == 1, "clicked replay row 1");
+    ofe.handleMouseDown(120.0, 168.0, 2);  // Double click -> LaunchReplay
+    check(ofe.state().screen() == ss2::FrontEnd::Screen::LaunchReplay &&
+          ofe.state().launchReplayPath() == "/tmp/russian1_smoke.ss2rep",
+          "Double clicking replay launches selected replay");
 }
 
 void testRetailGoldAssets(const std::filesystem::path& gameDir) {
@@ -273,6 +328,9 @@ void testRetailGoldAssets(const std::filesystem::path& gameDir) {
     const auto rgRaw = ss2::assets::readSueEntry(menuSue, "rg_bt.pck");
     check(ss2::assets::pckFrameCount(rgRaw) == 2, "rg_bt.pck 2 frames");
     for (std::size_t i = 0; i < 2; ++i) (void)ss2::assets::decodeUiPckFrame(rgRaw, i);
+    const auto opRaw = ss2::assets::readSueEntry(menuSue, "op_bt.pck");
+    check(ss2::assets::pckFrameCount(opRaw) == 4, "op_bt.pck 4 frames");
+    for (std::size_t i = 0; i < 4; ++i) (void)ss2::assets::decodeUiPckFrame(opRaw, i);
 
     ss2::GoldFrontEnd fe(nullptr, gameDir, 0);
     check(fe.hasMenuAssets(), "retail menu_common.sue loaded");
@@ -418,6 +476,29 @@ void testRetailGoldAssets(const std::filesystem::path& gameDir) {
     if (!capDir.empty()) writePng(capDir / "screen6_credits_scrolled.png", 1280, 720, frame);
     fe.handleKey(SDLK_ESCAPE);
     check(fe.state().screen() == ss2::FrontEnd::Screen::MainMenu, "returned from Credits to MainMenu");
+
+    // Capture Options and Replay Browser screens
+    fe.setSettings(ss2::UserSettings{});
+    fe.handleKey(SDLK_O);
+    check(fe.state().screen() == ss2::FrontEnd::Screen::Options, "retail Options");
+    fe.renderToBuffer(1280, 720, frame);
+    if (!capDir.empty()) writePng(capDir / "screen7_options.png", 1280, 720, frame);
+    fe.handleKey(SDLK_ESCAPE);
+
+    fe.handleKey(SDLK_P);
+    check(fe.state().screen() == ss2::FrontEnd::Screen::Replays, "retail Replays empty");
+    fe.renderToBuffer(1280, 720, frame);
+    if (!capDir.empty()) writePng(capDir / "screen8_replays_empty.png", 1280, 720, frame);
+    fe.setReplays({
+        {"tutorial1_p7_full", "/tmp/tutorial1_p7_full.ss2rep", "maps/single/--- TUTORIAL I ---.SSM",
+         "0xb72cfe2bbab46f1a", 12, 3734, 2, true},
+        {"russian1_campaign", "/tmp/russian1_campaign.ss2rep", "maps/campaign/000000.ssc",
+         "0x7f13a8c901234567", 4, 150, 3, true},
+    });
+    fe.renderToBuffer(1280, 720, frame);
+    if (!capDir.empty()) writePng(capDir / "screen8_replays.png", 1280, 720, frame);
+    fe.handleKey(SDLK_ESCAPE);
+    check(fe.state().screen() == ss2::FrontEnd::Screen::MainMenu, "returned from Replays to MainMenu");
 }
 
 void testVulkanWindowOverlay(bool validate, const std::filesystem::path& gameDir) {
@@ -435,18 +516,22 @@ void testVulkanWindowOverlay(bool validate, const std::filesystem::path& gameDir
     fe.setMissions(makeSyntheticMissions(3));
     fe.setCampaigns(makeSyntheticCampaigns());
     const ss2::Snapshot empty{};
-    for (int i = 0; i < 12; ++i) {
-        if (i == 1) fe.handleKey(SDLK_R);       // Ratings (Campaigns)
-        if (i == 2) fe.handleKey(SDLK_S);       // Ratings (Single Missions)
-        if (i == 3) fe.handleKey(SDLK_ESCAPE);  // Back to MainMenu
-        if (i == 4) fe.handleKey(SDLK_C);       // Credits
-        if (i == 5) fe.advance(std::chrono::milliseconds(200));
-        if (i == 6) fe.handleKey(SDLK_ESCAPE);  // Back to MainMenu
-        if (i == 7) fe.handleKey(SDLK_S);       // Single Player
-        if (i == 8) fe.handleKey(SDLK_C);       // Campaigns
-        if (i == 9) fe.handleKey(SDLK_G);       // German Campaign missions
-        if (i == 10) fe.handleKey(SDLK_D);      // Cycle difficulty
-        if (i == 11) fe.handleKey(SDLK_RETURN); // Campaign Briefing
+    for (int i = 0; i < 16; ++i) {
+        if (i == 1) fe.handleKey(SDLK_O);       // Options
+        if (i == 2) fe.handleKey(SDLK_ESCAPE);  // Back to MainMenu
+        if (i == 3) fe.handleKey(SDLK_P);       // Replays
+        if (i == 4) fe.handleKey(SDLK_ESCAPE);  // Back to MainMenu
+        if (i == 5) fe.handleKey(SDLK_R);       // Ratings (Campaigns)
+        if (i == 6) fe.handleKey(SDLK_S);       // Ratings (Single Missions)
+        if (i == 7) fe.handleKey(SDLK_ESCAPE);  // Back to MainMenu
+        if (i == 8) fe.handleKey(SDLK_C);       // Credits
+        if (i == 9) fe.advance(std::chrono::milliseconds(200));
+        if (i == 10) fe.handleKey(SDLK_ESCAPE); // Back to MainMenu
+        if (i == 11) fe.handleKey(SDLK_S);      // Single Player
+        if (i == 12) fe.handleKey(SDLK_C);      // Campaigns
+        if (i == 13) fe.handleKey(SDLK_G);      // German Campaign missions
+        if (i == 14) fe.handleKey(SDLK_D);      // Cycle difficulty
+        if (i == 15) fe.handleKey(SDLK_RETURN); // Campaign Briefing
         fe.draw(renderer);
         renderer.present(empty);
     }

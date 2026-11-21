@@ -31,15 +31,71 @@ struct SDLSession {
     ~SDLSession() { SDL_Quit(); }
 };
 
+std::filesystem::path resolveReplayMissionPath(const std::filesystem::path& gameDir,
+                                               const std::string& recordedMission) {
+    if (recordedMission.empty() || gameDir.empty()) return recordedMission;
+    const auto candidate = ss2::assets::resolveCaseInsensitivePath(gameDir, recordedMission);
+    std::error_code ec;
+    if (!candidate.empty() && std::filesystem::is_regular_file(candidate, ec)) return candidate;
+    return recordedMission;
+}
+
+std::optional<ss2::cmd::ReplayFile> loadReplayFileFromDisk(const std::filesystem::path& path) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) return std::nullopt;
+    std::ostringstream buf;
+    buf << in.rdbuf();
+    return ss2::cmd::fromReplayFileText(buf.str());
+}
+
+std::vector<ss2::FrontEnd::ReplayEntry> scanSavedReplays() {
+    std::vector<ss2::FrontEnd::ReplayEntry> out;
+    const auto dir = ss2::defaultReplaysDir();
+    if (dir.empty()) return out;
+    std::error_code ec;
+    if (!std::filesystem::is_directory(dir, ec) || ec) return out;
+
+    for (std::filesystem::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
+        std::error_code fileEc;
+        if (!it->is_regular_file(fileEc) || fileEc) continue;
+        const auto ext = it->path().extension().string();
+        if (!ss2::assets::equalsIgnoreCaseAscii(ext, ".ss2rep")) continue;
+        const auto parsed = loadReplayFileFromDisk(it->path());
+        if (!parsed) continue;
+
+        ss2::FrontEnd::ReplayEntry entry;
+        entry.name = it->path().stem().string();
+        entry.path = it->path().string();
+        entry.mission = parsed->mission;
+        entry.commandCount = parsed->commands.size();
+        entry.endTick = parsed->endTick;
+        entry.difficulty = parsed->difficulty.value_or(2);
+        entry.autoEngage = parsed->autoEngage.value_or(true);
+        if (parsed->endStateHash) {
+            std::ostringstream hs;
+            hs << "0x" << std::hex << *parsed->endStateHash;
+            entry.hashHex = hs.str();
+        }
+        out.push_back(std::move(entry));
+    }
+    std::ranges::sort(out, [](const auto& a, const auto& b) { return a.name < b.name; });
+    return out;
+}
+
+struct FrontEndResult {
+    std::filesystem::path missionPath;
+    std::optional<ss2::cmd::ReplayFile> replayFile;
+};
+
 // The Gold frontend shown on ordinary launch, before any mission loads. Reuses the mission
-// browser, the Menu/Briefing panels and (through the caller's runWindow loop) the loader, all
-// on the same window. Returns the chosen mission path, or nullopt when the user quits.
-std::optional<std::filesystem::path> runFrontEnd(SDL_Window* window, ss2::ValidationReport* report,
-                                                 const std::filesystem::path& gameDir,
-                                                 ss2::UserSettings& settings, bool persistSettings) {
+// browser, the Menu/Briefing/Options/Replay panels and (through the caller's runGameSession loop)
+// the loader, all on the same window. Returns the chosen mission/replay, or nullopt when quitting.
+std::optional<FrontEndResult> runFrontEnd(SDL_Window* window, ss2::ValidationReport* report,
+                                          const std::filesystem::path& gameDir,
+                                          ss2::UserSettings& settings, bool persistSettings) {
     ss2::VulkanWindow renderer(window, report);
     ss2::GoldFrontEnd goldFe(window, gameDir);
-    goldFe.setDifficulty(settings.difficulty);
+    goldFe.setSettings(settings);
 
     std::vector<ss2::GoldMissionEntry> entries;
     for (const auto& m : ss2::assets::listSinglePlayerMissions(gameDir)) {
@@ -87,6 +143,7 @@ std::optional<std::filesystem::path> runFrontEnd(SDL_Window* window, ss2::Valida
         campaignEntries.push_back(std::move(ce));
     }
     goldFe.setCampaigns(std::move(campaignEntries));
+    goldFe.setReplays(scanSavedReplays());
 
     const ss2::Snapshot empty{};
     std::uint64_t lastTick = SDL_GetTicksNS();
@@ -102,6 +159,13 @@ std::optional<std::filesystem::path> runFrontEnd(SDL_Window* window, ss2::Valida
         goldFe.advance(std::chrono::nanoseconds(now - lastTick));
         lastTick = now;
 
+        if (goldFe.takeSettingsSaved()) {
+            settings = goldFe.settings();
+            if (persistSettings) {
+                (void)ss2::saveUserSettings(ss2::defaultSettingsPath(), settings);
+            }
+        }
+
         const auto screen = goldFe.state().screen();
         if (screen == ss2::FrontEnd::Screen::Launch) {
             if (goldFe.difficulty() != settings.difficulty) {
@@ -110,7 +174,13 @@ std::optional<std::filesystem::path> runFrontEnd(SDL_Window* window, ss2::Valida
                     (void)ss2::saveUserSettings(ss2::defaultSettingsPath(), settings);
                 }
             }
-            return std::filesystem::path(goldFe.state().launchPath());
+            return FrontEndResult{std::filesystem::path(goldFe.state().launchPath()), std::nullopt};
+        }
+        if (screen == ss2::FrontEnd::Screen::LaunchReplay) {
+            if (auto loaded = loadReplayFileFromDisk(goldFe.state().launchReplayPath())) {
+                return FrontEndResult{resolveReplayMissionPath(gameDir, loaded->mission), std::move(*loaded)};
+            }
+            goldFe.state().back();
         }
         if (screen == ss2::FrontEnd::Screen::Quit) return std::nullopt;
 
@@ -202,12 +272,8 @@ int main(int argc, char** argv) try {
         throw std::invalid_argument("--timing cannot be combined with --replay");
     std::optional<ss2::cmd::ReplayFile> parsedReplay;
     if (!replayPath.empty()) {
-        std::ifstream in(replayPath, std::ios::binary);
-        if (!in) throw std::runtime_error("Cannot open --replay file: " + replayPath.string());
-        std::ostringstream buf;
-        buf << in.rdbuf();
-        parsedReplay = ss2::cmd::fromReplayFileText(buf.str());
-        if (!parsedReplay) throw std::runtime_error("Malformed --replay file: " + replayPath.string());
+        parsedReplay = loadReplayFileFromDisk(replayPath);
+        if (!parsedReplay) throw std::runtime_error("Malformed or unreadable --replay file: " + replayPath.string());
         if (parsedReplay->difficulty && cliDifficulty && *cliDifficulty != *parsedReplay->difficulty)
             throw std::invalid_argument("--difficulty conflicts with recorded difficulty in --replay file");
         if (parsedReplay->autoEngage && cliAutoEngageSet && autoEngage != *parsedReplay->autoEngage)
@@ -262,12 +328,7 @@ int main(int argc, char** argv) try {
     if (parsedReplay && mission.empty() && campaignQuery.empty() && !parsedReplay->mission.empty()) {
         const auto directory = resolveGameDir();
         if (!directory.empty()) {
-            const auto candidate = ss2::assets::resolveCaseInsensitivePath(directory, parsedReplay->mission);
-            if (!candidate.empty() && std::filesystem::is_regular_file(candidate)) {
-                mission = candidate;
-            } else {
-                mission = parsedReplay->mission;
-            }
+            mission = resolveReplayMissionPath(directory, parsedReplay->mission);
             if (gameDir.empty()) gameDir = directory;
         }
     }
@@ -322,7 +383,7 @@ int main(int argc, char** argv) try {
         if (parsedReplay->autoEngage) autoEngage = *parsedReplay->autoEngage;
     }
     SDLSession sdl;
-    if (!noMovies && !gameDir.empty() && !limit && !timing && !overviewOnly && !parsedReplay)
+    if (!noMovies && !settings.skipIntro && !gameDir.empty() && !limit && !timing && !overviewOnly && !parsedReplay)
         ss2::playOpeningMovies(gameDir, fullscreen.value_or(false), hdPack);
     auto flags = SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
     if (fullscreen.value_or(false)) flags |= SDL_WINDOW_FULLSCREEN;
@@ -340,9 +401,14 @@ int main(int argc, char** argv) try {
     ss2::ValidationReport report;
     int result = 0;
     if (mission.empty() && !gameDir.empty() && !overviewOnly && !limit && !timing && !parsedReplay) {
-        const auto chosen = runFrontEnd(window.get(), validate ? &report : nullptr, gameDir, settings, persistSettings);
+        auto chosen = runFrontEnd(window.get(), validate ? &report : nullptr, gameDir, settings, persistSettings);
         if (!chosen) return 0;
-        mission = *chosen;
+        mission = std::move(chosen->missionPath);
+        if (chosen->replayFile) {
+            parsedReplay = std::move(chosen->replayFile);
+            if (parsedReplay->difficulty) settings.difficulty = *parsedReplay->difficulty;
+            if (parsedReplay->autoEngage) autoEngage = *parsedReplay->autoEngage;
+        }
     }
     for (;;) {
         std::optional<std::filesystem::path> nextMission;

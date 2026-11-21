@@ -131,6 +131,35 @@ constexpr RectD kRatingsCancelRect{542, 512, 118, 35};
 constexpr RectD kCreditsFrameRect{96, 62, 608, 434};
 constexpr RectD kCreditsCancelRect{542, 512, 118, 35};
 
+constexpr RectD kOptionsPanelRect{86, 82, 628, 404};
+constexpr double kOptionsRowY0 = 94.0;
+constexpr double kOptionsRowStep = 42.0;
+constexpr double kOptionsRowH = 36.0;
+constexpr RectD kOptionsOkRect{132, 512, 112, 35};
+constexpr RectD kOptionsCancelRect{542, 512, 118, 35};
+constexpr std::array<const char*, 9> kOptionRowIds{{
+    "opt_difficulty", "opt_language", "opt_sfx", "opt_music_vol",
+    "opt_music_mute", "opt_speed", "opt_smooth", "opt_effects", "opt_skip_intro"
+}};
+
+RectD optionRowRect(std::size_t idx) {
+    return {96.0, kOptionsRowY0 + double(idx) * kOptionsRowStep, 608.0, kOptionsRowH};
+}
+RectD optionDecRect(std::size_t idx) {
+    return {412.0, kOptionsRowY0 + double(idx) * kOptionsRowStep + 4.0, 28.0, 28.0};
+}
+RectD optionValueRect(std::size_t idx) {
+    return {444.0, kOptionsRowY0 + double(idx) * kOptionsRowStep + 4.0, 212.0, 28.0};
+}
+RectD optionIncRect(std::size_t idx) {
+    return {660.0, kOptionsRowY0 + double(idx) * kOptionsRowStep + 4.0, 28.0, 28.0};
+}
+
+constexpr std::array<ButtonSpec, 2> kReplayButtons{{
+    {"replay_start", "Replay", 'R', {118, 512, 140, 35}, true},
+    {"cancel", "Cancel", '\0', {542, 512, 118, 35}, true},
+}};
+
 constexpr std::array<ButtonSpec, 4> kBriefingButtons{{
     {"brief_restart", "Restart", 'R', {577, 211, 186, 33}, false},
     {"brief_pause", "Pause", 'P', {627, 253, 136, 33}, false},
@@ -780,8 +809,107 @@ void GoldFrontEnd::setCampaigns(std::vector<GoldCampaignEntry> campaigns) {
     dirty_ = true;
 }
 
+void GoldFrontEnd::setReplays(std::vector<FrontEnd::ReplayEntry> replays) {
+    replays_ = replays;
+    fe_.setReplays(std::move(replays));
+    if (fe_.screen() == FrontEnd::Screen::Replays) {
+        scrollOffset_ = 0;
+        ensureSelectionVisible();
+        ensureFocusedValid();
+    }
+    dirty_ = true;
+}
+
 void GoldFrontEnd::setDifficulty(int difficulty) {
     fe_.setDifficulty(difficulty);
+    settings_.difficulty = fe_.difficulty();
+    optionsDraft_.difficulty = fe_.difficulty();
+    dirty_ = true;
+}
+
+void GoldFrontEnd::setSettings(const UserSettings& settings) {
+    settings_ = settings;
+    optionsDraft_ = settings;
+    optionsBackupLanguage_ = ss2::language();
+    fe_.setDifficulty(settings.difficulty);
+    dirty_ = true;
+}
+
+bool GoldFrontEnd::takeSettingsSaved() {
+    return std::exchange(settingsSaved_, false);
+}
+
+void GoldFrontEnd::beginOptionsEdit() {
+    optionsDraft_ = settings_;
+    optionsDraft_.difficulty = fe_.difficulty();
+    optionsBackupLanguage_ = ss2::language();
+}
+
+void GoldFrontEnd::commitOptionsEdit() {
+    settings_ = optionsDraft_;
+    fe_.setDifficulty(settings_.difficulty);
+    settingsSaved_ = true;
+}
+
+void GoldFrontEnd::cancelOptionsEdit() {
+    optionsDraft_ = settings_;
+    ss2::setLanguage(optionsBackupLanguage_);
+}
+
+void GoldFrontEnd::adjustOption(const std::string& id, int delta) {
+    const int step = delta >= 0 ? 1 : -1;
+    if (id == "opt_difficulty") {
+        optionsDraft_.difficulty = 1 + ((optionsDraft_.difficulty - 1 + step + 3) % 3);
+    } else if (id == "opt_language") {
+        static constexpr std::array<Language, 3> kLangs{{
+            Language::english, Language::french, Language::spanish
+        }};
+        const auto cur = ss2::language();
+        std::size_t idx = 0;
+        for (std::size_t i = 0; i < kLangs.size(); ++i) {
+            if (kLangs[i] == cur) { idx = i; break; }
+        }
+        idx = (idx + std::size_t(step + 3)) % kLangs.size();
+        optionsDraft_.language = kLangs[idx];
+        ss2::setLanguage(kLangs[idx]);
+    } else if (id == "opt_sfx") {
+        static constexpr std::array<float, 5> kSfx{{0.0f, 0.25f, 0.50f, 0.75f, 1.0f}};
+        std::size_t best = 0;
+        float bestDiff = 10.0f;
+        for (std::size_t i = 0; i < kSfx.size(); ++i) {
+            if (const float d = std::abs(optionsDraft_.sfxVolume - kSfx[i]); d < bestDiff) {
+                bestDiff = d;
+                best = i;
+            }
+        }
+        optionsDraft_.sfxVolume = kSfx[(best + std::size_t(step + int(kSfx.size()))) % kSfx.size()];
+    } else if (id == "opt_music_vol") {
+        static constexpr std::array<float, 4> kMus{{0.09f, 0.18f, 0.28f, 0.40f}};
+        std::size_t best = 0;
+        float bestDiff = 10.0f;
+        for (std::size_t i = 0; i < kMus.size(); ++i) {
+            if (const float d = std::abs(optionsDraft_.musicVolume - kMus[i]); d < bestDiff) {
+                bestDiff = d;
+                best = i;
+            }
+        }
+        optionsDraft_.musicVolume = kMus[(best + std::size_t(step + int(kMus.size()))) % kMus.size()];
+    } else if (id == "opt_music_mute") {
+        optionsDraft_.musicMuted = !optionsDraft_.musicMuted;
+    } else if (id == "opt_speed") {
+        static constexpr std::array<int, 4> kSpeeds{{50, 100, 200, 300}};
+        std::size_t idx = 1;
+        for (std::size_t i = 0; i < kSpeeds.size(); ++i) {
+            if (kSpeeds[i] == optionsDraft_.speedPercent) { idx = i; break; }
+        }
+        optionsDraft_.speedPercent = kSpeeds[(idx + std::size_t(step + int(kSpeeds.size()))) % kSpeeds.size()];
+    } else if (id == "opt_smooth") {
+        optionsDraft_.smoothTerrain = !optionsDraft_.smoothTerrain;
+    } else if (id == "opt_effects") {
+        optionsDraft_.combatEffects = !optionsDraft_.combatEffects;
+    } else if (id == "opt_skip_intro") {
+        optionsDraft_.skipIntro = !optionsDraft_.skipIntro;
+    }
     dirty_ = true;
 }
 
@@ -790,6 +918,9 @@ std::size_t GoldFrontEnd::activeListCount() const {
         const std::size_t ci = fe_.selectedCampaign();
         return ci < campaigns_.size() ? campaigns_[ci].missions.size() : 0;
     }
+    if (fe_.screen() == FrontEnd::Screen::Replays) {
+        return replays_.size();
+    }
     return missions_.size();
 }
 
@@ -797,19 +928,26 @@ std::size_t GoldFrontEnd::activeListSelected() const {
     if (fe_.screen() == FrontEnd::Screen::CampaignMissions) {
         return fe_.selectedCampaignMission();
     }
+    if (fe_.screen() == FrontEnd::Screen::Replays) {
+        return fe_.selectedReplay();
+    }
     return fe_.selected();
 }
 
 void GoldFrontEnd::selectActiveRow(std::size_t index) {
     if (fe_.screen() == FrontEnd::Screen::CampaignMissions) {
         fe_.selectCampaignMission(index);
+    } else if (fe_.screen() == FrontEnd::Screen::Replays) {
+        fe_.selectReplay(index);
     } else {
         fe_.select(index);
     }
 }
 
 const char* GoldFrontEnd::activeRowPrefix() const {
-    return fe_.screen() == FrontEnd::Screen::CampaignMissions ? "cmission:" : "mission:";
+    if (fe_.screen() == FrontEnd::Screen::CampaignMissions) return "cmission:";
+    if (fe_.screen() == FrontEnd::Screen::Replays) return "replay:";
+    return "mission:";
 }
 
 std::size_t GoldFrontEnd::previewCampaignIndex() const {
@@ -871,11 +1009,18 @@ void GoldFrontEnd::ensureFocusedValid() {
         case FrontEnd::Screen::Briefing:
             focusedId_ = "start";
             break;
+        case FrontEnd::Screen::Options:
+            focusedId_ = kOptionRowIds[0];
+            break;
+        case FrontEnd::Screen::Replays:
+            focusedId_ = replays_.empty() ? "cancel" : "replay_start";
+            break;
         case FrontEnd::Screen::Ratings:
         case FrontEnd::Screen::Credits:
             focusedId_ = "cancel";
             break;
         case FrontEnd::Screen::Launch:
+        case FrontEnd::Screen::LaunchReplay:
         case FrontEnd::Screen::Quit:
             focusedId_.clear();
             break;
@@ -931,11 +1076,20 @@ void GoldFrontEnd::onScreenChanged(FrontEnd::Screen previous) {
             if (ci < campaigns_.size() && mi < campaigns_[ci].missions.size()) {
                 ensureOverviewLoaded(campaigns_[ci].missions[mi].path);
             }
+        } else if (fe_.screen() == FrontEnd::Screen::Replays) {
+            scrollOffset_ = 0;
+            ensureSelectionVisible();
+        } else if (fe_.screen() == FrontEnd::Screen::Options) {
+            beginOptionsEdit();
         } else if (fe_.screen() == FrontEnd::Screen::Briefing) {
             ensureOverviewLoaded(fe_.launchPath());
         }
+        if (fe_.screen() != FrontEnd::Screen::Options) {
+            settings_.difficulty = fe_.difficulty();
+        }
         dirty_ = true;
     } else if (fe_.screen() == FrontEnd::Screen::CampaignMissions) {
+        settings_.difficulty = fe_.difficulty();
         dirty_ = true;
     } else if (fe_.screen() == FrontEnd::Screen::Ratings) {
         ratingsScroll_ = 0;
@@ -1011,12 +1165,17 @@ std::string GoldFrontEnd::hitTestStage(double sx, double sy) const {
             return checkButtons(kCampaignFooterButtons);
         }
         case FrontEnd::Screen::SingleMissions:
-        case FrontEnd::Screen::CampaignMissions: {
+        case FrontEnd::Screen::CampaignMissions:
+        case FrontEnd::Screen::Replays: {
             if (fe_.screen() == FrontEnd::Screen::CampaignMissions &&
                 kDifficultyButtonRect.contains(sx, sy)) {
                 return "difficulty";
             }
-            if (const auto id = checkButtons(kSingleMissionButtons); !id.empty()) return id;
+            if (fe_.screen() == FrontEnd::Screen::Replays) {
+                if (const auto id = checkButtons(kReplayButtons); !id.empty()) return id;
+            } else {
+                if (const auto id = checkButtons(kSingleMissionButtons); !id.empty()) return id;
+            }
             const std::size_t count = activeListCount();
             const RectD listRect{kListX + 4, kListY + 6, kListW - 8, kVisibleMissionRows * kRowH};
             if (listRect.contains(sx, sy) && count > 0) {
@@ -1032,6 +1191,18 @@ std::string GoldFrontEnd::hitTestStage(double sx, double sy) const {
                     const double thumbY = thumbTopFor(scrollOffset_, count);
                     if (sy >= thumbY && sy < thumbY + kThumbH) return "scroll_thumb";
                     return sy < thumbY ? "scroll_page_up" : "scroll_page_down";
+                }
+            }
+            return {};
+        }
+        case FrontEnd::Screen::Options: {
+            if (kOptionsOkRect.contains(sx, sy)) return "ok";
+            if (kOptionsCancelRect.contains(sx, sy)) return "cancel";
+            for (std::size_t i = 0; i < kOptionRowIds.size(); ++i) {
+                if (optionDecRect(i).contains(sx, sy)) return std::string("opt_dec:") + kOptionRowIds[i];
+                if (optionIncRect(i).contains(sx, sy) || optionValueRect(i).contains(sx, sy) ||
+                    optionRowRect(i).contains(sx, sy)) {
+                    return std::string("opt_inc:") + kOptionRowIds[i];
                 }
             }
             return {};
@@ -1071,6 +1242,7 @@ std::string GoldFrontEnd::hitTestStage(double sx, double sy) const {
             return {};
         }
         case FrontEnd::Screen::Launch:
+        case FrontEnd::Screen::LaunchReplay:
         case FrontEnd::Screen::Quit:
             return {};
     }
@@ -1080,6 +1252,23 @@ std::string GoldFrontEnd::hitTestStage(double sx, double sy) const {
 void GoldFrontEnd::activateId(const std::string& id) {
     if (id.empty()) return;
     const auto prev = fe_.screen();
+
+    if (id.rfind("opt_dec:", 0) == 0) {
+        const std::string optId = id.substr(8);
+        focusedId_ = optId;
+        adjustOption(optId, -1);
+        return;
+    }
+    if (id.rfind("opt_inc:", 0) == 0) {
+        const std::string optId = id.substr(8);
+        focusedId_ = optId;
+        adjustOption(optId, 1);
+        return;
+    }
+    if (prev == FrontEnd::Screen::Options) {
+        if (id == "ok") commitOptionsEdit();
+        else if (id == "cancel" || id == "back") cancelOptionsEdit();
+    }
 
     if (id == "scroll_up") {
         scrollBy(-1);
@@ -1134,6 +1323,7 @@ void GoldFrontEnd::handleKey(SDL_Keycode key) {
     const auto prev = fe_.screen();
 
     if (key == SDLK_ESCAPE) {
+        if (prev == FrontEnd::Screen::Options) cancelOptionsEdit();
         fe_.back();
         onScreenChanged(prev);
         return;
@@ -1193,7 +1383,8 @@ void GoldFrontEnd::handleKey(SDL_Keycode key) {
             break;
         }
         case FrontEnd::Screen::SingleMissions:
-        case FrontEnd::Screen::CampaignMissions: {
+        case FrontEnd::Screen::CampaignMissions:
+        case FrontEnd::Screen::Replays: {
             const std::size_t count = activeListCount();
             auto loadSelectedOverview = [&] {
                 if (fe_.screen() == FrontEnd::Screen::CampaignMissions) {
@@ -1202,8 +1393,10 @@ void GoldFrontEnd::handleKey(SDL_Keycode key) {
                     if (ci < campaigns_.size() && mi < campaigns_[ci].missions.size()) {
                         ensureOverviewLoaded(campaigns_[ci].missions[mi].path);
                     }
-                } else if (const auto mi = fe_.selected(); mi < missions_.size()) {
-                    ensureOverviewLoaded(missions_[mi].path);
+                } else if (fe_.screen() == FrontEnd::Screen::SingleMissions) {
+                    if (const auto mi = fe_.selected(); mi < missions_.size()) {
+                        ensureOverviewLoaded(missions_[mi].path);
+                    }
                 }
             };
             if (count > 0) {
@@ -1247,15 +1440,39 @@ void GoldFrontEnd::handleKey(SDL_Keycode key) {
                 const int step = key == SDLK_LEFT ? -1 : 1;
                 if (fe_.screen() == FrontEnd::Screen::CampaignMissions) {
                     cycleFocus({"start", "difficulty", "cancel"}, step);
+                } else if (fe_.screen() == FrontEnd::Screen::Replays) {
+                    cycleFocus({"replay_start", "cancel"}, step);
                 } else {
                     cycleFocus({"start", "cancel"}, step);
                 }
             } else if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
-                if (focusedId_ == "cancel" || (fe_.screen() == FrontEnd::Screen::CampaignMissions && focusedId_ == "difficulty")) {
+                if (fe_.screen() == FrontEnd::Screen::Replays) {
+                    activateId(focusedId_ == "cancel" ? "cancel" : "replay_start");
+                } else if (focusedId_ == "cancel" || (fe_.screen() == FrontEnd::Screen::CampaignMissions && focusedId_ == "difficulty")) {
                     activateId(focusedId_);
                 } else {
                     activateId("start");
                 }
+            }
+            break;
+        }
+        case FrontEnd::Screen::Options: {
+            static const std::vector<std::string> kOrder{
+                "opt_difficulty", "opt_language", "opt_sfx", "opt_music_vol",
+                "opt_music_mute", "opt_speed", "opt_smooth", "opt_effects",
+                "opt_skip_intro", "ok", "cancel"
+            };
+            if (key == SDLK_UP) cycleFocus(kOrder, -1);
+            else if (key == SDLK_DOWN || key == SDLK_TAB) cycleFocus(kOrder, 1);
+            else if (key == SDLK_LEFT || key == SDLK_RIGHT) {
+                const int step = (key == SDLK_LEFT) ? -1 : 1;
+                if (focusedId_.rfind("opt_", 0) == 0) adjustOption(focusedId_, step);
+                else { focusedId_ = (focusedId_ == "ok") ? "cancel" : "ok"; dirty_ = true; }
+            } else if (key == SDLK_SPACE) {
+                if (focusedId_.rfind("opt_", 0) == 0) adjustOption(focusedId_, 1);
+                else activateId(focusedId_);
+            } else if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
+                activateId(focusedId_ == "cancel" ? "cancel" : "ok");
             }
             break;
         }
@@ -1317,6 +1534,7 @@ void GoldFrontEnd::handleKey(SDL_Keycode key) {
             break;
         }
         case FrontEnd::Screen::Launch:
+        case FrontEnd::Screen::LaunchReplay:
         case FrontEnd::Screen::Quit:
             break;
     }
@@ -1325,7 +1543,8 @@ void GoldFrontEnd::handleKey(SDL_Keycode key) {
 void GoldFrontEnd::handleMouseMove(double stageX, double stageY) {
     if (draggingThumb_) {
         if ((fe_.screen() == FrontEnd::Screen::SingleMissions ||
-             fe_.screen() == FrontEnd::Screen::CampaignMissions)) {
+             fe_.screen() == FrontEnd::Screen::CampaignMissions ||
+             fe_.screen() == FrontEnd::Screen::Replays)) {
             const std::size_t count = activeListCount();
             if (int(count) > kVisibleMissionRows) {
                 const double travel = std::max(1.0, kTrackH - kThumbH);
@@ -1373,7 +1592,8 @@ void GoldFrontEnd::handleMouseDown(double stageX, double stageY, std::uint8_t cl
     }
 
     if (fe_.screen() == FrontEnd::Screen::SingleMissions ||
-        fe_.screen() == FrontEnd::Screen::CampaignMissions) {
+        fe_.screen() == FrontEnd::Screen::CampaignMissions ||
+        fe_.screen() == FrontEnd::Screen::Replays) {
         std::size_t idx = 0;
         if (parseIndexAfter(hit, activeRowPrefix(), idx) && idx < activeListCount()) {
             const bool alreadySelected = (idx == activeListSelected());
@@ -1383,10 +1603,10 @@ void GoldFrontEnd::handleMouseDown(double stageX, double stageY, std::uint8_t cl
                 if (ci < campaigns_.size() && idx < campaigns_[ci].missions.size()) {
                     ensureOverviewLoaded(campaigns_[ci].missions[idx].path);
                 }
-            } else if (idx < missions_.size()) {
+            } else if (fe_.screen() == FrontEnd::Screen::SingleMissions && idx < missions_.size()) {
                 ensureOverviewLoaded(missions_[idx].path);
             }
-            focusedId_ = "start";
+            focusedId_ = (fe_.screen() == FrontEnd::Screen::Replays) ? "replay_start" : "start";
             dirty_ = true;
             if (clicks >= 2 || (clicks == 0 && alreadySelected)) {
                 activateId(hit);
@@ -1405,7 +1625,8 @@ void GoldFrontEnd::handleMouseUp() {
 
 void GoldFrontEnd::handleMouseWheel(float dy) {
     if ((fe_.screen() == FrontEnd::Screen::SingleMissions ||
-         fe_.screen() == FrontEnd::Screen::CampaignMissions) &&
+         fe_.screen() == FrontEnd::Screen::CampaignMissions ||
+         fe_.screen() == FrontEnd::Screen::Replays) &&
         dy != 0.0f) {
         scrollBy(dy > 0 ? -3 : 3);
     } else if (fe_.screen() == FrontEnd::Screen::Briefing && dy != 0.0f) {
@@ -2066,6 +2287,199 @@ void GoldFrontEnd::renderToBuffer(int pixelW, int pixelH, std::vector<std::uint8
 
             drawGoldStencilButton(cr, pangoCtx, kRatingsCancelRect, tr("Cancel"), '\0',
                                   hoveredId_ == "cancel", focusedId_ == "cancel", true, 24.0);
+        } else if (screen == FrontEnd::Screen::Options) {
+            drawHeading(cr, pangoCtx, tr("Options"), {200, 28, 400, 32}, 18.0);
+            drawBronzeBox(cr, kOptionsPanelRect.x, kOptionsPanelRect.y,
+                          kOptionsPanelRect.w, kOptionsPanelRect.h, 0.88);
+
+            const auto langVal = ss2::language();
+            const std::string langLabel = (langVal == Language::french) ? "Français"
+                : (langVal == Language::spanish ? "Español" : "English");
+            const long sfxPct = std::lround(std::clamp(optionsDraft_.sfxVolume, 0.0f, 1.0f) * 100.0f);
+            const std::string sfxStr = sfxPct <= 0 ? tr("Muted") : (std::to_string(sfxPct) + "%");
+            const float mv = optionsDraft_.musicVolume;
+            const std::string musVolStr = mv >= 0.34f ? "100%" : mv >= 0.23f ? "75%" : mv >= 0.13f ? "50%" : "25%";
+            const std::string musStateStr = tr(optionsDraft_.musicMuted ? "Muted" : "On");
+            const std::string spdStr = optionsDraft_.speedPercent == 50 ? "0.5x"
+                : optionsDraft_.speedPercent == 200 ? "2x" : optionsDraft_.speedPercent == 300 ? "3x" : "1x";
+
+            struct OptDisplay {
+                std::string label;
+                std::string value;
+            };
+            const std::array<OptDisplay, 9> rows{{
+                {tr("Game difficulty:"), tr(difficultyKey(optionsDraft_.difficulty))},
+                {tr("Language"), langLabel},
+                {tr("SFX volume"), sfxStr},
+                {tr("Music volume"), musVolStr},
+                {tr("Music"), musStateStr},
+                {tr("Game speed"), spdStr},
+                {tr("Smooth terrain"), tr(optionsDraft_.smoothTerrain ? "On" : "Off")},
+                {tr("Tracers and flashes"), tr(optionsDraft_.combatEffects ? "On" : "Off")},
+                {tr("Skip Intro"), tr(optionsDraft_.skipIntro ? "On" : "Off")},
+            }};
+
+            for (std::size_t i = 0; i < kOptionRowIds.size(); ++i) {
+                const RectD rr = optionRowRect(i);
+                const RectD dr = optionDecRect(i);
+                const RectD vr = optionValueRect(i);
+                const RectD ir = optionIncRect(i);
+                const std::string id = kOptionRowIds[i];
+                const std::string decId = "opt_dec:" + id;
+                const std::string incId = "opt_inc:" + id;
+                const bool rowHov = (hoveredId_ == decId || hoveredId_ == incId);
+                const bool rowFoc = (focusedId_ == id);
+
+                if (rowFoc) {
+                    cairo_set_source_rgba(cr, 98.0 / 255.0, 114.0 / 255.0, 72.0 / 255.0, 0.36);
+                    cairo_rectangle(cr, rr.x, rr.y, rr.w, rr.h);
+                    cairo_fill(cr);
+                } else if (rowHov) {
+                    cairo_set_source_rgba(cr, 72.0 / 255.0, 96.0 / 255.0, 56.0 / 255.0, 0.22);
+                    cairo_rectangle(cr, rr.x, rr.y, rr.w, rr.h);
+                    cairo_fill(cr);
+                }
+
+                auto lbl = makeTextLayout(pangoCtx, rows[i].label, 14.5, rowFoc);
+                int tw = 0, th = 0;
+                pango_layout_get_pixel_size(lbl.get(), &tw, &th);
+                cairo_move_to(cr, rr.x + 12.0, rr.y + (rr.h - th) * 0.5);
+                cairo_set_source_rgb(cr, rowFoc ? 248.0 / 255.0 : 232.0 / 255.0,
+                                     rowFoc ? 236.0 / 255.0 : 228.0 / 255.0,
+                                     rowFoc ? 186.0 / 255.0 : 206.0 / 255.0);
+                pango_cairo_show_layout(cr, lbl.get());
+
+                auto drawArrowBox = [&](const RectD& br, const char* sym, bool hov) {
+                    drawBronzeBox(cr, br.x, br.y, br.w, br.h, hov ? 0.96 : 0.86);
+                    drawGoldStencilButton(cr, pangoCtx, br, sym, '\0', hov, false, true, 16.0, true);
+                };
+                drawArrowBox(dr, "<", hoveredId_ == decId);
+                drawBronzeBox(cr, vr.x, vr.y, vr.w, vr.h, (rowFoc || rowHov) ? 0.92 : 0.84);
+                drawGoldStencilButton(cr, pangoCtx, vr, rows[i].value, '\0', rowHov, rowFoc, true, 14.5, true);
+                drawArrowBox(ir, ">", hoveredId_ == incId);
+            }
+
+            drawGoldStencilButton(cr, pangoCtx, kOptionsOkRect, tr("OK"), '\0',
+                                  hoveredId_ == "ok", focusedId_ == "ok", true, 24.0);
+            drawGoldStencilButton(cr, pangoCtx, kOptionsCancelRect, tr("Cancel"), '\0',
+                                  hoveredId_ == "cancel", focusedId_ == "cancel", true, 24.0);
+        } else if (screen == FrontEnd::Screen::Replays) {
+            drawHeading(cr, pangoCtx, tr("Replay Game"), {200, 38, 400, 28}, 17.0);
+            drawHeading(cr, pangoCtx, tr("Replays:"), {130, 110, 150, 20}, 15.0);
+            drawHeading(cr, pangoCtx, tr("Details:"), {520, 110, 144, 20}, 15.0);
+
+            drawBronzeBox(cr, kListX, kListY, kListW, kListH, 0.88);
+            cairo_save(cr);
+            cairo_rectangle(cr, kListX + 4, kListY + 4, kListW - 8, kListH - 8);
+            cairo_clip(cr);
+
+            const std::size_t rowCount = replays_.size();
+            const std::size_t selectedRow = fe_.selectedReplay();
+            if (rowCount == 0) {
+                auto emptyLbl = makeTextLayout(pangoCtx, tr("No replays recorded yet."), 14.0, false);
+                cairo_move_to(cr, kListX + 16, kListY + 18);
+                cairo_set_source_rgb(cr, 180.0 / 255.0, 180.0 / 255.0, 165.0 / 255.0);
+                pango_cairo_show_layout(cr, emptyLbl.get());
+            } else {
+                const int endIdx = std::min(int(rowCount), scrollOffset_ + kVisibleMissionRows);
+                for (int idx = scrollOffset_; idx < endIdx; ++idx) {
+                    const int row = idx - scrollOffset_;
+                    const double ry = kListY + 6.0 + row * kRowH;
+                    const bool isSelected = (std::size_t(idx) == selectedRow);
+                    const bool isHovered = (hoveredId_ == "replay:" + std::to_string(idx));
+                    if (isSelected) {
+                        cairo_set_source_rgba(cr, 98.0 / 255.0, 114.0 / 255.0, 72.0 / 255.0, 0.38);
+                        cairo_rectangle(cr, kListX + 5, ry, kListW - 10, kRowH - 1.0);
+                        cairo_fill(cr);
+                    } else if (isHovered) {
+                        cairo_set_source_rgba(cr, 72.0 / 255.0, 96.0 / 255.0, 56.0 / 255.0, 0.22);
+                        cairo_rectangle(cr, kListX + 5, ry, kListW - 10, kRowH - 1.0);
+                        cairo_fill(cr);
+                    }
+
+                    auto rowLayout = makeTextLayout(pangoCtx, replays_[std::size_t(idx)].name, 13.0, isSelected);
+                    pango_layout_set_width(rowLayout.get(), int((kListW - 22.0) * PANGO_SCALE));
+                    pango_layout_set_ellipsize(rowLayout.get(), PANGO_ELLIPSIZE_END);
+                    cairo_move_to(cr, kListX + 12, ry + 2.0);
+                    if (isSelected) cairo_set_source_rgb(cr, 245.0 / 255.0, 245.0 / 255.0, 245.0 / 255.0);
+                    else if (isHovered) cairo_set_source_rgb(cr, 128.0 / 255.0, 224.0 / 255.0, 138.0 / 255.0);
+                    else cairo_set_source_rgb(cr, 49.0 / 255.0, 174.0 / 255.0, 74.0 / 255.0);
+                    pango_cairo_show_layout(cr, rowLayout.get());
+                }
+            }
+            cairo_restore(cr);
+
+            drawGoldScrollbar(kScrollX, kScrollY, kScrollW, kScrollH, kVisibleMissionRows,
+                              true, rowCount, scrollOffset_,
+                              hoveredId_ == "scroll_up", hoveredId_ == "scroll_down",
+                              hoveredId_ == "scroll_thumb" || draggingThumb_);
+
+            drawBronzeBox(cr, 438, 134, 330, 352, 0.86);
+            if (selectedRow < rowCount) {
+                const auto& r = replays_[selectedRow];
+                drawHeading(cr, pangoCtx, r.name, {450, 146, 306, 26}, 15.5);
+                cairo_set_source_rgba(cr, 182.0 / 255.0, 174.0 / 255.0, 146.0 / 255.0, 0.55);
+                cairo_set_line_width(cr, 1.0);
+                cairo_move_to(cr, 452, 180);
+                cairo_line_to(cr, 754, 180);
+                cairo_stroke(cr);
+
+                const std::string missionStem = r.mission.empty()
+                    ? std::string("-")
+                    : std::filesystem::path(r.mission).stem().string();
+                const unsigned secs = r.endTick / 25u;
+                const unsigned mins = secs / 60u;
+                const unsigned remS = secs % 60u;
+                const std::string durStr = (mins < 10u ? "0" : "") + std::to_string(mins) + ":" +
+                    (remS < 10u ? "0" : "") + std::to_string(remS) +
+                    " (" + std::to_string(r.endTick) + "t)";
+
+                struct DetailRow {
+                    std::string k;
+                    std::string v;
+                };
+                const std::array<DetailRow, 6> details{{
+                    {tr("Mission"), missionStem},
+                    {tr("Duration"), durStr},
+                    {tr("Commands"), std::to_string(r.commandCount)},
+                    {tr("Difficulty"), tr(difficultyKey(r.difficulty))},
+                    {tr("Auto-engage"), tr(r.autoEngage ? "On" : "Off")},
+                    {tr("State hash"), r.hashHex.empty() ? std::string("-") : r.hashHex},
+                }};
+                for (std::size_t i = 0; i < details.size(); ++i) {
+                    const double dy = 196.0 + double(i) * 38.0;
+                    auto kl = makeTextLayout(pangoCtx, details[i].k + ":", 13.0, false);
+                    cairo_move_to(cr, 454, dy);
+                    cairo_set_source_rgb(cr, 200.0 / 255.0, 194.0 / 255.0, 166.0 / 255.0);
+                    pango_cairo_show_layout(cr, kl.get());
+
+                    auto vl = makeTextLayout(pangoCtx, details[i].v, 13.0, true, 184.0, PANGO_ALIGN_RIGHT);
+                    pango_layout_set_ellipsize(vl.get(), PANGO_ELLIPSIZE_END);
+                    cairo_move_to(cr, 570, dy);
+                    cairo_set_source_rgb(cr, 245.0 / 255.0, 224.0 / 255.0, 145.0 / 255.0);
+                    pango_cairo_show_layout(cr, vl.get());
+                }
+                if (!r.mission.empty()) {
+                    auto pathLbl = makeTextLayout(pangoCtx, r.mission, 11.0, false, 302.0);
+                    pango_layout_set_ellipsize(pathLbl.get(), PANGO_ELLIPSIZE_START);
+                    cairo_move_to(cr, 452, 446.0);
+                    cairo_set_source_rgba(cr, 188.0 / 255.0, 192.0 / 255.0, 174.0 / 255.0, 0.85);
+                    pango_cairo_show_layout(cr, pathLbl.get());
+                }
+            } else {
+                drawHeading(cr, pangoCtx, tr("No replays recorded yet."), {452, 240, 302, 32}, 14.5);
+                auto hint = makeTextLayout(pangoCtx, "--record FILE\n~/.local/share/ss2/replays/",
+                                           12.5, false, 302.0, PANGO_ALIGN_CENTER);
+                cairo_move_to(cr, 452, 286);
+                cairo_set_source_rgb(cr, 188.0 / 255.0, 192.0 / 255.0, 174.0 / 255.0);
+                pango_cairo_show_layout(cr, hint.get());
+            }
+
+            for (const auto& b : kReplayButtons) {
+                const bool enabled = (std::string_view(b.id) == "replay_start") ? (rowCount > 0) : b.enabled;
+                drawGoldStencilButton(cr, pangoCtx, b.rect, tr(b.enLabel), b.shortcut,
+                                      hoveredId_ == b.id, focusedId_ == b.id, enabled, 24.0);
+            }
         }
     }
 

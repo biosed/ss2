@@ -28,6 +28,7 @@ struct UserSettings {
     bool combatEffects{true};
     int speedPercent{100};
     int difficulty{2}; // 1 = Easy, 2 = Normal, 3 = Hard
+    bool skipIntro{false};
     std::set<std::string> completedMissions;
     std::map<std::string, int> missionHighScores;
     bool operator==(const UserSettings&) const = default;
@@ -69,6 +70,16 @@ inline std::filesystem::path defaultSettingsPath() {
     return {};
 }
 
+inline std::filesystem::path defaultReplaysDir() {
+    if (const char* xdg = std::getenv("XDG_DATA_HOME"); xdg && *xdg) {
+        return std::filesystem::path(xdg) / "ss2" / "replays";
+    }
+    if (const char* home = std::getenv("HOME"); home && *home) {
+        return std::filesystem::path(home) / ".local" / "share" / "ss2" / "replays";
+    }
+    return {};
+}
+
 inline std::string serializeUserSettings(const UserSettings& s) {
     std::ostringstream out;
     if (s.language) {
@@ -88,6 +99,7 @@ inline std::string serializeUserSettings(const UserSettings& s) {
     out << "combat_effects=" << (s.combatEffects ? 1 : 0) << '\n';
     out << "speed_percent=" << speed << '\n';
     out << "difficulty=" << diff << '\n';
+    out << "skip_intro=" << (s.skipIntro ? 1 : 0) << '\n';
     std::set<std::string> normalized;
     for (const auto& m : s.completedMissions) {
         const auto k = normalizeMissionKey(m);
@@ -175,6 +187,9 @@ inline UserSettings parseUserSettings(std::string_view text) {
             else if (ieq(val, "easy")) s.difficulty = 1;
             else if (ieq(val, "normal")) s.difficulty = 2;
             else if (ieq(val, "hard")) s.difficulty = 3;
+        } else if (key == "skip_intro") {
+            bool b = false;
+            if (parseBool(val, b)) s.skipIntro = b;
         } else if (key == "completed_missions") {
             std::size_t itemPos = 0;
             while (itemPos <= val.size()) {

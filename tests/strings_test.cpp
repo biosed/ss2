@@ -103,6 +103,7 @@ int main() {
             us.combatEffects = false;
             us.speedPercent = 200;
             us.difficulty = 3;
+            us.skipIntro = true;
             us.completedMissions = {"022000", "barbarossa"};
             us.missionHighScores = {{"022000", 4250}, {"barbarossa", 9100}};
             const std::string ini = serializeUserSettings(us);
@@ -111,7 +112,8 @@ int main() {
             check(std::abs(parsed.sfxVolume - 0.75f) < 0.01f, "settings sfxVolume round-trip");
             check(std::abs(parsed.musicVolume - 0.40f) < 0.01f, "settings musicVolume round-trip");
             check(parsed.musicMuted && parsed.smoothTerrain && !parsed.combatEffects, "settings booleans round-trip");
-            check(parsed.speedPercent == 200 && parsed.difficulty == 3, "settings speed & difficulty round-trip");
+            check(parsed.speedPercent == 200 && parsed.difficulty == 3 && parsed.skipIntro,
+                  "settings speed, difficulty & skipIntro round-trip");
             check(parsed.completedMissions.contains("022000") && parsed.completedMissions.contains("BARBAROSSA"),
                   "settings completed missions normalized & preserved");
             check(parsed.missionHighScores.at("022000") == 4250 && parsed.missionHighScores.at("BARBAROSSA") == 9100,
@@ -120,14 +122,14 @@ int main() {
             const UserSettings messy = parseUserSettings(
                 "# comment\nsfx_volume=999\ndifficulty=9\nspeed_percent=77\nmusic_volume=18\n");
             check(std::abs(messy.sfxVolume - 1.0f) < 0.001f && messy.difficulty == 2 && messy.speedPercent == 100 &&
-                  std::abs(messy.musicVolume - 0.18f) < 0.01f,
+                  !messy.skipIntro && std::abs(messy.musicVolume - 0.18f) < 0.01f,
                   "out-of-range settings clamp or ignore safely");
 
             const auto tmpDir = std::filesystem::temp_directory_path() / "ss2-settings-test";
             const auto tmpPath = tmpDir / "settings.ini";
             check(saveUserSettings(tmpPath, us), "saveUserSettings wrote file");
             const UserSettings disk = loadUserSettings(tmpPath);
-            check(disk.difficulty == 3 && disk.completedMissions.contains("BARBAROSSA") &&
+            check(disk.difficulty == 3 && disk.skipIntro && disk.completedMissions.contains("BARBAROSSA") &&
                   disk.missionHighScores.at("BARBAROSSA") == 9100 &&
                   disk.language == Language::french,
                   "loadUserSettings restored saved file");

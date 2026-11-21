@@ -3,22 +3,34 @@
 #include "ui/menu.hpp"
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <vector>
 
 namespace ss2 {
 
 // The Gold frontend navigation graph, decoupled from SDL rendering and game assets so it
-// can be regression-tested headless. The caller feeds the mission/campaign browser entries,
+// can be regression-tested headless. The caller feeds the mission/campaign/replay entries,
 // builds a Menu from items()/title(), shows briefingText() on the Briefing screen, and
-// reacts to screen(): Launch means load launchPath(), Quit means exit.
+// reacts to screen(): Launch means load launchPath(), LaunchReplay means replay launchReplayPath().
 class FrontEnd {
 public:
     enum class Screen {
         MainMenu, SinglePlayer, SingleMissions, Campaigns, CampaignMissions,
-        Briefing, Ratings, Credits, Launch, Quit
+        Briefing, Options, Ratings, Replays, Credits, Launch, LaunchReplay, Quit
     };
     enum class RatingsMode { Campaigns, SingleMissions };
+
+    struct ReplayEntry {
+        std::string name;
+        std::string path;
+        std::string mission;
+        std::string hashHex;
+        std::size_t commandCount{};
+        std::uint32_t endTick{};
+        int difficulty{2};
+        bool autoEngage{true};
+    };
 
     struct Entry {
         std::string name, path, description, tag;
@@ -40,6 +52,7 @@ public:
 
     void setMissions(std::vector<Entry> missions);
     void setCampaigns(std::vector<CampaignEntry> campaigns);
+    void setReplays(std::vector<ReplayEntry> replays);
 
     Screen screen() const { return screen_; }
     std::string title() const;
@@ -72,6 +85,12 @@ public:
     std::string briefingText() const;
     std::string launchPath() const;
 
+    const std::vector<ReplayEntry>& replays() const { return replays_; }
+    std::size_t selectedReplay() const { return selectedReplay_; }
+    void selectReplay(std::size_t index);
+    const ReplayEntry* selectedReplayEntry() const;
+    std::string launchReplayPath() const;
+
     // A deferred branch was chosen; the message stays on the current screen. Cleared on read.
     std::string takeNotice();
 
@@ -85,9 +104,11 @@ private:
     Screen screen_ = Screen::MainMenu;
     std::vector<Entry> missions_;
     std::vector<CampaignEntry> campaigns_;
+    std::vector<ReplayEntry> replays_;
     std::size_t selected_ = 0;
     std::size_t selectedCampaign_ = 0;
     std::size_t selectedCampaignMission_ = 0;
+    std::size_t selectedReplay_ = 0;
     bool briefingFromCampaign_ = false;
     int difficulty_ = 2;
     RatingsMode ratingsMode_ = RatingsMode::Campaigns;

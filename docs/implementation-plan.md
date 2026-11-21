@@ -27,13 +27,12 @@ The first bounded SUE/PCK comparison passed on three retail sprite frames. The s
 
 ## Current state, 22 November 2026
 
-Tutorial I plays end to end on the native build: the normal-input playthrough reaches the P[7] village briefing with the original orders, phrases and casualties, and the wreck leg matches the Gold reference. Infantry combat, fog of war and Gold 2.2 spotting are implemented and covered by `combat_parity` and the retail spotting rows in `gold_infantry_combat`. The Gold front end (screens 1–4 plus the 5-campaign browser and difficulty selector), Bink movies and localized UI are in place. Every simulation order passes through a recorded `cmd::Command`, `MissionRunner` replays command logs on a manual clock verified by a full-state 64-bit simulation hash (`stateHash()`), `--record FILE` and `--replay FILE` are wired in the CLI (`gold_cli_record_replay`), and all three former monoliths (`TutorialUnits`, `GameSession` in `src/session/`, and `tutorial_vm_test`) are split into modular translation units with `CMakePresets.json` (`release`, `validation`, `sanitize`).
+Tutorial I plays end to end on the native build: the normal-input playthrough reaches the P[7] village briefing with the original orders, phrases and casualties, and the wreck leg matches the Gold reference. Infantry combat, fog of war and Gold 2.2 spotting are implemented and covered by `combat_parity` and the retail spotting rows in `gold_infantry_combat`. The Gold front end (`Single Player`, `Campaigns`, `Single Missions`, `Mission Briefing`, `Options`, `Ratings`, `Replay Game`, `Credits`), Bink movies and localized UI are in place. Every simulation order passes through a recorded `cmd::Command`, `MissionRunner` replays command logs on a manual clock verified by a full-state 64-bit simulation hash (`stateHash()`), `--record FILE` and `--replay FILE` are wired in the CLI (`gold_cli_record_replay`), `gold_session_input` verifies headless `GameSession::handleInputEvent` -> `MissionRunner` -> replay parity, `gold_tutorial_replay` verifies the full Tutorial I route through the P[7] village briefing (`0xb72cfe2bbab46f1a`), and all three former monoliths (`TutorialUnits`, `GameSession` in `src/session/`, and `tutorial_vm_test`) are split into modular translation units with `CMakePresets.json` (`release`, `validation`, `sanitize`).
 
 Next work, in order:
 
-1. A headless input-to-command unit test over `GameSession` event handling and a recorded full Tutorial I route regression test.
-2. A controlled visibility comparison against Gold at 1× zoom and matched simulation ticks.
-3. The per-mission weather selector (`I-MISXINF` dword[0]) and the native-regression-only formulas listed in the fidelity audit (weather sight, scan delay, hatch and sniper timing).
-4. Cross-ISA floating-point determinism audit (`src/sim/`) ahead of any native-to-native lockstep prototype.
+1. A controlled visibility comparison against Gold at 1× zoom and matched simulation ticks.
+2. The per-mission weather selector (`I-MISXINF` dword[0]) and the native-regression-only formulas listed in the fidelity audit (weather sight, scan delay, hatch and sniper timing).
+3. Cross-ISA floating-point determinism audit (`src/sim/`) ahead of any native-to-native lockstep prototype.
 
 Physical BC-250/RADV 4K/120 Hz performance remains open. The project still has no Git remote, so the CI workflow has never run. [Tutorial I results](tutorial-simulation.md)

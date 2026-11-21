@@ -59,6 +59,24 @@ void FrontEnd::setCampaigns(std::vector<CampaignEntry> campaigns) {
     }
 }
 
+void FrontEnd::setReplays(std::vector<ReplayEntry> replays) {
+    replays_ = std::move(replays);
+    if (selectedReplay_ >= replays_.size()) selectedReplay_ = 0;
+}
+
+void FrontEnd::selectReplay(std::size_t index) {
+    selectedReplay_ = replays_.empty() ? 0 : (index < replays_.size() ? index : replays_.size() - 1);
+}
+
+const FrontEnd::ReplayEntry* FrontEnd::selectedReplayEntry() const {
+    return selectedReplay_ < replays_.size() ? &replays_[selectedReplay_] : nullptr;
+}
+
+std::string FrontEnd::launchReplayPath() const {
+    const auto* r = selectedReplayEntry();
+    return r ? r->path : std::string{};
+}
+
 void FrontEnd::select(std::size_t index) {
     selected_ = missions_.empty() ? 0 : (index < missions_.size() ? index : missions_.size() - 1);
 }
@@ -145,9 +163,12 @@ std::string FrontEnd::title() const {
         case Screen::CampaignMissions:
             return currentCampaign() ? currentCampaign()->name : tr("Campaigns");
         case Screen::Briefing: return tr("Mission Briefing");
+        case Screen::Options: return tr("Options");
         case Screen::Ratings: return tr("Ratings");
+        case Screen::Replays: return tr("Replay Game");
         case Screen::Credits: return tr("Credits");
         case Screen::Launch:
+        case Screen::LaunchReplay:
         case Screen::Quit: break;
     }
     return {};
@@ -212,15 +233,31 @@ std::vector<MenuItem> FrontEnd::items() const {
             items.push_back({"start", tr("Start"), "S", true});
             items.push_back({"cancel", tr("Cancel"), "Esc", true});
             break;
+        case Screen::Options:
+            items.push_back({"ok", tr("OK"), "Enter", true});
+            items.push_back({"cancel", tr("Cancel"), "Esc", true});
+            break;
         case Screen::Ratings:
             items.push_back({"ratings_campaigns", tr("Campaigns"), "C", true});
             items.push_back({"ratings_missions", tr("Single Missions"), "S", true});
+            items.push_back({"cancel", tr("Cancel"), "Esc", true});
+            break;
+        case Screen::Replays:
+            for (std::size_t i = 0; i < replays_.size(); ++i) {
+                items.push_back({"replay:" + std::to_string(i), replays_[i].name,
+                                 std::to_string(replays_[i].commandCount) + " cmd", true});
+            }
+            if (replays_.empty()) {
+                items.push_back({"", tr("No replays recorded yet."), "", false});
+            }
+            items.push_back({"replay_start", tr("Replay"), "R", !replays_.empty()});
             items.push_back({"cancel", tr("Cancel"), "Esc", true});
             break;
         case Screen::Credits:
             items.push_back({"cancel", tr("Cancel"), "Esc", true});
             break;
         case Screen::Launch:
+        case Screen::LaunchReplay:
         case Screen::Quit:
             break;
     }
@@ -251,14 +288,23 @@ void FrontEnd::activate(const std::string& id) {
         }
         return;
     }
+    if (std::size_t index = 0; parseTailIndex(id, "replay:", index)) {
+        if (index < replays_.size()) {
+            selectReplay(index);
+            screen_ = Screen::LaunchReplay;
+        }
+        return;
+    }
 
     switch (screen_) {
         case Screen::MainMenu:
             if (id == "single") screen_ = Screen::SinglePlayer;
+            else if (id == "options") screen_ = Screen::Options;
             else if (id == "ratings") screen_ = Screen::Ratings;
+            else if (id == "replay") screen_ = Screen::Replays;
             else if (id == "credits") screen_ = Screen::Credits;
             else if (id == "quit") screen_ = Screen::Quit;
-            else if (id == "multi" || id == "options" || id == "replay") notice_ = tr("Not implemented yet.");
+            else if (id == "multi") notice_ = tr("Not implemented yet.");
             break;
         case Screen::SinglePlayer:
             if (id == "missions") {
@@ -311,16 +357,28 @@ void FrontEnd::activate(const std::string& id) {
                 screen_ = briefingFromCampaign_ ? Screen::CampaignMissions : Screen::SingleMissions;
             }
             break;
+        case Screen::Options:
+            if (id == "ok" || id == "cancel" || id == "back") screen_ = Screen::MainMenu;
+            break;
         case Screen::Ratings:
             if (id == "ratings_campaigns") ratingsMode_ = RatingsMode::Campaigns;
             else if (id == "ratings_missions") ratingsMode_ = RatingsMode::SingleMissions;
             else if (id == "ratings_toggle") toggleRatingsMode();
             else if (id == "cancel" || id == "back") screen_ = Screen::MainMenu;
             break;
+        case Screen::Replays:
+            if (id == "replay_start") {
+                if (selectedReplayEntry()) screen_ = Screen::LaunchReplay;
+                else notice_ = tr("No replays recorded yet.");
+            } else if (id == "cancel" || id == "back") {
+                screen_ = Screen::MainMenu;
+            }
+            break;
         case Screen::Credits:
             if (id == "cancel" || id == "back") screen_ = Screen::MainMenu;
             break;
         case Screen::Launch:
+        case Screen::LaunchReplay:
         case Screen::Quit:
             break;
     }
@@ -336,11 +394,14 @@ void FrontEnd::back() {
         case Screen::Briefing:
             screen_ = briefingFromCampaign_ ? Screen::CampaignMissions : Screen::SingleMissions;
             break;
+        case Screen::Options:
         case Screen::Ratings:
+        case Screen::Replays:
         case Screen::Credits:
             screen_ = Screen::MainMenu;
             break;
         case Screen::Launch:
+        case Screen::LaunchReplay:
         case Screen::Quit: break;
     }
 }
@@ -390,8 +451,13 @@ std::string FrontEnd::shortcutId(char letter) const {
             if (c == 'c') return "ratings_campaigns";
             if (c == 's') return "ratings_missions";
             break;
+        case Screen::Replays:
+            if (c == 'r') return "replay_start";
+            break;
+        case Screen::Options:
         case Screen::Credits:
         case Screen::Launch:
+        case Screen::LaunchReplay:
         case Screen::Quit:
             break;
     }

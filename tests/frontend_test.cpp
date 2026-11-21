@@ -158,16 +158,61 @@ int main() {
         check(def.screen() == FrontEnd::Screen::MainMenu, "Multiplayer is deferred, stays on Main Menu");
         check(!def.takeNotice().empty(), "deferred branch reports a notice");
         check(def.takeNotice().empty(), "notice is cleared after reading");
-        def.activate("options");
-        check(def.screen() == FrontEnd::Screen::MainMenu && !def.takeNotice().empty(),
-              "Options is deferred and reports a notice");
-        def.activate("replay");
-        check(def.screen() == FrontEnd::Screen::MainMenu && !def.takeNotice().empty(),
-              "Replay is deferred and reports a notice");
         def.activate("single");
         def.activate("load");
         check(def.screen() == FrontEnd::Screen::SinglePlayer, "Load is deferred, stays on Single Player");
         check(!def.takeNotice().empty(), "Load reports a notice");
+
+        // Options (O) and Replays (P) navigation, shortcuts, and launch/cancel flows.
+        {
+            FrontEnd opt;
+            opt.activate(opt.shortcutId('o'));
+            check(opt.screen() == FrontEnd::Screen::Options && opt.title() == "Options",
+                  "O opens Options screen");
+            check(hasId(opt.items(), "ok") && hasId(opt.items(), "cancel"),
+                  "Options offers OK and Cancel");
+            opt.activate("ok");
+            check(opt.screen() == FrontEnd::Screen::MainMenu, "OK returns from Options to Main Menu");
+            opt.activate("options");
+            opt.activate("cancel");
+            check(opt.screen() == FrontEnd::Screen::MainMenu, "Cancel returns from Options to Main Menu");
+            opt.activate("options");
+            opt.back();
+            check(opt.screen() == FrontEnd::Screen::MainMenu, "Esc returns from Options to Main Menu");
+
+            FrontEnd rep;
+            rep.activate(rep.shortcutId('p'));
+            check(rep.screen() == FrontEnd::Screen::Replays && rep.title() == "Replay Game",
+                  "P opens Replay Game screen");
+            rep.activate("replay_start");
+            check(rep.screen() == FrontEnd::Screen::Replays && !rep.takeNotice().empty(),
+                  "Empty Replay Start stays on Replays and emits a notice");
+            rep.setReplays({
+                {"tut1_run", "/home/user/.local/share/ss2/replays/tut1_run.ss2rep",
+                 "maps/single/--- TUTORIAL I ---.SSM", "0xdeadbeef", 12, 3734, 2, true},
+                {"russian1", "/home/user/.local/share/ss2/replays/russian1.ss2rep",
+                 "maps/campaign/000000.ssc", "0xcafebabe", 4, 120, 3, false},
+            });
+            check(rep.shortcutId('r') == "replay_start", "Replays advertises R for Replay");
+            rep.selectReplay(1);
+            rep.activate(rep.shortcutId('r'));
+            check(rep.screen() == FrontEnd::Screen::LaunchReplay &&
+                  rep.launchReplayPath() == "/home/user/.local/share/ss2/replays/russian1.ss2rep",
+                  "R on Replays launches selected replay path");
+            rep.back();
+            rep.activate("options");
+            rep.back();
+            rep.activate("replay");
+            rep.activate("replay:0");
+            check(rep.screen() == FrontEnd::Screen::LaunchReplay &&
+                  rep.selectedReplay() == 0 &&
+                  rep.launchReplayPath() == "/home/user/.local/share/ss2/replays/tut1_run.ss2rep",
+                  "replay:0 selects and launches first replay");
+            FrontEnd repEsc;
+            repEsc.activate("replay");
+            repEsc.back();
+            check(repEsc.screen() == FrontEnd::Screen::MainMenu, "Esc returns from Replays to Main Menu");
+        }
 
         // Ratings (R) and Credits (C) screens, tab toggling, and Cancel/Esc return.
         {

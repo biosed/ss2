@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ui/frontend.hpp"
+#include "ui/settings.hpp"
 
 #include <SDL3/SDL.h>
 #include <chrono>
@@ -56,9 +57,9 @@ struct GoldPoint {
 };
 
 // Authentic Sudden Strike II Gold 2.2 frontend renderer and controller for Screens 1-4
-// plus Gold Campaigns, Ratings, and Credits screens. Composites real menu_common.sue
-// artwork + mission I-JPG1024 overviews onto an aspect-fitted 800x600 stage inside
-// OverlaySlot::panel so Briefing and Menu never overlap.
+// plus Gold Campaigns, Options, Ratings, Replay Browser, and Credits screens. Composites real
+// menu_common.sue artwork + mission I-JPG1024 overviews onto an aspect-fitted 800x600 stage
+// inside OverlaySlot::panel so Briefing and Menu never overlap.
 class GoldFrontEnd {
 public:
     GoldFrontEnd(SDL_Window* window, const std::filesystem::path& gameDir,
@@ -70,8 +71,13 @@ public:
 
     void setMissions(std::vector<GoldMissionEntry> missions);
     void setCampaigns(std::vector<GoldCampaignEntry> campaigns);
+    void setReplays(std::vector<FrontEnd::ReplayEntry> replays);
     void setDifficulty(int difficulty);
     int difficulty() const { return fe_.difficulty(); }
+
+    void setSettings(const UserSettings& settings);
+    const UserSettings& settings() const { return settings_; }
+    bool takeSettingsSaved();
 
     const FrontEnd& state() const { return fe_; }
     FrontEnd& state() { return fe_; }
@@ -118,6 +124,10 @@ private:
     void ensureSelectionVisible();
     void scrollBy(int deltaRows);
     void scrollRatingsBy(int deltaRows);
+    void adjustOption(const std::string& id, int delta);
+    void beginOptionsEdit();
+    void commitOptionsEdit();
+    void cancelOptionsEdit();
     std::string hitTestStage(double sx, double sy) const;
     void activateId(const std::string& id);
     void showNotice(std::string text);
@@ -128,6 +138,11 @@ private:
     FrontEnd fe_;
     std::vector<GoldMissionEntry> missions_;
     std::vector<GoldCampaignEntry> campaigns_;
+    std::vector<FrontEnd::ReplayEntry> replays_;
+    UserSettings settings_{};
+    UserSettings optionsDraft_{};
+    Language optionsBackupLanguage_{Language::english};
+    bool settingsSaved_{false};
     std::unique_ptr<Assets> assets_;
 
     std::string hoveredId_;

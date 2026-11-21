@@ -841,6 +841,17 @@ constexpr Entry table[] = {
      "Rueda / Arriba / Abajo para desplazar • Espacio para pausar"},
     {"Not implemented yet.", "Pas encore implémenté.", "Aún no implementado."},
     {"No missions installed.", "Aucune mission installée.", "No hay misiones instaladas."},
+    {"Game difficulty:", "Difficulté du jeu :", "Dificultad del juego:"},
+    {"Skip Intro", "Passer l'intro", "Saltar introducción"},
+    {"OK", "OK", "Aceptar"},
+    {"Replay Game", "Revoir une partie", "Repetir partida"},
+    {"No replays recorded yet.", "Aucun replay enregistré.", "Aún no hay repeticiones."},
+    {"Commands", "Commandes", "Órdenes"},
+    {"Duration", "Durée", "Duración"},
+    {"Auto-engage", "Tir automatique", "Fuego automático"},
+    {"State hash", "Empreinte d'état", "Hash de estado"},
+    {"Replays:", "Replays :", "Repeticiones:"},
+    {"Details:", "Détails :", "Detalles:"},
 };
 
 std::atomic<Language> current{Language::english};
