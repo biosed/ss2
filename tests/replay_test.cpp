@@ -126,6 +126,30 @@ void testSerialization() {
     const auto parsed = cmd::fromText(text);
     require(parsed && *parsed == log, "whole-log round trip failed");
 
+    cmd::ReplayFile repFile;
+    repFile.mission = "maps/single/--- TUTORIAL I ---.SSM";
+    repFile.difficulty = 3;
+    repFile.autoEngage = false;
+    repFile.endTick = 0xffffffffu;
+    repFile.endStateHash = 0xdeadbeefcafef00dull;
+    repFile.commands = {
+        {0u, cmd::Acknowledge{}},
+        {12u, cmd::Move{{0, 1}, 2960, 1776, false}},
+        {0xffffffffu, cmd::TogglePause{}},
+    };
+    const auto repText = cmd::toReplayFileText(repFile);
+    require(cmd::fromText(repText) == std::optional<std::vector<cmd::RecordedCommand>>(repFile.commands),
+            "plain fromText must still read a ReplayFile body");
+    const auto parsedRep = cmd::fromReplayFileText(repText);
+    require(parsedRep && *parsedRep == repFile, "ReplayFile round trip failed");
+    require(!cmd::fromReplayFileText("# difficulty: 4\n"), "fromReplayFileText must reject out-of-range difficulty");
+    require(!cmd::fromReplayFileText("# auto_engage: maybe\n"), "fromReplayFileText must reject bad auto_engage");
+    require(!cmd::fromReplayFileText("# end_state_hash: 0xzz\n"), "fromReplayFileText must reject bad hex hash");
+    require(!cmd::fromReplayFileText("# end_tick: 5\nacknowledge 6\n"),
+            "fromReplayFileText must reject end_tick earlier than last command");
+    require(!cmd::fromReplayFileText("acknowledge 5\nacknowledge 4\n"),
+            "fromReplayFileText must reject out-of-order command ticks");
+
     for (const char* bad : {"", "move", "move 1", "move 1 1 0 2 3", "move 1 1 0 2 3 0 0 extra",
                             "move 1 1 0 2 3 2", "move -1 0 0 0 0", "move 1 5 0 0 0", "nope 0",
                             "toggle-pause 0 ", "toggle-pause  0", "spawn-vehicle 0 tiger", "spawn-vehicle 0 '%G0"}) {

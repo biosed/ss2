@@ -49,8 +49,9 @@ std::vector<cmd::RecordedCommand> MissionRunner::takeRecording() {
     return log;
 }
 
-MissionRunner::MissionRunner(assets::TutorialData data, unsigned delayMs, TutorialUnits units)
+MissionRunner::MissionRunner(assets::TutorialData data, unsigned delayMs, TutorialUnits units, bool startRecordingNow)
     : MissionRunner(ManualClock{}, std::move(data), std::move(units)) {
+    if (startRecordingNow) recording_.emplace();
     worker_ = std::jthread([this, delayMs](std::stop_token stop) { run(stop, delayMs); });
 }
 MissionRunner::MissionRunner(ManualClock, assets::TutorialData data, TutorialUnits units)
@@ -63,9 +64,13 @@ MissionRunner::MissionRunner(ManualClock, assets::TutorialData data, TutorialUni
     collect();
     collectVehiclePoses();
 }
-MissionRunner::~MissionRunner() {
+void MissionRunner::stopWorker() {
     worker_.request_stop();
     changed_.notify_all();
+    if (worker_.joinable()) worker_.join();
+}
+MissionRunner::~MissionRunner() {
+    stopWorker();
 }
 
 void MissionRunner::collect() {

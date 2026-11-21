@@ -27,7 +27,7 @@ public:
     struct ManualClock {
         explicit ManualClock() = default;
     };
-    MissionRunner(assets::TutorialData, unsigned delayMs, TutorialUnits);
+    MissionRunner(assets::TutorialData, unsigned delayMs, TutorialUnits, bool startRecordingNow = false);
     MissionRunner(ManualClock, assets::TutorialData, TutorialUnits);
     bool canMove(std::span<const size_t> indices, int x, int y);
     std::optional<size_t> move(std::span<const size_t> indices, int mapX, int mapY, bool append = false);
@@ -135,6 +135,9 @@ public:
     void startRecording();
     // Stops recording and returns the log.
     std::vector<cmd::RecordedCommand> takeRecording();
+    // Stops and joins the background simulation worker thread, if running, so
+    // final simTick(), stateHash() and takeRecording() form a consistent snapshot.
+    void stopWorker();
     // Runs n worker iterations: each steps once unless a dialog or pause holds
     // the clock, as in live play. Meant for ManualClock runners.
     void advanceTicks(unsigned n);

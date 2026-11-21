@@ -116,7 +116,9 @@ int runWindow(SDL_Window* window, ss2::ValidationReport* report, int limit, bool
               const std::filesystem::path& gameDir, const std::filesystem::path& mission,
               const std::filesystem::path& hdPack, bool originalInfantry, bool autoEngage,
               ss2::UserSettings& settings, bool persistSettings,
-              bool overviewOnly = false, std::optional<std::filesystem::path>* nextMissionOut = nullptr) {
+              bool overviewOnly = false, std::optional<std::filesystem::path>* nextMissionOut = nullptr,
+              const std::filesystem::path& recordPath = {},
+              const ss2::cmd::ReplayFile* replayFile = nullptr) {
     const auto persistNow = [&] {
         if (persistSettings) {
             (void)ss2::saveUserSettings(ss2::defaultSettingsPath(), settings);
@@ -735,7 +737,7 @@ int runWindow(SDL_Window* window, ss2::ValidationReport* report, int limit, bool
         if (!data.description.empty()) {
             missionBriefingText = data.description;
         }
-        if (!isTutorial1 && !limit && !timing && !data.description.empty()) {
+        if (!isTutorial1 && !limit && !timing && !replayFile && !data.description.empty()) {
             pendingMissionBriefing = data.description;
         }
         fogGridW = data.width;
@@ -1054,8 +1056,28 @@ int runWindow(SDL_Window* window, ss2::ValidationReport* report, int limit, bool
         const int selOriginX = int(data.height) * 32;
         const std::string selTitle = isTutorial1 ? (mapScale == 2 ? "Tutorial I (2x HD)" : "Tutorial I")
                                                  : missionPath.stem().string();
-        simulation.emplace(std::move(data), ss2::tutorialTurnDelay(gameDir), std::move(soldiers));
-        if (settings.speedPercent != 100) simulation->setSpeedPercent(settings.speedPercent);
+        if (replayFile) {
+            simulation.emplace(ss2::MissionRunner::ManualClock{}, std::move(data), std::move(soldiers));
+            if (!simulation->replay(replayFile->commands, replayFile->endTick)) {
+                throw std::runtime_error("Replay log failed before reaching end_tick " +
+                                         std::to_string(replayFile->endTick));
+            }
+            const auto actualHash = simulation->stateHash();
+            if (replayFile->endStateHash && actualHash != *replayFile->endStateHash) {
+                std::ostringstream oss;
+                oss << "Replay stateHash mismatch at tick " << simulation->simTick()
+                    << ": expected 0x" << std::hex << *replayFile->endStateHash
+                    << ", got 0x" << actualHash;
+                throw std::runtime_error(oss.str());
+            }
+            std::cout << "Replay verified: " << replayFile->commands.size()
+                      << " commands, tick " << simulation->simTick()
+                      << ", stateHash 0x" << std::hex << actualHash << std::dec << '\n';
+        } else {
+            simulation.emplace(std::move(data), ss2::tutorialTurnDelay(gameDir), std::move(soldiers),
+                               !recordPath.empty());
+            if (settings.speedPercent != 100) simulation->setSpeedPercent(settings.speedPercent);
+        }
         liveVisibleMines = simulation->visibleMines();
         selection.emplace(window, renderer, std::move(viewInfantry), std::move(viewVehicles), mapScale, selOriginX, selTitle);
         selection->setVehicles(std::move(viewVehicleUnits));
@@ -2846,6 +2868,7 @@ int runWindow(SDL_Window* window, ss2::ValidationReport* report, int limit, bool
                 spritesDirty = true;
             }
             for (const auto& pose : simulation->pollPoses()) {
+                if (pose.index >= scene->units().size()) continue;
                 spritesDirty = true;
                 const int prevHp = scene->units().at(pose.index).hp;
                 const int prevInfAmmo = scene->units().at(pose.index).ammo;
@@ -2978,6 +3001,7 @@ int runWindow(SDL_Window* window, ss2::ValidationReport* report, int limit, bool
             }
             if (vehicleScene) {
                 for (const auto& vp : simulation->pollVehiclePoses()) {
+                    if (vp.index >= vehicleScene->vehicles().size()) continue;
                     const int prevVehHp = vehicleScene->vehicles().at(vp.index).hp;
                     const bool prevVehVisible = vehicleScene->vehicles().at(vp.index).visible;
                     const int prevVehOwner = vehicleScene->vehicles().at(vp.index).owner;
@@ -3464,7 +3488,7 @@ int runWindow(SDL_Window* window, ss2::ValidationReport* report, int limit, bool
                             }
                         }
                     }
-                } else if (ae.kind == ss2::AirStrikeEvent::ParatrooperDrop && selection && scene) {
+                } else if (ae.kind == ss2::AirStrikeEvent::ParatrooperDrop && !replayFile && selection && scene) {
                     std::size_t droppedInf = 0;
                     std::size_t droppedVeh = 0;
                     const int maxMapX = std::max(32, static_cast<int>(hudMapW) - 16);
@@ -3609,6 +3633,10 @@ int runWindow(SDL_Window* window, ss2::ValidationReport* report, int limit, bool
                     }
                 }
                 if (event.kind == ss2::MissionEvent::Dialog) {
+                    if (replayFile) {
+                        logHud(data.phrases.at(event.index));
+                        continue;
+                    }
                     resetCursor();
                     if (!activeMarkers.empty()) {
                         activeMarkers.clear();
@@ -3665,12 +3693,14 @@ int runWindow(SDL_Window* window, ss2::ValidationReport* report, int limit, bool
                     orderNotice.show(ss2::tr("Mission Failed."), ss2::NoticeKind::blocked, ss2::Notice::Duration::zero());
                     openDebriefMenu(false);
                 } else if (event.kind == ss2::MissionEvent::Reinforcement) {
-                    spawnReinforcementWave(event);
-                    spritesDirty = true;
+                    if (!replayFile) {
+                        spawnReinforcementWave(event);
+                        spritesDirty = true;
+                    }
                 }
             }
             if (spritesDirty) syncGpuSprites();
-            if (!limit && !timing && nextMissionOut && !paused && !briefing.active() && !menu.active() &&
+            if (!limit && !timing && !replayFile && nextMissionOut && !paused && !briefing.active() && !menu.active() &&
                 simulation->simTick() >= nextAutoSaveTick) {
                 nextAutoSaveTick = simulation->simTick() + 7500u;
                 doSaveSlot(-1);
@@ -3690,6 +3720,14 @@ int runWindow(SDL_Window* window, ss2::ValidationReport* report, int limit, bool
             tooltip.handle(event);
             if (event.type == SDL_EVENT_QUIT || event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) {
                 running = false;
+                continue;
+            }
+            if (replayFile) {
+                if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE) {
+                    running = false;
+                    continue;
+                }
+                renderer.handleEvent(event);
                 continue;
             }
             if (hud && (event.type == SDL_EVENT_WINDOW_MOUSE_LEAVE || event.type == SDL_EVENT_WINDOW_FOCUS_LOST)) {
@@ -6210,6 +6248,35 @@ int runWindow(SDL_Window* window, ss2::ValidationReport* report, int limit, bool
         }
     }
     resetCursor();
+    if (!recordPath.empty() && simulation) {
+        simulation->stopWorker();
+        ss2::cmd::ReplayFile recorded;
+        if (!currentMissionPath.empty()) {
+            std::error_code relEc;
+            const auto rel = !gameDir.empty() ? std::filesystem::relative(currentMissionPath, gameDir, relEc)
+                                              : std::filesystem::path{};
+            recorded.mission = (!relEc && !rel.empty() && !rel.native().starts_with(".."))
+                ? rel.generic_string()
+                : currentMissionPath.filename().string();
+        }
+        recorded.difficulty = std::clamp(settings.difficulty, 1, 3);
+        recorded.autoEngage = autoEngage;
+        recorded.endTick = simulation->simTick();
+        recorded.endStateHash = simulation->stateHash();
+        recorded.commands = simulation->takeRecording();
+        if (recordPath.has_parent_path()) {
+            std::error_code dirEc;
+            std::filesystem::create_directories(recordPath.parent_path(), dirEc);
+        }
+        std::ofstream out(recordPath, std::ios::binary | std::ios::trunc);
+        if (!out) throw std::runtime_error("Failed to open --record file for writing: " + recordPath.string());
+        const auto text = ss2::cmd::toReplayFileText(recorded);
+        out.write(text.data(), static_cast<std::streamsize>(text.size()));
+        if (!out) throw std::runtime_error("Failed to write --record file: " + recordPath.string());
+        std::cout << "Recorded " << recorded.commands.size() << " commands through tick " << recorded.endTick
+                  << " (stateHash 0x" << std::hex << *recorded.endStateHash << std::dec << ") to "
+                  << recordPath << '\n';
+    }
     std::cout << "Presented " << frames << " frames\n";
     if (timing && !sample.report(refreshRate)) return 1;
     return limit && frames < static_cast<unsigned>(limit) ? 1 : 0;
@@ -6305,13 +6372,14 @@ std::optional<std::filesystem::path> runFrontEnd(SDL_Window* window, ss2::Valida
 }
 
 int main(int argc, char** argv) try {
-    std::filesystem::path gameDir, mission, hdPack;
+    std::filesystem::path gameDir, mission, hdPack, recordPath, replayPath;
     std::string campaignQuery;
     int limit = 0;
     bool fourK = false, validate = false, timing = false;
     std::optional<bool> fullscreen;
     bool originalInfantry = false;
     bool autoEngage = true;
+    bool cliAutoEngageSet = false;
     bool languageChosen = false;
     bool listMissions = false;
     bool listCampaigns = false;
@@ -6321,13 +6389,15 @@ int main(int argc, char** argv) try {
     for (int i = 1; i < argc; ++i) {
         const std::string_view arg(argv[i]);
         if (arg == "--help") {
-            std::cout << "ss2 [--game-dir DIR] [--mission FILE.ssm|NAME|INDEX] [--campaign QUERY] [--overview] [--list-missions] [--list-campaigns] [--hd-pack DIR] [--original-infantry] [--no-auto-engage] [--difficulty easy|normal|hard] [--4k] [--fullscreen | --windowed] [--lang en|fr|es] [--frames N] [--no-movies] [--validate] [--timing]\n"
+            std::cout << "ss2 [--game-dir DIR] [--mission FILE.ssm|NAME|INDEX] [--campaign QUERY] [--overview] [--list-missions] [--list-campaigns] [--hd-pack DIR] [--original-infantry] [--no-auto-engage] [--difficulty easy|normal|hard] [--record FILE | --replay FILE] [--4k] [--fullscreen | --windowed] [--lang en|fr|es] [--frames N] [--no-movies] [--validate] [--timing]\n"
                          "--game-dir opens Tutorial I (or --mission) from an extracted Gold 2.2 game directory.\n"
                          "--list-missions lists all installed single-player missions, their map sizes and descriptions.\n"
                          "--list-campaigns lists all installed campaigns and missions.\n"
                          "--mission launches a playable single-player mission (file path, display name or 1-based index), or displays its overview if no game directory is given or --overview is set.\n"
                          "--campaign launches a playable campaign mission (e.g. german:1, british:5, 031000, or unique title substring).\n"
                          "--overview displays only the mission's JPEG overview instead of launching playable.\n"
+                         "--record writes a deterministic command log and final stateHash to FILE on exit.\n"
+                         "--replay replays a recorded command log on a manual clock and verifies its final stateHash.\n"
                          "--no-movies skips the opening logo and intro Bink movies.\n"
                          "--original-infantry uses the original infantry size. The default is 125%.\n"
                          "--no-auto-engage disables automatic firing on spotted enemies (manual attack orders only).\n"
@@ -6339,12 +6409,14 @@ int main(int argc, char** argv) try {
         else if (arg == "--hd-pack" && i + 1 < argc) hdPack = argv[++i];
         else if (arg == "--mission" && i + 1 < argc) mission = argv[++i];
         else if (arg == "--campaign" && i + 1 < argc) campaignQuery = argv[++i];
+        else if (arg == "--record" && i + 1 < argc) recordPath = argv[++i];
+        else if (arg == "--replay" && i + 1 < argc) replayPath = argv[++i];
         else if (arg == "--list-missions") listMissions = true;
         else if (arg == "--list-campaigns") listCampaigns = true;
         else if (arg == "--overview") overviewOnly = true;
         else if (arg == "--no-movies") noMovies = true;
         else if (arg == "--original-infantry") originalInfantry = true;
-        else if (arg == "--no-auto-engage") autoEngage = false;
+        else if (arg == "--no-auto-engage") { autoEngage = false; cliAutoEngageSet = true; }
         else if (arg == "--difficulty" && i + 1 < argc) {
             std::string low(argv[++i]);
             for (char& ch : low) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
@@ -6373,6 +6445,25 @@ int main(int argc, char** argv) try {
     }
     if (!languageChosen) ss2::setLanguage(ss2::languageFromEnvironment());
     if (timing && limit) throw std::invalid_argument("Choose either --timing or --frames N");
+    if (!recordPath.empty() && !replayPath.empty())
+        throw std::invalid_argument("Choose either --record or --replay");
+    if (overviewOnly && (!recordPath.empty() || !replayPath.empty()))
+        throw std::invalid_argument("--overview cannot be combined with --record or --replay");
+    if (timing && !replayPath.empty())
+        throw std::invalid_argument("--timing cannot be combined with --replay");
+    std::optional<ss2::cmd::ReplayFile> parsedReplay;
+    if (!replayPath.empty()) {
+        std::ifstream in(replayPath, std::ios::binary);
+        if (!in) throw std::runtime_error("Cannot open --replay file: " + replayPath.string());
+        std::ostringstream buf;
+        buf << in.rdbuf();
+        parsedReplay = ss2::cmd::fromReplayFileText(buf.str());
+        if (!parsedReplay) throw std::runtime_error("Malformed --replay file: " + replayPath.string());
+        if (parsedReplay->difficulty && cliDifficulty && *cliDifficulty != *parsedReplay->difficulty)
+            throw std::invalid_argument("--difficulty conflicts with recorded difficulty in --replay file");
+        if (parsedReplay->autoEngage && cliAutoEngageSet && autoEngage != *parsedReplay->autoEngage)
+            throw std::invalid_argument("--no-auto-engage conflicts with recorded auto_engage in --replay file");
+    }
     std::filesystem::path dataHome;
     if (const char* xdg = std::getenv("XDG_DATA_HOME"); xdg && *xdg) dataHome = xdg;
     else if (const char* home = std::getenv("HOME")) dataHome = std::filesystem::path(home) / ".local/share";
@@ -6419,6 +6510,18 @@ int main(int argc, char** argv) try {
         if (installed.empty()) std::cout << "  (none found)\n";
         return 0;
     }
+    if (parsedReplay && mission.empty() && campaignQuery.empty() && !parsedReplay->mission.empty()) {
+        const auto directory = resolveGameDir();
+        if (!directory.empty()) {
+            const auto candidate = ss2::assets::resolveCaseInsensitivePath(directory, parsedReplay->mission);
+            if (!candidate.empty() && std::filesystem::is_regular_file(candidate)) {
+                mission = candidate;
+            } else {
+                mission = parsedReplay->mission;
+            }
+            if (gameDir.empty()) gameDir = directory;
+        }
+    }
     if (!campaignQuery.empty()) {
         if (!mission.empty()) throw std::invalid_argument("Choose either --mission or --campaign");
         const auto directory = resolveGameDir();
@@ -6449,8 +6552,15 @@ int main(int argc, char** argv) try {
                 std::filesystem::is_directory(installed / "infantry-art")) hdPack = installed;
         }
     }
+    if ((!recordPath.empty() || parsedReplay) && gameDir.empty()) {
+        gameDir = resolveGameDir();
+        if (gameDir.empty())
+            throw std::invalid_argument((!recordPath.empty() ? std::string("--record") : std::string("--replay")) +
+                                        " requires a game directory: pass --game-dir or set SS2_GAME_DIR");
+    }
     const auto settingsPath = ss2::defaultSettingsPath();
-    const bool persistSettings = !limit && !timing && !overviewOnly && !settingsPath.empty();
+    const bool persistSettings = !limit && !timing && !overviewOnly && recordPath.empty() && !parsedReplay &&
+                                 !settingsPath.empty();
     ss2::UserSettings settings = persistSettings ? ss2::loadUserSettings(settingsPath) : ss2::UserSettings{};
     if (!languageChosen && settings.language) {
         ss2::setLanguage(*settings.language);
@@ -6458,8 +6568,12 @@ int main(int argc, char** argv) try {
     if (cliDifficulty) {
         settings.difficulty = *cliDifficulty;
     }
+    if (parsedReplay) {
+        if (parsedReplay->difficulty) settings.difficulty = *parsedReplay->difficulty;
+        if (parsedReplay->autoEngage) autoEngage = *parsedReplay->autoEngage;
+    }
     SDLSession sdl;
-    if (!noMovies && !gameDir.empty() && !limit && !timing && !overviewOnly)
+    if (!noMovies && !gameDir.empty() && !limit && !timing && !overviewOnly && !parsedReplay)
         ss2::playOpeningMovies(gameDir, fullscreen.value_or(false), hdPack);
     auto flags = SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
     if (fullscreen.value_or(false)) flags |= SDL_WINDOW_FULLSCREEN;
@@ -6476,7 +6590,7 @@ int main(int argc, char** argv) try {
     if (!window) throw std::runtime_error(SDL_GetError());
     ss2::ValidationReport report;
     int result = 0;
-    if (mission.empty() && !gameDir.empty() && !overviewOnly && !limit && !timing) {
+    if (mission.empty() && !gameDir.empty() && !overviewOnly && !limit && !timing && !parsedReplay) {
         const auto chosen = runFrontEnd(window.get(), validate ? &report : nullptr, gameDir, settings, persistSettings);
         if (!chosen) return 0;
         mission = *chosen;
@@ -6484,8 +6598,9 @@ int main(int argc, char** argv) try {
     for (;;) {
         std::optional<std::filesystem::path> nextMission;
         result = runWindow(window.get(), validate ? &report : nullptr, limit, timing, gameDir, mission, hdPack,
-                           originalInfantry, autoEngage, settings, persistSettings, overviewOnly, &nextMission);
-        if (!nextMission || result != 0) break;
+                           originalInfantry, autoEngage, settings, persistSettings, overviewOnly, &nextMission,
+                           recordPath, parsedReplay ? &*parsedReplay : nullptr);
+        if (!nextMission || result != 0 || !recordPath.empty() || parsedReplay) break;
         mission = std::move(*nextMission);
         overviewOnly = false;
     }

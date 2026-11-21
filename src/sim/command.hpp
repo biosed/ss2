@@ -410,4 +410,19 @@ std::optional<RecordedCommand> fromLine(std::string_view line);
 // blank lines and lines starting with '#', and fails on any malformed line.
 std::string toText(std::span<const RecordedCommand> log);
 std::optional<std::vector<RecordedCommand>> fromText(std::string_view text);
+
+// Self-contained `.ss2rep` replay file: optional `# key: value` metadata header
+// lines (ignored by plain fromText) followed by the command lines.
+struct ReplayFile {
+    std::string mission;
+    std::optional<int> difficulty;
+    std::optional<bool> autoEngage;
+    std::uint32_t endTick{0};
+    std::optional<std::uint64_t> endStateHash;
+    std::vector<RecordedCommand> commands;
+    bool operator==(const ReplayFile&) const = default;
+};
+
+std::string toReplayFileText(const ReplayFile&);
+std::optional<ReplayFile> fromReplayFileText(std::string_view text);
 }

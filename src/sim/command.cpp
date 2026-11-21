@@ -303,4 +303,96 @@ std::optional<std::vector<RecordedCommand>> fromText(std::string_view text) {
     }
     return log;
 }
+
+namespace {
+std::string formatHex64(std::uint64_t v) {
+    static constexpr char hex[] = "0123456789abcdef";
+    std::string s = "0x";
+    s.reserve(18);
+    for (int shift = 60; shift >= 0; shift -= 4) {
+        s += hex[(v >> shift) & 0xfu];
+    }
+    return s;
+}
+
+std::string_view trimAsciiSpace(std::string_view s) {
+    while (!s.empty() && (s.front() == ' ' || s.front() == '\t')) s.remove_prefix(1);
+    while (!s.empty() && (s.back() == ' ' || s.back() == '\t')) s.remove_suffix(1);
+    return s;
+}
+} // namespace
+
+std::string toReplayFileText(const ReplayFile& file) {
+    std::string out = "# ss2-replay v1\n";
+    if (!file.mission.empty()) {
+        std::string sanitized;
+        sanitized.reserve(file.mission.size());
+        for (const char c : file.mission) {
+            if (c != '\r' && c != '\n') sanitized += c;
+        }
+        out += "# mission: " + sanitized + '\n';
+    }
+    if (file.difficulty) out += "# difficulty: " + std::to_string(*file.difficulty) + '\n';
+    if (file.autoEngage) out += std::string("# auto_engage: ") + (*file.autoEngage ? "1\n" : "0\n");
+    out += "# end_tick: " + std::to_string(file.endTick) + '\n';
+    if (file.endStateHash) out += "# end_state_hash: " + formatHex64(*file.endStateHash) + '\n';
+    out += toText(file.commands);
+    return out;
+}
+
+std::optional<ReplayFile> fromReplayFileText(std::string_view text) {
+    ReplayFile out;
+    bool sawEndTick = false;
+    while (!text.empty()) {
+        const auto end = text.find('\n');
+        auto line = text.substr(0, end);
+        text.remove_prefix(end == std::string_view::npos ? text.size() : end + 1);
+        if (!line.empty() && line.back() == '\r') line.remove_suffix(1);
+        if (line.empty()) continue;
+        if (line.front() == '#') {
+            auto meta = trimAsciiSpace(line.substr(1));
+            if (meta.starts_with("mission:")) {
+                out.mission = std::string(trimAsciiSpace(meta.substr(8)));
+            } else if (meta.starts_with("difficulty:")) {
+                const auto val = trimAsciiSpace(meta.substr(11));
+                int d = 0;
+                const auto [p, ec] = std::from_chars(val.data(), val.data() + val.size(), d);
+                if (ec != std::errc{} || p != val.data() + val.size() || d < 1 || d > 3) return std::nullopt;
+                out.difficulty = d;
+            } else if (meta.starts_with("auto_engage:")) {
+                const auto val = trimAsciiSpace(meta.substr(12));
+                if (val == "1") out.autoEngage = true;
+                else if (val == "0") out.autoEngage = false;
+                else return std::nullopt;
+            } else if (meta.starts_with("end_tick:")) {
+                const auto val = trimAsciiSpace(meta.substr(9));
+                std::uint32_t t = 0;
+                const auto [p, ec] = std::from_chars(val.data(), val.data() + val.size(), t);
+                if (ec != std::errc{} || p != val.data() + val.size()) return std::nullopt;
+                out.endTick = t;
+                sawEndTick = true;
+            } else if (meta.starts_with("end_state_hash:")) {
+                auto val = trimAsciiSpace(meta.substr(15));
+                if (val.starts_with("0x") || val.starts_with("0X")) val.remove_prefix(2);
+                if (val.empty()) return std::nullopt;
+                std::uint64_t h = 0;
+                const auto [p, ec] = std::from_chars(val.data(), val.data() + val.size(), h, 16);
+                if (ec != std::errc{} || p != val.data() + val.size()) return std::nullopt;
+                out.endStateHash = h;
+            }
+            continue;
+        }
+        auto rc = fromLine(line);
+        if (!rc) return std::nullopt;
+        out.commands.push_back(std::move(*rc));
+    }
+    for (std::size_t i = 1; i < out.commands.size(); ++i) {
+        if (out.commands[i].tick < out.commands[i - 1].tick) return std::nullopt;
+    }
+    if (!sawEndTick && !out.commands.empty()) {
+        out.endTick = out.commands.back().tick;
+    }
+    if (!out.commands.empty() && out.endTick < out.commands.back().tick) return std::nullopt;
+    return out;
+}
 }

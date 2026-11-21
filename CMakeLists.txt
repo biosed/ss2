@@ -168,6 +168,9 @@ if(BUILD_TESTING)
   add_test(NAME cli_help COMMAND ss2 --help)
   add_test(NAME invalid_frame_count COMMAND ${CMAKE_COMMAND} -DPROGRAM=$<TARGET_FILE:ss2>
     "-DARGS=--frames;0" "-DEXPECTED=--frames requires a positive integer" -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_failure.cmake)
+  add_test(NAME invalid_replay_flags COMMAND ${CMAKE_COMMAND} -DPROGRAM=$<TARGET_FILE:ss2>
+    "-DARGS=--record;a.ss2rep;--replay;b.ss2rep" "-DEXPECTED=Choose either --record or --replay"
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_failure.cmake)
   option(SS2_TEST_WINDOW "Present frames during CTest (requires Vulkan WSI)" OFF)
   if(SS2_TEST_WINDOW)
     option(SS2_TEST_VALIDATION "Require Khronos validation in Vulkan tests" OFF)
@@ -212,6 +215,14 @@ if(BUILD_TESTING)
     add_test(NAME gold_frontend_vulkan COMMAND gold_frontend_test --window ${validation_arg})
     if(SS2_PRIVATE_GAME)
       set_tests_properties(gold_frontend_vulkan PROPERTIES ENVIRONMENT "SS2_PRIVATE_GAME=${SS2_PRIVATE_GAME}")
+      add_test(NAME gold_cli_record_replay COMMAND ${CMAKE_COMMAND}
+        -DPROGRAM=$<TARGET_FILE:ss2>
+        -DGAME_DIR=${SS2_PRIVATE_GAME}
+        -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/cli-replay-test
+        -DVALIDATION_ARG=${validation_arg}
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_cli_replay.cmake)
+      set_tests_properties(gold_cli_record_replay PROPERTIES TIMEOUT 45
+        FAIL_REGULAR_EXPRESSION "Validation Error|VUID-")
     endif()
     set_tests_properties(briefing_panel command_bar menu_panel hover_tooltip vulkan_map_region vulkan_sprite_pass tutorial_selection vulkan_present vulkan_resize vulkan_wsi_recovery gold_frontend_vulkan PROPERTIES TIMEOUT 30
       FAIL_REGULAR_EXPRESSION "Validation Error|VUID-")
