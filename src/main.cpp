@@ -13,6 +13,7 @@
 #include "audio/sound_player.hpp"
 #include "ui/tutorial_selection.hpp"
 #include "ui/briefing.hpp"
+#include "ui/hidpi.hpp"
 #include "ui/hud.hpp"
 #include "ui/menu.hpp"
 #include "ui/frontend.hpp"
@@ -3310,9 +3311,10 @@ int runWindow(SDL_Window* window, ss2::ValidationReport* report, int limit, bool
                     const auto& woofers = simulation->data().woofers;
                     if (!woofers.empty()) {
                         int winW = 1280, winH = 720;
-                        SDL_GetWindowSizeInPixels(window, &winW, &winH);
+                        if (!SDL_GetWindowSize(window, &winW, &winH)) { winW = 1280; winH = 720; }
+                        const auto center = ss2::hidpi::logicalWindowCenter(winW, winH);
                         const auto [camPxX, camPxY] = renderer.mapPosition(
-                            static_cast<double>(winW) * 0.5, static_cast<double>(winH) * 0.5);
+                            static_cast<float>(center.x), static_cast<float>(center.y));
                         const double camX = camPxX / static_cast<double>(mapScale);
                         const double camY = camPxY / static_cast<double>(mapScale);
                         for (const auto& w : woofers) {
@@ -5274,11 +5276,12 @@ int runWindow(SDL_Window* window, ss2::ValidationReport* report, int limit, bool
                 lastUnitBars = unitBars;
                 renderer.setBars(std::move(unitBars));
             }
-            int winW = 1, winH = 1;
-            SDL_GetWindowSize(window, &winW, &winH);
-            const int mapViewH = std::max(1, winH - static_cast<int>(hud->height()));
-            const auto [mx0, my0] = renderer.mapPosition(0.0, 0.0);
-            const auto [mx1, my1] = renderer.mapPosition(static_cast<double>(winW), static_cast<double>(mapViewH));
+            int winW = 1, winH = 1, pixelH = 1;
+            if (!SDL_GetWindowSize(window, &winW, &winH)) { winW = 1; winH = 1; }
+            if (!SDL_GetWindowSizeInPixels(window, nullptr, &pixelH)) pixelH = winH;
+            const double mapViewH = ss2::hidpi::logicalMapViewHeight(winH, pixelH, static_cast<int>(hud->height()));
+            const auto [mx0, my0] = renderer.mapPosition(0.0f, 0.0f);
+            const auto [mx1, my1] = renderer.mapPosition(static_cast<float>(winW), static_cast<float>(mapViewH));
             const float totalW = static_cast<float>(hudMapW * mapScale);
             const float totalH = static_cast<float>(hudMapH * mapScale);
             hs.viewU = std::round(std::clamp(static_cast<float>(mx0) / totalW, 0.0f, 1.0f) * 256.0f) / 256.0f;

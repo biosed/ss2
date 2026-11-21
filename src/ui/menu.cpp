@@ -1,4 +1,5 @@
 #include "ui/menu.hpp"
+#include "ui/hidpi.hpp"
 #include "render/window.hpp"
 
 #include <pango/pangocairo.h>
@@ -191,8 +192,10 @@ void Menu::render() {
 
 int Menu::rowAt(float windowX, float windowY) const {
     int w = 0, h = 0, pixelW = 0, pixelH = 0;
-    if (!SDL_GetWindowSize(parent_, &w, &h) || !SDL_GetWindowSizeInPixels(parent_, &pixelW, &pixelH) || w <= 0 || h <= 0) return -1;
-    const double x = double(windowX) * pixelW / w - left_, y = double(windowY) * pixelH / h - top_;
+    if (!SDL_GetWindowSize(parent_, &w, &h) || !SDL_GetWindowSizeInPixels(parent_, &pixelW, &pixelH)) return -1;
+    const auto phys = hidpi::windowToPhysical(double(windowX), double(windowY), w, h, pixelW, pixelH);
+    if (!phys) return -1;
+    const double x = phys->x - left_, y = phys->y - top_;
     if (x < 0 || x >= width_ || y < rowsTop_ || rowHeight_ <= 0) return -1;
     const int row = first_ + int((y - rowsTop_) / rowHeight_);
     if (row < first_ || row >= first_ + visible_ || row >= int(items_.size())) return -1;
