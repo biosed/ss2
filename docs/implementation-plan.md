@@ -27,14 +27,13 @@ The first bounded SUE/PCK comparison passed on three retail sprite frames. The s
 
 ## Current state, 21 November 2026
 
-Tutorial I plays end to end on the native build: the normal-input playthrough reaches the P[7] village briefing with the original orders, phrases and casualties, and the wreck leg matches the Gold reference. Infantry combat, fog of war and Gold 2.2 spotting are implemented and covered by `combat_parity` and the retail spotting rows in `gold_infantry_combat`. The Gold front end (screens 1–4), Bink movies, campaigns and the localized UI are in place. Every simulation order now passes through a recorded `cmd::Command`, and `MissionRunner` can replay a command log on a manual clock (`command_replay`).
+Tutorial I plays end to end on the native build: the normal-input playthrough reaches the P[7] village briefing with the original orders, phrases and casualties, and the wreck leg matches the Gold reference. Infantry combat, fog of war and Gold 2.2 spotting are implemented and covered by `combat_parity` and the retail spotting rows in `gold_infantry_combat`. The Gold front end (screens 1–4), Bink movies, campaigns and the localized UI are in place. Every simulation order passes through a recorded `cmd::Command`, `MissionRunner` replays command logs on a manual clock verified by a full-state 64-bit simulation hash (`stateHash()` in `command_replay` and `gold_tutorial_replay`), and `TutorialUnits` is split into per-responsibility translation units (`tutorial_units_*.cpp`).
 
 Next work, in order:
 
-1. A full-state simulation hash, so that a replay proves identical state rather than an equal partial snapshot.
-2. `--record` and `--replay` flags, then a replayed Tutorial I route as a regression test.
-3. Move `runWindow` state into a `GameSession` and split it by responsibility (setup, tick, input, HUD, render, audio).
-4. A controlled visibility comparison against Gold at 1× zoom and matched simulation ticks.
-5. The per-mission weather selector (`I-MISXINF` dword[0]) and the native-regression-only formulas listed in the fidelity audit (weather sight, scan delay, hatch and sniper timing).
+1. `--record` and `--replay` flags in `main()`, then a replayed Tutorial I route as a regression test.
+2. Move `runWindow` state into a `GameSession` and split it by responsibility (setup, tick, input, HUD, render, audio).
+3. A controlled visibility comparison against Gold at 1× zoom and matched simulation ticks.
+4. The per-mission weather selector (`I-MISXINF` dword[0]) and the native-regression-only formulas listed in the fidelity audit (weather sight, scan delay, hatch and sniper timing).
 
 Physical BC-250/RADV 4K/120 Hz performance remains open. The project still has no Git remote, so the CI workflow has never run. [Tutorial I results](tutorial-simulation.md)
