@@ -56,9 +56,9 @@ struct GoldPoint {
 };
 
 // Authentic Sudden Strike II Gold 2.2 frontend renderer and controller for Screens 1-4
-// plus the Gold Campaigns browser and campaign mission selector. Composites real
-// menu_common.sue artwork + mission I-JPG1024 overviews onto an aspect-fitted 800x600
-// stage inside OverlaySlot::panel so Briefing and Menu never overlap.
+// plus Gold Campaigns, Ratings, and Credits screens. Composites real menu_common.sue
+// artwork + mission I-JPG1024 overviews onto an aspect-fitted 800x600 stage inside
+// OverlaySlot::panel so Briefing and Menu never overlap.
 class GoldFrontEnd {
 public:
     GoldFrontEnd(SDL_Window* window, const std::filesystem::path& gameDir,
@@ -92,14 +92,20 @@ public:
                                    int winW, int winH, int pixelW, int pixelH);
 
     int scrollOffset() const { return scrollOffset_; }
+    int ratingsScroll() const { return ratingsScroll_; }
+    double creditsScroll() const { return creditsScroll_; }
+    bool creditsPaused() const { return creditsPaused_; }
     std::string hoveredId() const { return hoveredId_; }
     std::string focusedId() const { return focusedId_; }
     bool hasMenuAssets() const;
+    bool hasCreditsArt() const;
+    std::size_t creditsLineCount() const;
     std::string activeNotice() const { return noticeText_; }
 
 private:
     struct Assets;
     void loadAssets(std::optional<int> fixedBgIndex);
+    void loadCreditsText();
     void ensureFocusedValid();
     void syncNoticeFromState();
     void onScreenChanged(FrontEnd::Screen previous);
@@ -108,8 +114,10 @@ private:
     void selectActiveRow(std::size_t index);
     const char* activeRowPrefix() const;
     std::size_t previewCampaignIndex() const;
+    std::size_t ratingsRowCount() const;
     void ensureSelectionVisible();
     void scrollBy(int deltaRows);
+    void scrollRatingsBy(int deltaRows);
     std::string hitTestStage(double sx, double sy) const;
     void activateId(const std::string& id);
     void showNotice(std::string text);
@@ -125,7 +133,11 @@ private:
     std::string hoveredId_;
     std::string focusedId_{"single"};
     int scrollOffset_{0};
+    int ratingsScroll_{0};
     double briefScroll_{0.0};
+    double creditsScroll_{0.0};
+    double creditsContentHeight_{0.0};
+    bool creditsPaused_{false};
     bool draggingThumb_{false};
     double dragStartY_{0.0};
     int dragStartScroll_{0};

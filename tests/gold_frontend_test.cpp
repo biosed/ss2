@@ -190,6 +190,46 @@ void testFallbackInteraction() {
     check(cfe.state().screen() == ss2::FrontEnd::Screen::Launch &&
           cfe.state().launchPath() == "/nonexistent/campaign/EASY/023001.ssc",
           "Campaign Briefing launches EASY mission path");
+
+    // Synthetic Ratings + Credits flow (tabs, scrolling, auto-scroll, pause/resume, Esc/Cancel).
+    ss2::GoldFrontEnd rfe(nullptr, {});
+    rfe.setMissions(makeSyntheticMissions(25));
+    rfe.setCampaigns(makeSyntheticCampaigns());
+    rfe.handleMouseDown(185.0, 329.0, 1);  // RATINGS [115,312,140,35]
+    check(rfe.state().screen() == ss2::FrontEnd::Screen::Ratings, "clicked Ratings -> Ratings");
+    rfe.renderToBuffer(1280, 720, buf);
+    check(buf.size() == 1280u * 720u * 4u, "fallback Ratings Campaigns buffer size");
+
+    rfe.handleMouseDown(325.0, 108.0, 1);  // Single Missions tab [220,94,210,28]
+    check(rfe.state().ratingsMode() == ss2::FrontEnd::RatingsMode::SingleMissions,
+          "clicked Single Missions tab in Ratings");
+    rfe.handleMouseWheel(-1.0f);
+    check(rfe.ratingsScroll() > 0, "Ratings list scrolls down via wheel");
+    rfe.renderToBuffer(1280, 720, buf);
+    check(buf.size() == 1280u * 720u * 4u, "fallback Ratings SingleMissions buffer size");
+
+    rfe.handleKey(SDLK_C);
+    check(rfe.state().ratingsMode() == ss2::FrontEnd::RatingsMode::Campaigns &&
+          rfe.ratingsScroll() == 0, "C switches Ratings back to Campaigns and resets scroll");
+    rfe.handleKey(SDLK_ESCAPE);
+    check(rfe.state().screen() == ss2::FrontEnd::Screen::MainMenu, "Esc returns from Ratings to MainMenu");
+
+    rfe.handleMouseDown(185.0, 462.0, 1);  // CREDITS [115,445,140,35]
+    check(rfe.state().screen() == ss2::FrontEnd::Screen::Credits, "clicked Credits -> Credits");
+    check(rfe.creditsLineCount() > 0, "asset-free Credits has fallback attribution lines");
+    rfe.renderToBuffer(1280, 720, buf);
+    const double initialScroll = rfe.creditsScroll();
+    rfe.advance(std::chrono::milliseconds(500));
+    const double advancedScroll = rfe.creditsScroll();
+    check(advancedScroll > initialScroll, "Credits auto-scrolls on advance(dt)");
+    rfe.handleKey(SDLK_SPACE);
+    check(rfe.creditsPaused(), "Space pauses Credits scroll");
+    rfe.advance(std::chrono::milliseconds(500));
+    check(near(rfe.creditsScroll(), advancedScroll, 1e-6), "Paused Credits holds scroll steady");
+    rfe.handleKey(SDLK_SPACE);
+    check(!rfe.creditsPaused(), "Second Space resumes Credits scroll");
+    rfe.handleMouseDown(600.0, 529.0, 1);  // CANCEL [542,512,118,35]
+    check(rfe.state().screen() == ss2::FrontEnd::Screen::MainMenu, "Cancel returns from Credits to MainMenu");
 }
 
 void testRetailGoldAssets(const std::filesystem::path& gameDir) {
@@ -226,8 +266,18 @@ void testRetailGoldAssets(const std::filesystem::path& gameDir) {
     check(ss2::assets::pckFrameCount(spRaw) == 3, "scrollbar_sp 3 frames");
     for (std::size_t i = 0; i < 3; ++i) (void)ss2::assets::decodeUiPckFrame(spRaw, i);
 
+    const auto creditsRaw = ss2::assets::readSueEntry(menuSue, "CREDITS.PCK");
+    check(ss2::assets::pckFrameCount(creditsRaw) == 1, "CREDITS.PCK 1 frame");
+    const auto creditsFrame = ss2::assets::decodeUiPckFrame(creditsRaw, 0);
+    check(creditsFrame.width == 640 && creditsFrame.height == 480, "CREDITS.PCK 640x480");
+    const auto rgRaw = ss2::assets::readSueEntry(menuSue, "rg_bt.pck");
+    check(ss2::assets::pckFrameCount(rgRaw) == 2, "rg_bt.pck 2 frames");
+    for (std::size_t i = 0; i < 2; ++i) (void)ss2::assets::decodeUiPckFrame(rgRaw, i);
+
     ss2::GoldFrontEnd fe(nullptr, gameDir, 0);
     check(fe.hasMenuAssets(), "retail menu_common.sue loaded");
+    check(fe.hasCreditsArt(), "retail CREDITS.PCK loaded");
+    check(fe.creditsLineCount() >= 128, "retail credits.seq loaded (128+ lines)");
 
     std::vector<ss2::GoldMissionEntry> entries;
     std::size_t tutIdx = 0;
@@ -342,6 +392,32 @@ void testRetailGoldAssets(const std::filesystem::path& gameDir) {
     fe.renderToBuffer(3840, 2160, frame);
     check(frame.size() == 3840u * 2160u * 4u, "retail Screen 4 4K buffer");
     if (!capDir.empty()) writePng(capDir / "screen4_4k.png", 3840, 2160, frame);
+
+    // Return to MainMenu, capture Ratings (Campaigns & Single Missions) and Credits
+    fe.handleKey(SDLK_ESCAPE);  // Briefing -> SingleMissions
+    fe.handleKey(SDLK_ESCAPE);  // SingleMissions -> SinglePlayer
+    fe.handleKey(SDLK_ESCAPE);  // SinglePlayer -> MainMenu
+    check(fe.state().screen() == ss2::FrontEnd::Screen::MainMenu, "returned to MainMenu for Ratings/Credits");
+
+    fe.handleKey(SDLK_R);
+    check(fe.state().screen() == ss2::FrontEnd::Screen::Ratings, "retail Ratings");
+    fe.renderToBuffer(1280, 720, frame);
+    if (!capDir.empty()) writePng(capDir / "screen5_ratings_campaigns.png", 1280, 720, frame);
+    fe.handleKey(SDLK_S);
+    check(fe.state().ratingsMode() == ss2::FrontEnd::RatingsMode::SingleMissions, "retail Ratings SingleMissions");
+    fe.renderToBuffer(1280, 720, frame);
+    if (!capDir.empty()) writePng(capDir / "screen5_ratings_missions.png", 1280, 720, frame);
+    fe.handleKey(SDLK_ESCAPE);
+
+    fe.handleKey(SDLK_C);
+    check(fe.state().screen() == ss2::FrontEnd::Screen::Credits, "retail Credits");
+    fe.renderToBuffer(1280, 720, frame);
+    if (!capDir.empty()) writePng(capDir / "screen6_credits.png", 1280, 720, frame);
+    for (int step = 0; step < 12; ++step) fe.advance(std::chrono::milliseconds(200));
+    fe.renderToBuffer(1280, 720, frame);
+    if (!capDir.empty()) writePng(capDir / "screen6_credits_scrolled.png", 1280, 720, frame);
+    fe.handleKey(SDLK_ESCAPE);
+    check(fe.state().screen() == ss2::FrontEnd::Screen::MainMenu, "returned from Credits to MainMenu");
 }
 
 void testVulkanWindowOverlay(bool validate, const std::filesystem::path& gameDir) {
@@ -359,12 +435,18 @@ void testVulkanWindowOverlay(bool validate, const std::filesystem::path& gameDir
     fe.setMissions(makeSyntheticMissions(3));
     fe.setCampaigns(makeSyntheticCampaigns());
     const ss2::Snapshot empty{};
-    for (int i = 0; i < 6; ++i) {
-        if (i == 1) fe.handleKey(SDLK_S);       // Single Player
-        if (i == 2) fe.handleKey(SDLK_C);       // Campaigns
-        if (i == 3) fe.handleKey(SDLK_G);       // German Campaign missions
-        if (i == 4) fe.handleKey(SDLK_D);       // Cycle difficulty
-        if (i == 5) fe.handleKey(SDLK_RETURN);  // Campaign Briefing
+    for (int i = 0; i < 12; ++i) {
+        if (i == 1) fe.handleKey(SDLK_R);       // Ratings (Campaigns)
+        if (i == 2) fe.handleKey(SDLK_S);       // Ratings (Single Missions)
+        if (i == 3) fe.handleKey(SDLK_ESCAPE);  // Back to MainMenu
+        if (i == 4) fe.handleKey(SDLK_C);       // Credits
+        if (i == 5) fe.advance(std::chrono::milliseconds(200));
+        if (i == 6) fe.handleKey(SDLK_ESCAPE);  // Back to MainMenu
+        if (i == 7) fe.handleKey(SDLK_S);       // Single Player
+        if (i == 8) fe.handleKey(SDLK_C);       // Campaigns
+        if (i == 9) fe.handleKey(SDLK_G);       // German Campaign missions
+        if (i == 10) fe.handleKey(SDLK_D);      // Cycle difficulty
+        if (i == 11) fe.handleKey(SDLK_RETURN); // Campaign Briefing
         fe.draw(renderer);
         renderer.present(empty);
     }

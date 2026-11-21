@@ -48,16 +48,36 @@ constexpr double kTrackY = kScrollY + kScrollArrowH;
 constexpr double kTrackH = kScrollH - 2.0 * kScrollArrowH;
 constexpr double kThumbH = 21.0;
 
-double thumbTopFor(int scrollOffset, std::size_t rowCount) {
-    if (int(rowCount) <= kVisibleMissionRows) return kTrackY;
-    const double maxScroll = double(rowCount - kVisibleMissionRows);
-    return kTrackY + (kTrackH - kThumbH) * (double(scrollOffset) / maxScroll);
+double thumbTopFor(int scrollOffset, std::size_t rowCount,
+                   int visibleRows = kVisibleMissionRows,
+                   double trackY = kTrackY, double trackH = kTrackH) {
+    if (int(rowCount) <= visibleRows) return trackY;
+    const double maxScroll = double(rowCount - std::size_t(visibleRows));
+    return trackY + (trackH - kThumbH) * (double(scrollOffset) / maxScroll);
 }
 
 constexpr double kBriefBoxX = 30.0;
 constexpr double kBriefBoxY = 18.0;
 constexpr double kBriefBoxW = 728.0;
 constexpr double kBriefBoxH = 140.0;
+
+constexpr int kVisibleRatingsRows = 15;
+constexpr double kRatingsRowH = 20.0;
+constexpr double kRatingsTableX = 43.0;
+constexpr double kRatingsTableY = 136.0;
+constexpr double kRatingsTableW = 696.0;
+constexpr double kRatingsTableH = 352.0;
+constexpr double kRatingsScrollX = 739.0;
+constexpr double kRatingsScrollY = 136.0;
+constexpr double kRatingsScrollW = 18.0;
+constexpr double kRatingsScrollH = 352.0;
+constexpr double kRatingsTrackY = kRatingsScrollY + kScrollArrowH;
+constexpr double kRatingsTrackH = kRatingsScrollH - 2.0 * kScrollArrowH;
+
+constexpr double kCreditsClipX = 112.0;
+constexpr double kCreditsClipY = 74.0;
+constexpr double kCreditsClipW = 576.0;
+constexpr double kCreditsClipH = 410.0;
 
 struct RectD {
     double x, y, w, h;
@@ -105,6 +125,11 @@ constexpr std::array<ButtonSpec, 2> kSingleMissionButtons{{
 }};
 
 constexpr RectD kDifficultyButtonRect{268, 515, 244, 30};
+constexpr RectD kRatingsCampaignsTabRect{43, 94, 168, 28};
+constexpr RectD kRatingsMissionsTabRect{220, 94, 210, 28};
+constexpr RectD kRatingsCancelRect{542, 512, 118, 35};
+constexpr RectD kCreditsFrameRect{96, 62, 608, 434};
+constexpr RectD kCreditsCancelRect{542, 512, 118, 35};
 
 constexpr std::array<ButtonSpec, 4> kBriefingButtons{{
     {"brief_restart", "Restart", 'R', {577, 211, 186, 33}, false},
@@ -443,6 +468,117 @@ void tryLoadPckSlot(const std::filesystem::path& archive, const char* entry,
     }
 }
 
+std::string sanitizeUtf8(std::string_view input) {
+    std::string out;
+    out.reserve(input.size());
+    std::size_t i = 0;
+    while (i < input.size()) {
+        const unsigned char c = static_cast<unsigned char>(input[i]);
+        if (c < 0x80) {
+            out.push_back(static_cast<char>(c));
+            ++i;
+            continue;
+        }
+        int extra = -1;
+        if ((c >> 5) == 0x06 && c >= 0xC2) extra = 1;
+        else if ((c >> 4) == 0x0E) extra = 2;
+        else if ((c >> 3) == 0x1E && c <= 0xF4) extra = 3;
+
+        bool valid = (extra > 0 && i + std::size_t(extra) < input.size());
+        if (valid) {
+            for (int k = 1; k <= extra; ++k) {
+                if ((static_cast<unsigned char>(input[i + std::size_t(k)]) & 0xC0u) != 0x80u) {
+                    valid = false;
+                    break;
+                }
+            }
+        }
+        if (valid) {
+            out.append(input.substr(i, std::size_t(extra) + 1));
+            i += std::size_t(extra) + 1;
+        } else {
+            // Convert legacy single-byte high character (Latin-1/CP1252) to valid UTF-8.
+            out.push_back(static_cast<char>(0xC0u | (c >> 6)));
+            out.push_back(static_cast<char>(0x80u | (c & 0x3Fu)));
+            ++i;
+        }
+    }
+    return out;
+}
+
+bool isCreditsRoleHeading(std::string_view line) {
+    bool hasAlpha = false;
+    for (unsigned char c : line) {
+        if (c >= 'a' && c <= 'z') return false;
+        if (c >= 'A' && c <= 'Z') hasAlpha = true;
+    }
+    return hasAlpha && line.size() >= 3;
+}
+
+struct RatingsRow {
+    bool isHeader{false};
+    std::string name;
+    bool completed{false};
+    int score{0};
+    std::string status;
+};
+
+std::vector<RatingsRow> buildRatingsRows(FrontEnd::RatingsMode mode,
+                                         const std::vector<GoldCampaignEntry>& campaigns,
+                                         const std::vector<GoldMissionEntry>& missions) {
+    std::vector<RatingsRow> rows;
+    if (mode == FrontEnd::RatingsMode::Campaigns) {
+        for (const auto& c : campaigns) {
+            int done = 0;
+            int campScore = 0;
+            for (const auto& m : c.missions) {
+                if (m.completed) ++done;
+                campScore += std::max(0, m.highScore);
+            }
+            rows.push_back(RatingsRow{
+                true,
+                c.name,
+                !c.missions.empty() && done == int(c.missions.size()),
+                campScore,
+                std::to_string(done) + "/" + std::to_string(c.missions.size()) + " " + tr("Completed"),
+            });
+            for (const auto& m : c.missions) {
+                rows.push_back(RatingsRow{
+                    false,
+                    "  " + m.name,
+                    m.completed,
+                    std::max(0, m.highScore),
+                    m.completed ? tr("Completed") : std::string{},
+                });
+            }
+        }
+        return rows;
+    }
+
+    std::vector<std::size_t> order(missions.size());
+    for (std::size_t i = 0; i < order.size(); ++i) order[i] = i;
+    std::stable_sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) {
+        if (missions[a].highScore != missions[b].highScore) {
+            return missions[a].highScore > missions[b].highScore;
+        }
+        if (missions[a].completed != missions[b].completed) {
+            return missions[a].completed && !missions[b].completed;
+        }
+        return a < b;
+    });
+    for (std::size_t rank = 0; rank < order.size(); ++rank) {
+        const auto& m = missions[order[rank]];
+        rows.push_back(RatingsRow{
+            false,
+            std::to_string(rank + 1) + ". " + m.name,
+            m.completed,
+            std::max(0, m.highScore),
+            m.completed ? tr("Completed") : std::string{},
+        });
+    }
+    return rows;
+}
+
 }  // namespace
 
 struct GoldFrontEnd::Assets {
@@ -451,11 +587,14 @@ struct GoldFrontEnd::Assets {
 
     Surface mainBg = makeNullSurface();
     Surface briefingBg = makeNullSurface();
+    PckSurface creditsBg;
+    PckSurface ratingsDropdownBtn;
     PckSurface nbramkaFrame;
     std::array<PckSurface, 12> slotButtons;   // nbrif_bt[8..19]
     std::array<PckSurface, 6> scrollButtons;  // scrollbar_bt[0..5]
     std::array<PckSurface, 3> scrollTrack;    // scrollbar_sp[0..2]
     std::unordered_map<std::string, Surface> overviews;
+    std::vector<std::string> creditsLines;
     bool loadedMenuSue{false};
 };
 
@@ -463,6 +602,7 @@ GoldFrontEnd::GoldFrontEnd(SDL_Window* window, const std::filesystem::path& game
                            std::optional<int> fixedBgIndex)
     : window_(window), gameDir_(gameDir), assets_(std::make_unique<Assets>()) {
     loadAssets(fixedBgIndex);
+    loadCreditsText();
     ensureFocusedValid();
 }
 
@@ -470,6 +610,14 @@ GoldFrontEnd::~GoldFrontEnd() = default;
 
 bool GoldFrontEnd::hasMenuAssets() const {
     return assets_ && assets_->loadedMenuSue && assets_->mainBg != nullptr;
+}
+
+bool GoldFrontEnd::hasCreditsArt() const {
+    return assets_ && assets_->creditsBg.surface != nullptr;
+}
+
+std::size_t GoldFrontEnd::creditsLineCount() const {
+    return assets_ ? assets_->creditsLines.size() : 0;
 }
 
 void GoldFrontEnd::loadAssets(std::optional<int> fixedBgIndex) {
@@ -502,6 +650,8 @@ void GoldFrontEnd::loadAssets(std::optional<int> fixedBgIndex) {
     assets_->briefingBg = loadBg("brfbk000.jpg");
 
     tryLoadPckSlot(menuSue, "nbramka_bk.pck", 0, true, assets_->nbramkaFrame);
+    tryLoadPckSlot(menuSue, "CREDITS.PCK", 0, false, assets_->creditsBg);
+    tryLoadPckSlot(menuSue, "rg_bt.pck", 1, false, assets_->ratingsDropdownBtn);
     try {
         const auto nbrif = assets::readSueEntry(menuSue, "nbrif_bt.pck");
         const auto n = assets::pckFrameCount(nbrif);
@@ -530,6 +680,59 @@ void GoldFrontEnd::loadAssets(std::optional<int> fixedBgIndex) {
     assets_->loadedMenuSue = assets_->mainBg != nullptr || assets_->briefingBg != nullptr;
 }
 
+void GoldFrontEnd::loadCreditsText() {
+    assets_->creditsLines.clear();
+    if (!gameDir_.empty()) {
+        std::vector<std::filesystem::path> archives;
+        for (const char* sueName : {"lang.sue", "menu_common.sue"}) {
+            const auto p = assets::resolveCaseInsensitivePath(gameDir_, sueName);
+            std::error_code ec;
+            if (std::filesystem::exists(p, ec)) archives.push_back(p);
+        }
+        for (const auto& arch : archives) {
+            try {
+                const auto raw = assets::readSueEntry(arch, "credits.seq");
+                if (raw.empty()) continue;
+                const std::string text(reinterpret_cast<const char*>(raw.data()), raw.size());
+                std::size_t start = 0;
+                while (start <= text.size()) {
+                    const std::size_t nl = text.find('\n', start);
+                    std::string line = (nl == std::string::npos)
+                        ? text.substr(start) : text.substr(start, nl - start);
+                    if (!line.empty() && line.back() == '\r') line.pop_back();
+                    assets_->creditsLines.push_back(sanitizeUtf8(line));
+                    if (nl == std::string::npos) break;
+                    start = nl + 1;
+                }
+                break;
+            } catch (...) {
+            }
+        }
+    }
+
+    if (assets_->creditsLines.empty()) {
+        assets_->creditsLines = {
+            "- FIREGLOW -",
+            "",
+            "EXECUTIVE PRODUCER",
+            "Viktor Vinokurov",
+            "",
+            "PROJECT LEADER",
+            "Vladimir V. Medeiko",
+            "",
+            "SENIOR PROGRAMMER",
+            "Denis Konovalov",
+            "",
+        };
+    } else {
+        assets_->creditsLines.insert(assets_->creditsLines.end(), {"", "", "", ""});
+    }
+
+    assets_->creditsLines.push_back("- NATIVE LINUX / VULKAN PORT -");
+    assets_->creditsLines.push_back("");
+    assets_->creditsLines.push_back("Sudden Strike II Gold (C++20 / SDL3 / Vulkan)");
+}
+
 void GoldFrontEnd::setMissions(std::vector<GoldMissionEntry> missions) {
     missions_ = std::move(missions);
     std::vector<FrontEnd::Entry> base;
@@ -542,6 +745,9 @@ void GoldFrontEnd::setMissions(std::vector<GoldMissionEntry> missions) {
     if (fe_.screen() == FrontEnd::Screen::SingleMissions) {
         scrollOffset_ = 0;
         ensureSelectionVisible();
+    } else if (fe_.screen() == FrontEnd::Screen::Ratings) {
+        const int maxOff = std::max(0, int(ratingsRowCount()) - kVisibleRatingsRows);
+        ratingsScroll_ = std::clamp(ratingsScroll_, 0, maxOff);
     }
     dirty_ = true;
 }
@@ -566,6 +772,9 @@ void GoldFrontEnd::setCampaigns(std::vector<GoldCampaignEntry> campaigns) {
     if (fe_.screen() == FrontEnd::Screen::CampaignMissions) {
         scrollOffset_ = 0;
         ensureSelectionVisible();
+    } else if (fe_.screen() == FrontEnd::Screen::Ratings) {
+        const int maxOff = std::max(0, int(ratingsRowCount()) - kVisibleRatingsRows);
+        ratingsScroll_ = std::clamp(ratingsScroll_, 0, maxOff);
     }
     if (fe_.screen() == FrontEnd::Screen::Campaigns) ensureFocusedValid();
     dirty_ = true;
@@ -611,6 +820,17 @@ std::size_t GoldFrontEnd::previewCampaignIndex() const {
     return fe_.selectedCampaign() < campaigns_.size() ? fe_.selectedCampaign() : 0;
 }
 
+std::size_t GoldFrontEnd::ratingsRowCount() const {
+    if (fe_.ratingsMode() == FrontEnd::RatingsMode::Campaigns) {
+        std::size_t total = 0;
+        for (const auto& c : campaigns_) {
+            total += 1 + c.missions.size();
+        }
+        return total;
+    }
+    return missions_.size();
+}
+
 GoldStageRect GoldFrontEnd::computeStage(int pixelW, int pixelH) {
     const int pw = std::max(1, pixelW);
     const int ph = std::max(1, pixelH);
@@ -651,6 +871,10 @@ void GoldFrontEnd::ensureFocusedValid() {
         case FrontEnd::Screen::Briefing:
             focusedId_ = "start";
             break;
+        case FrontEnd::Screen::Ratings:
+        case FrontEnd::Screen::Credits:
+            focusedId_ = "cancel";
+            break;
         case FrontEnd::Screen::Launch:
         case FrontEnd::Screen::Quit:
             focusedId_.clear();
@@ -675,6 +899,10 @@ void GoldFrontEnd::onScreenChanged(FrontEnd::Screen previous) {
         hoveredId_.clear();
         draggingThumb_ = false;
         briefScroll_ = 0.0;
+        ratingsScroll_ = 0;
+        creditsScroll_ = 0.0;
+        creditsContentHeight_ = 0.0;
+        creditsPaused_ = false;
         noticeText_.clear();
         noticeRemaining_ = {};
         ensureFocusedValid();
@@ -709,6 +937,9 @@ void GoldFrontEnd::onScreenChanged(FrontEnd::Screen previous) {
         dirty_ = true;
     } else if (fe_.screen() == FrontEnd::Screen::CampaignMissions) {
         dirty_ = true;
+    } else if (fe_.screen() == FrontEnd::Screen::Ratings) {
+        ratingsScroll_ = 0;
+        dirty_ = true;
     }
     syncNoticeFromState();
 }
@@ -734,6 +965,16 @@ void GoldFrontEnd::scrollBy(int deltaRows) {
     const int next = std::clamp(scrollOffset_ + deltaRows, 0, maxOff);
     if (next != scrollOffset_) {
         scrollOffset_ = next;
+        dirty_ = true;
+    }
+}
+
+void GoldFrontEnd::scrollRatingsBy(int deltaRows) {
+    const std::size_t count = ratingsRowCount();
+    const int maxOff = std::max(0, int(count) - kVisibleRatingsRows);
+    const int next = std::clamp(ratingsScroll_ + deltaRows, 0, maxOff);
+    if (next != ratingsScroll_) {
+        ratingsScroll_ = next;
         dirty_ = true;
     }
 }
@@ -805,6 +1046,30 @@ std::string GoldFrontEnd::hitTestStage(double sx, double sy) const {
             }
             return {};
         }
+        case FrontEnd::Screen::Ratings: {
+            if (kRatingsCampaignsTabRect.contains(sx, sy)) return "ratings_campaigns";
+            if (kRatingsMissionsTabRect.contains(sx, sy)) return "ratings_missions";
+            if (kRatingsCancelRect.contains(sx, sy)) return "cancel";
+            const std::size_t count = ratingsRowCount();
+            if (RectD{kRatingsScrollX, kRatingsScrollY, kRatingsScrollW, kScrollArrowH}.contains(sx, sy)) {
+                return "ratings_scroll_up";
+            }
+            if (RectD{kRatingsScrollX, kRatingsScrollY + kRatingsScrollH - kScrollArrowH, kRatingsScrollW, kScrollArrowH}.contains(sx, sy)) {
+                return "ratings_scroll_down";
+            }
+            if (RectD{kRatingsScrollX, kRatingsTrackY, kRatingsScrollW, kRatingsTrackH}.contains(sx, sy) &&
+                int(count) > kVisibleRatingsRows) {
+                const double thumbY = thumbTopFor(ratingsScroll_, count, kVisibleRatingsRows, kRatingsTrackY, kRatingsTrackH);
+                if (sy >= thumbY && sy < thumbY + kThumbH) return "ratings_scroll_thumb";
+                return sy < thumbY ? "ratings_scroll_page_up" : "ratings_scroll_page_down";
+            }
+            return {};
+        }
+        case FrontEnd::Screen::Credits: {
+            if (kCreditsCancelRect.contains(sx, sy)) return "cancel";
+            if (kCreditsFrameRect.contains(sx, sy)) return "credits_toggle_pause";
+            return {};
+        }
         case FrontEnd::Screen::Launch:
         case FrontEnd::Screen::Quit:
             return {};
@@ -830,6 +1095,27 @@ void GoldFrontEnd::activateId(const std::string& id) {
     }
     if (id == "scroll_page_down") {
         scrollBy(kVisibleMissionRows);
+        return;
+    }
+    if (id == "ratings_scroll_up") {
+        scrollRatingsBy(-1);
+        return;
+    }
+    if (id == "ratings_scroll_down") {
+        scrollRatingsBy(1);
+        return;
+    }
+    if (id == "ratings_scroll_page_up") {
+        scrollRatingsBy(-kVisibleRatingsRows);
+        return;
+    }
+    if (id == "ratings_scroll_page_down") {
+        scrollRatingsBy(kVisibleRatingsRows);
+        return;
+    }
+    if (id == "credits_toggle_pause") {
+        creditsPaused_ = !creditsPaused_;
+        dirty_ = true;
         return;
     }
     if (id == "profile_new" || id == "profile_rename" || id == "profile_delete" ||
@@ -986,6 +1272,50 @@ void GoldFrontEnd::handleKey(SDL_Keycode key) {
                 activateId(focusedId_.empty() ? "start" : focusedId_);
             }
             break;
+        case FrontEnd::Screen::Ratings: {
+            const std::size_t count = ratingsRowCount();
+            const int maxOff = std::max(0, int(count) - kVisibleRatingsRows);
+            if (key == SDLK_UP) scrollRatingsBy(-1);
+            else if (key == SDLK_DOWN) scrollRatingsBy(1);
+            else if (key == SDLK_PAGEUP) scrollRatingsBy(-kVisibleRatingsRows);
+            else if (key == SDLK_PAGEDOWN) scrollRatingsBy(kVisibleRatingsRows);
+            else if (key == SDLK_HOME) {
+                if (ratingsScroll_ != 0) { ratingsScroll_ = 0; dirty_ = true; }
+            } else if (key == SDLK_END) {
+                if (ratingsScroll_ != maxOff) { ratingsScroll_ = maxOff; dirty_ = true; }
+            } else if (key == SDLK_LEFT || key == SDLK_RIGHT || key == SDLK_TAB) {
+                cycleFocus({"ratings_campaigns", "ratings_missions", "cancel"}, key == SDLK_LEFT ? -1 : 1);
+            } else if (key == SDLK_RETURN || key == SDLK_KP_ENTER || key == SDLK_SPACE) {
+                activateId(focusedId_.empty() ? "cancel" : focusedId_);
+            }
+            break;
+        }
+        case FrontEnd::Screen::Credits: {
+            const double minScroll = -kCreditsClipH + 40.0;
+            const double maxScroll = creditsContentHeight_ > 0.0 ? creditsContentHeight_ : 1.0e6;
+            if (key == SDLK_SPACE) {
+                creditsPaused_ = !creditsPaused_;
+                dirty_ = true;
+            } else if (key == SDLK_UP) {
+                creditsScroll_ = std::max(minScroll, creditsScroll_ - 28.0);
+                dirty_ = true;
+            } else if (key == SDLK_DOWN) {
+                creditsScroll_ = std::min(maxScroll, creditsScroll_ + 28.0);
+                dirty_ = true;
+            } else if (key == SDLK_PAGEUP) {
+                creditsScroll_ = std::max(minScroll, creditsScroll_ - 160.0);
+                dirty_ = true;
+            } else if (key == SDLK_PAGEDOWN) {
+                creditsScroll_ = std::min(maxScroll, creditsScroll_ + 160.0);
+                dirty_ = true;
+            } else if (key == SDLK_HOME) {
+                creditsScroll_ = 0.0;
+                dirty_ = true;
+            } else if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
+                activateId("cancel");
+            }
+            break;
+        }
         case FrontEnd::Screen::Launch:
         case FrontEnd::Screen::Quit:
             break;
@@ -993,19 +1323,35 @@ void GoldFrontEnd::handleKey(SDL_Keycode key) {
 }
 
 void GoldFrontEnd::handleMouseMove(double stageX, double stageY) {
-    const std::size_t count = activeListCount();
-    if (draggingThumb_ &&
-        (fe_.screen() == FrontEnd::Screen::SingleMissions || fe_.screen() == FrontEnd::Screen::CampaignMissions) &&
-        int(count) > kVisibleMissionRows) {
-        const double travel = std::max(1.0, kTrackH - kThumbH);
-        const int maxOff = int(count) - kVisibleMissionRows;
-        const int target = int(std::lround(dragStartScroll_ + ((stageY - dragStartY_) / travel) * maxOff));
-        const int clamped = std::clamp(target, 0, maxOff);
-        if (clamped != scrollOffset_) {
-            scrollOffset_ = clamped;
-            dirty_ = true;
+    if (draggingThumb_) {
+        if ((fe_.screen() == FrontEnd::Screen::SingleMissions ||
+             fe_.screen() == FrontEnd::Screen::CampaignMissions)) {
+            const std::size_t count = activeListCount();
+            if (int(count) > kVisibleMissionRows) {
+                const double travel = std::max(1.0, kTrackH - kThumbH);
+                const int maxOff = int(count) - kVisibleMissionRows;
+                const int target = int(std::lround(dragStartScroll_ + ((stageY - dragStartY_) / travel) * maxOff));
+                const int clamped = std::clamp(target, 0, maxOff);
+                if (clamped != scrollOffset_) {
+                    scrollOffset_ = clamped;
+                    dirty_ = true;
+                }
+                return;
+            }
+        } else if (fe_.screen() == FrontEnd::Screen::Ratings) {
+            const std::size_t count = ratingsRowCount();
+            if (int(count) > kVisibleRatingsRows) {
+                const double travel = std::max(1.0, kRatingsTrackH - kThumbH);
+                const int maxOff = int(count) - kVisibleRatingsRows;
+                const int target = int(std::lround(dragStartScroll_ + ((stageY - dragStartY_) / travel) * maxOff));
+                const int clamped = std::clamp(target, 0, maxOff);
+                if (clamped != ratingsScroll_) {
+                    ratingsScroll_ = clamped;
+                    dirty_ = true;
+                }
+                return;
+            }
         }
-        return;
     }
 
     const std::string hit = hitTestStage(stageX, stageY);
@@ -1019,10 +1365,10 @@ void GoldFrontEnd::handleMouseDown(double stageX, double stageY, std::uint8_t cl
     const std::string hit = hitTestStage(stageX, stageY);
     if (hit.empty()) return;
 
-    if (hit == "scroll_thumb") {
+    if (hit == "scroll_thumb" || hit == "ratings_scroll_thumb") {
         draggingThumb_ = true;
         dragStartY_ = stageY;
-        dragStartScroll_ = scrollOffset_;
+        dragStartScroll_ = (hit == "ratings_scroll_thumb") ? ratingsScroll_ : scrollOffset_;
         return;
     }
 
@@ -1064,6 +1410,13 @@ void GoldFrontEnd::handleMouseWheel(float dy) {
         scrollBy(dy > 0 ? -3 : 3);
     } else if (fe_.screen() == FrontEnd::Screen::Briefing && dy != 0.0f) {
         briefScroll_ = std::max(0.0, briefScroll_ - double(dy) * 28.0);
+        dirty_ = true;
+    } else if (fe_.screen() == FrontEnd::Screen::Ratings && dy != 0.0f) {
+        scrollRatingsBy(dy > 0 ? -3 : 3);
+    } else if (fe_.screen() == FrontEnd::Screen::Credits && dy != 0.0f) {
+        const double minScroll = -kCreditsClipH + 40.0;
+        const double maxScroll = creditsContentHeight_ > 0.0 ? creditsContentHeight_ : 1.0e6;
+        creditsScroll_ = std::clamp(creditsScroll_ - double(dy) * 32.0, minScroll, maxScroll);
         dirty_ = true;
     }
 }
@@ -1119,6 +1472,16 @@ void GoldFrontEnd::advance(std::chrono::nanoseconds dt) {
             noticeRemaining_ -= dt;
         }
     }
+    if (fe_.screen() == FrontEnd::Screen::Credits && !creditsPaused_) {
+        const double dtSec = std::clamp(std::chrono::duration<double>(dt).count(), 0.0, 0.25);
+        if (dtSec > 0.0) {
+            creditsScroll_ += dtSec * 34.0;
+            if (creditsContentHeight_ > 0.0 && creditsScroll_ > creditsContentHeight_ + 48.0) {
+                creditsScroll_ = -kCreditsClipH + 40.0;
+            }
+            dirty_ = true;
+        }
+    }
 }
 
 void GoldFrontEnd::renderToBuffer(int pixelW, int pixelH, std::vector<std::uint8_t>& outRgba) {
@@ -1142,7 +1505,69 @@ void GoldFrontEnd::renderToBuffer(int pixelW, int pixelH, std::vector<std::uint8
     auto* pangoCtx = assets_->fontCtx.get();
     const auto screen = fe_.screen();
 
-    if (screen == FrontEnd::Screen::Briefing) {
+    if (screen == FrontEnd::Screen::Credits) {
+        if (assets_->creditsBg.surface) {
+            drawSurfaceStretched(cr, assets_->creditsBg.surface.get(), 0, 0, kStageW, kStageH);
+        } else if (assets_->mainBg) {
+            drawSurfaceStretched(cr, assets_->mainBg.get(), 0, 0, kStageW, kStageH);
+        } else {
+            drawFallbackBackdrop(cr, false);
+        }
+
+        drawHeading(cr, pangoCtx, tr("Credits"), {200, 22, 400, 32}, 18.0);
+        drawBronzeBox(cr, kCreditsFrameRect.x, kCreditsFrameRect.y,
+                      kCreditsFrameRect.w, kCreditsFrameRect.h, 0.72);
+
+        cairo_save(cr);
+        cairo_rectangle(cr, kCreditsClipX, kCreditsClipY, kCreditsClipW, kCreditsClipH);
+        cairo_clip(cr);
+
+        double lineY = 0.0;
+        for (const std::string& line : assets_->creditsLines) {
+            if (line.empty()) {
+                lineY += 14.0;
+                continue;
+            }
+            const bool isBanner = line.size() >= 3 && line.front() == '-' && line.back() == '-';
+            const bool isRole = !isBanner && isCreditsRoleHeading(line);
+            const double fontPx = isBanner ? 19.0 : (isRole ? 14.5 : 15.5);
+            const bool bold = isBanner || isRole;
+
+            auto layout = makeTextLayout(pangoCtx, line, fontPx, bold, kCreditsClipW - 16.0, PANGO_ALIGN_CENTER);
+            int tw = 0, th = 0;
+            pango_layout_get_pixel_size(layout.get(), &tw, &th);
+            const double drawY = kCreditsClipY + 32.0 + lineY - creditsScroll_;
+            if (drawY + th >= kCreditsClipY - 8.0 && drawY <= kCreditsClipY + kCreditsClipH + 8.0) {
+                cairo_move_to(cr, kCreditsClipX + 8.0 + 1.5, drawY + 1.5);
+                cairo_set_source_rgba(cr, 0.0, 0.0, 0.0, 0.92);
+                pango_cairo_show_layout(cr, layout.get());
+
+                cairo_move_to(cr, kCreditsClipX + 8.0, drawY);
+                if (isBanner) {
+                    cairo_set_source_rgb(cr, 248.0 / 255.0, 218.0 / 255.0, 128.0 / 255.0);
+                } else if (isRole) {
+                    cairo_set_source_rgb(cr, 220.0 / 255.0, 208.0 / 255.0, 160.0 / 255.0);
+                } else {
+                    cairo_set_source_rgb(cr, 244.0 / 255.0, 246.0 / 255.0, 238.0 / 255.0);
+                }
+                pango_cairo_show_layout(cr, layout.get());
+            }
+            lineY += double(th) + (isBanner ? 8.0 : 5.0);
+        }
+        creditsContentHeight_ = lineY;
+        cairo_restore(cr);
+
+        const std::string hintText = creditsPaused_
+            ? tr("Paused — Space to resume")
+            : tr("Wheel / Up / Down to scroll • Space to pause");
+        auto hintLayout = makeTextLayout(pangoCtx, hintText, 12.5, false);
+        cairo_move_to(cr, kCreditsFrameRect.x, 520.0);
+        cairo_set_source_rgba(cr, 220.0 / 255.0, 216.0 / 255.0, 190.0 / 255.0, 0.88);
+        pango_cairo_show_layout(cr, hintLayout.get());
+
+        drawGoldStencilButton(cr, pangoCtx, kCreditsCancelRect, tr("Cancel"), '\0',
+                              hoveredId_ == "cancel", focusedId_ == "cancel", true, 24.0);
+    } else if (screen == FrontEnd::Screen::Briefing) {
         if (assets_->briefingBg) drawSurfaceStretched(cr, assets_->briefingBg.get(), 0, 0, kStageW, kStageH);
         else drawFallbackBackdrop(cr, true);
 
@@ -1202,7 +1627,7 @@ void GoldFrontEnd::renderToBuffer(int pixelW, int pixelH, std::vector<std::uint8
         else drawFallbackBackdrop(cr, false);
 
         auto drawGoldScrollbar = [&](double sx, double sy, double sw, double sh,
-                                     bool showThumb, std::size_t itemCount, int offset,
+                                     int visibleRows, bool showThumb, std::size_t itemCount, int offset,
                                      bool upHov, bool downHov, bool thumbActive) {
             drawBronzeBox(cr, sx, sy, sw, sh, 0.90);
             const double trackY = sy + kScrollArrowH;
@@ -1237,8 +1662,8 @@ void GoldFrontEnd::renderToBuffer(int pixelW, int pixelH, std::vector<std::uint8
             };
             drawSB(upHov ? 1 : 0, sx + 3.0, sy + 2.0, 12.0, 14.0, "^");
             drawSB(downHov ? 3 : 2, sx + 3.0, sy + sh - kScrollArrowH + 2.0, 12.0, 14.0, "v");
-            if (showThumb && int(itemCount) > kVisibleMissionRows) {
-                const double maxScroll = double(itemCount - kVisibleMissionRows);
+            if (showThumb && int(itemCount) > visibleRows) {
+                const double maxScroll = double(itemCount - std::size_t(visibleRows));
                 const double thumbY = trackY + (trackH - kThumbH) * (double(offset) / maxScroll);
                 drawSB(thumbActive ? 5 : 4, sx + 2.5, thumbY, 13.0, kThumbH, nullptr);
             }
@@ -1293,7 +1718,8 @@ void GoldFrontEnd::renderToBuffer(int pixelW, int pixelH, std::vector<std::uint8
             }
             cairo_restore(cr);
 
-            drawGoldScrollbar(kScrollX, kScrollY, kScrollW, kScrollH, true, rowCount, scrollOffset_,
+            drawGoldScrollbar(kScrollX, kScrollY, kScrollW, kScrollH, kVisibleMissionRows,
+                              true, rowCount, scrollOffset_,
                               hoveredId_ == "scroll_up", hoveredId_ == "scroll_down",
                               hoveredId_ == "scroll_thumb" || draggingThumb_);
 
@@ -1375,7 +1801,7 @@ void GoldFrontEnd::renderToBuffer(int pixelW, int pixelH, std::vector<std::uint8
             cairo_set_source_rgb(cr, 236.0 / 255.0, 232.0 / 255.0, 212.0 / 255.0);
             pango_cairo_show_layout(cr, listLbl.get());
             drawBronzeBox(cr, 462, 95, 258, 362, 0.86);
-            drawGoldScrollbar(720, 95, 18, 362, false, 1, 0, false, false, false);
+            drawGoldScrollbar(720, 95, 18, 362, kVisibleMissionRows, false, 1, 0, false, false, false);
             auto item = makeTextLayout(pangoCtx, "YourID", 13.5, true);
             cairo_move_to(cr, 472, 104);
             cairo_set_source_rgb(cr, 49.0 / 255.0, 174.0 / 255.0, 74.0 / 255.0);
@@ -1483,6 +1909,163 @@ void GoldFrontEnd::renderToBuffer(int pixelW, int pixelH, std::vector<std::uint8
         } else if (screen == FrontEnd::Screen::SingleMissions) {
             renderMissionBrowser(tr("Single Player"), [&](std::size_t i) -> const auto& { return missions_[i]; },
                                  missions_.size(), fe_.selected(), "mission:", false);
+        } else if (screen == FrontEnd::Screen::Ratings) {
+            drawHeading(cr, pangoCtx, tr("Ratings"), {200, 28, 400, 32}, 18.0);
+
+            auto modeLbl = makeTextLayout(pangoCtx, tr("Rating:"), 14.0, false);
+            cairo_move_to(cr, kRatingsTableX, 71.0);
+            cairo_set_source_rgb(cr, 236.0 / 255.0, 232.0 / 255.0, 212.0 / 255.0);
+            pango_cairo_show_layout(cr, modeLbl.get());
+
+            const auto mode = fe_.ratingsMode();
+            const bool campActive = (mode == FrontEnd::RatingsMode::Campaigns);
+            const bool missActive = (mode == FrontEnd::RatingsMode::SingleMissions);
+
+            auto drawModeTab = [&](const RectD& r, const char* id, const std::string& label,
+                                   char shortcut, bool active) {
+                const bool hov = (hoveredId_ == id);
+                const bool foc = (focusedId_ == id);
+                drawBronzeBox(cr, r.x, r.y, r.w, r.h, active ? 0.94 : (hov ? 0.88 : 0.78));
+                if (active) {
+                    cairo_set_source_rgba(cr, 98.0 / 255.0, 114.0 / 255.0, 72.0 / 255.0, 0.34);
+                    cairo_rectangle(cr, r.x + 3.0, r.y + 3.0, r.w - 6.0, r.h - 6.0);
+                    cairo_fill(cr);
+                }
+                drawGoldStencilButton(cr, pangoCtx, r, label, shortcut, hov, foc || active, true, 15.0, true);
+            };
+            drawModeTab(kRatingsCampaignsTabRect, "ratings_campaigns", tr("Campaigns"), 'C', campActive);
+            drawModeTab(kRatingsMissionsTabRect, "ratings_missions", tr("Single Missions"), 'S', missActive);
+
+            int totalScore = 0;
+            std::size_t completedCount = 0;
+            std::size_t totalMissions = 0;
+            if (campActive) {
+                for (const auto& c : campaigns_) {
+                    for (const auto& m : c.missions) {
+                        ++totalMissions;
+                        if (m.completed) ++completedCount;
+                        totalScore += std::max(0, m.highScore);
+                    }
+                }
+            } else {
+                totalMissions = missions_.size();
+                for (const auto& m : missions_) {
+                    if (m.completed) ++completedCount;
+                    totalScore += std::max(0, m.highScore);
+                }
+            }
+
+            drawBronzeBox(cr, 438, 94, 319, 28, 0.86);
+            const std::string totalStr = tr("Total Score") + ": " + std::to_string(totalScore) +
+                "   (" + std::to_string(completedCount) + "/" + std::to_string(totalMissions) + ")";
+            drawHeading(cr, pangoCtx, totalStr, {442, 94, 311, 28}, 13.5);
+
+            drawBronzeBox(cr, kRatingsTableX, kRatingsTableY, kRatingsTableW, kRatingsTableH, 0.88);
+            {
+                auto colMission = makeTextLayout(pangoCtx, tr("Missions:"), 13.5, true);
+                cairo_move_to(cr, kRatingsTableX + 14.0, kRatingsTableY + 8.0);
+                cairo_set_source_rgb(cr, 232.0 / 255.0, 224.0 / 255.0, 188.0 / 255.0);
+                pango_cairo_show_layout(cr, colMission.get());
+
+                auto colStatus = makeTextLayout(pangoCtx, tr("Completed"), 13.5, true, 130.0, PANGO_ALIGN_CENTER);
+                cairo_move_to(cr, 480.0, kRatingsTableY + 8.0);
+                pango_cairo_show_layout(cr, colStatus.get());
+
+                auto colScore = makeTextLayout(pangoCtx, tr("Score"), 13.5, true, 110.0, PANGO_ALIGN_RIGHT);
+                cairo_move_to(cr, 614.0, kRatingsTableY + 8.0);
+                pango_cairo_show_layout(cr, colScore.get());
+
+                cairo_set_source_rgba(cr, 182.0 / 255.0, 174.0 / 255.0, 146.0 / 255.0, 0.55);
+                cairo_set_line_width(cr, 1.0);
+                cairo_move_to(cr, kRatingsTableX + 8.0, kRatingsTableY + 30.0);
+                cairo_line_to(cr, kRatingsTableX + kRatingsTableW - 8.0, kRatingsTableY + 30.0);
+                cairo_stroke(cr);
+            }
+
+            const auto rows = buildRatingsRows(mode, campaigns_, missions_);
+            const int maxOff = std::max(0, int(rows.size()) - kVisibleRatingsRows);
+            ratingsScroll_ = std::clamp(ratingsScroll_, 0, maxOff);
+
+            cairo_save(cr);
+            cairo_rectangle(cr, kRatingsTableX + 6.0, kRatingsTableY + 32.0, kRatingsTableW - 12.0, kRatingsTableH - 38.0);
+            cairo_clip(cr);
+
+            if (rows.empty()) {
+                const std::string emptyMsg = campActive ? tr("No campaigns installed.") : tr("No missions installed.");
+                auto emptyLbl = makeTextLayout(pangoCtx, emptyMsg, 14.0, false);
+                cairo_move_to(cr, kRatingsTableX + 18.0, kRatingsTableY + 48.0);
+                cairo_set_source_rgb(cr, 180.0 / 255.0, 180.0 / 255.0, 165.0 / 255.0);
+                pango_cairo_show_layout(cr, emptyLbl.get());
+            } else {
+                const int endIdx = std::min(int(rows.size()), ratingsScroll_ + kVisibleRatingsRows);
+                for (int idx = ratingsScroll_; idx < endIdx; ++idx) {
+                    const int visRow = idx - ratingsScroll_;
+                    const double ry = kRatingsTableY + 36.0 + visRow * kRatingsRowH;
+                    const auto& row = rows[std::size_t(idx)];
+                    if (row.isHeader) {
+                        cairo_set_source_rgba(cr, 98.0 / 255.0, 114.0 / 255.0, 72.0 / 255.0, 0.34);
+                        cairo_rectangle(cr, kRatingsTableX + 8.0, ry, kRatingsTableW - 16.0, kRatingsRowH - 1.0);
+                        cairo_fill(cr);
+                    } else if ((visRow % 2) == 1) {
+                        cairo_set_source_rgba(cr, 40.0 / 255.0, 48.0 / 255.0, 32.0 / 255.0, 0.24);
+                        cairo_rectangle(cr, kRatingsTableX + 8.0, ry, kRatingsTableW - 16.0, kRatingsRowH - 1.0);
+                        cairo_fill(cr);
+                    }
+
+                    auto nameLayout = makeTextLayout(pangoCtx, row.name, 13.0, row.isHeader);
+                    pango_layout_set_width(nameLayout.get(), int(412.0 * PANGO_SCALE));
+                    pango_layout_set_ellipsize(nameLayout.get(), PANGO_ELLIPSIZE_END);
+                    cairo_move_to(cr, kRatingsTableX + 14.0, ry + 2.0);
+                    if (row.isHeader) {
+                        cairo_set_source_rgb(cr, 245.0 / 255.0, 224.0 / 255.0, 145.0 / 255.0);
+                    } else if (row.completed) {
+                        cairo_set_source_rgb(cr, 242.0 / 255.0, 244.0 / 255.0, 236.0 / 255.0);
+                    } else {
+                        cairo_set_source_rgb(cr, 49.0 / 255.0, 174.0 / 255.0, 74.0 / 255.0);
+                    }
+                    pango_cairo_show_layout(cr, nameLayout.get());
+
+                    const std::string statusShown = row.isHeader
+                        ? row.status
+                        : (row.completed ? (tr("Completed") + " [\xE2\x9C\x93]") : std::string("-"));
+                    auto statLayout = makeTextLayout(pangoCtx, statusShown, 12.5, row.isHeader, 130.0, PANGO_ALIGN_CENTER);
+                    cairo_move_to(cr, 480.0, ry + 2.0);
+                    if (row.completed || row.isHeader) {
+                        cairo_set_source_rgb(cr, 212.0 / 255.0, 224.0 / 255.0, 178.0 / 255.0);
+                    } else {
+                        cairo_set_source_rgb(cr, 132.0 / 255.0, 136.0 / 255.0, 122.0 / 255.0);
+                    }
+                    pango_cairo_show_layout(cr, statLayout.get());
+
+                    const std::string scoreShown = (row.score > 0 || row.isHeader)
+                        ? std::to_string(row.score)
+                        : std::string("-");
+                    auto scoreLayout = makeTextLayout(pangoCtx, scoreShown, 13.0, row.isHeader || row.score > 0, 110.0, PANGO_ALIGN_RIGHT);
+                    cairo_move_to(cr, 614.0, ry + 2.0);
+                    if (row.score > 0) {
+                        cairo_set_source_rgb(cr, 246.0 / 255.0, 216.0 / 255.0, 124.0 / 255.0);
+                    } else {
+                        cairo_set_source_rgb(cr, 140.0 / 255.0, 142.0 / 255.0, 130.0 / 255.0);
+                    }
+                    pango_cairo_show_layout(cr, scoreLayout.get());
+                }
+            }
+            cairo_restore(cr);
+
+            drawGoldScrollbar(kRatingsScrollX, kRatingsScrollY, kRatingsScrollW, kRatingsScrollH,
+                              kVisibleRatingsRows, true, rows.size(), ratingsScroll_,
+                              hoveredId_ == "ratings_scroll_up", hoveredId_ == "ratings_scroll_down",
+                              hoveredId_ == "ratings_scroll_thumb" || draggingThumb_);
+
+            if (totalScore == 0 && !rows.empty()) {
+                auto noScore = makeTextLayout(pangoCtx, tr("No scores recorded yet."), 13.0, false);
+                cairo_move_to(cr, kRatingsTableX, 520.0);
+                cairo_set_source_rgba(cr, 220.0 / 255.0, 216.0 / 255.0, 190.0 / 255.0, 0.85);
+                pango_cairo_show_layout(cr, noScore.get());
+            }
+
+            drawGoldStencilButton(cr, pangoCtx, kRatingsCancelRect, tr("Cancel"), '\0',
+                                  hoveredId_ == "cancel", focusedId_ == "cancel", true, 24.0);
         }
     }
 

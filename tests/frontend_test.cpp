@@ -158,10 +158,56 @@ int main() {
         check(def.screen() == FrontEnd::Screen::MainMenu, "Multiplayer is deferred, stays on Main Menu");
         check(!def.takeNotice().empty(), "deferred branch reports a notice");
         check(def.takeNotice().empty(), "notice is cleared after reading");
+        def.activate("options");
+        check(def.screen() == FrontEnd::Screen::MainMenu && !def.takeNotice().empty(),
+              "Options is deferred and reports a notice");
+        def.activate("replay");
+        check(def.screen() == FrontEnd::Screen::MainMenu && !def.takeNotice().empty(),
+              "Replay is deferred and reports a notice");
         def.activate("single");
         def.activate("load");
         check(def.screen() == FrontEnd::Screen::SinglePlayer, "Load is deferred, stays on Single Player");
         check(!def.takeNotice().empty(), "Load reports a notice");
+
+        // Ratings (R) and Credits (C) screens, tab toggling, and Cancel/Esc return.
+        {
+            FrontEnd rc;
+            rc.setMissions(missions());
+            rc.setCampaigns(campaigns());
+            check(rc.shortcutId('r') == "ratings" && rc.shortcutId('c') == "credits",
+                  "Main Menu advertises R for Ratings and C for Credits");
+
+            rc.activate(rc.shortcutId('r'));
+            check(rc.screen() == FrontEnd::Screen::Ratings && rc.title() == "Ratings",
+                  "R opens Ratings screen");
+            check(rc.ratingsMode() == FrontEnd::RatingsMode::Campaigns,
+                  "Ratings opens in Campaigns mode by default");
+            check(rc.shortcutId('s') == "ratings_missions" && rc.shortcutId('c') == "ratings_campaigns",
+                  "Ratings advertises C and S shortcuts");
+            rc.activate(rc.shortcutId('s'));
+            check(rc.ratingsMode() == FrontEnd::RatingsMode::SingleMissions,
+                  "S switches Ratings to Single Missions");
+            rc.activate("ratings_toggle");
+            check(rc.ratingsMode() == FrontEnd::RatingsMode::Campaigns,
+                  "ratings_toggle toggles back to Campaigns");
+            rc.activate("cancel");
+            check(rc.screen() == FrontEnd::Screen::MainMenu, "Cancel returns from Ratings to Main Menu");
+
+            rc.activate("ratings");
+            check(rc.screen() == FrontEnd::Screen::Ratings, "Ratings reopened");
+            rc.back();
+            check(rc.screen() == FrontEnd::Screen::MainMenu, "Esc returns from Ratings to Main Menu");
+
+            rc.activate(rc.shortcutId('c'));
+            check(rc.screen() == FrontEnd::Screen::Credits && rc.title() == "Credits",
+                  "C opens Credits screen");
+            check(hasId(rc.items(), "cancel"), "Credits offers Cancel");
+            rc.activate("cancel");
+            check(rc.screen() == FrontEnd::Screen::MainMenu, "Cancel returns from Credits to Main Menu");
+            rc.activate("credits");
+            rc.back();
+            check(rc.screen() == FrontEnd::Screen::MainMenu, "Esc returns from Credits to Main Menu");
+        }
 
         // Campaigns path, shortcuts (G/J/B/U/R/C/D/S), Easy/Normal/Hard routing, and stack back.
         FrontEnd camp;

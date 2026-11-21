@@ -14,7 +14,11 @@ namespace ss2 {
 // reacts to screen(): Launch means load launchPath(), Quit means exit.
 class FrontEnd {
 public:
-    enum class Screen { MainMenu, SinglePlayer, SingleMissions, Campaigns, CampaignMissions, Briefing, Launch, Quit };
+    enum class Screen {
+        MainMenu, SinglePlayer, SingleMissions, Campaigns, CampaignMissions,
+        Briefing, Ratings, Credits, Launch, Quit
+    };
+    enum class RatingsMode { Campaigns, SingleMissions };
 
     struct Entry {
         std::string name, path, description, tag;
@@ -58,6 +62,13 @@ public:
     void setDifficulty(int difficulty);
     void cycleDifficulty(int delta = 1);
 
+    RatingsMode ratingsMode() const { return ratingsMode_; }
+    void setRatingsMode(RatingsMode mode) { ratingsMode_ = mode; }
+    void toggleRatingsMode() {
+        ratingsMode_ = (ratingsMode_ == RatingsMode::Campaigns)
+            ? RatingsMode::SingleMissions : RatingsMode::Campaigns;
+    }
+
     std::string briefingText() const;
     std::string launchPath() const;
 
@@ -79,6 +90,7 @@ private:
     std::size_t selectedCampaignMission_ = 0;
     bool briefingFromCampaign_ = false;
     int difficulty_ = 2;
+    RatingsMode ratingsMode_ = RatingsMode::Campaigns;
     std::string notice_;
 };
 }

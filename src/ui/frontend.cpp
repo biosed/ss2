@@ -145,6 +145,8 @@ std::string FrontEnd::title() const {
         case Screen::CampaignMissions:
             return currentCampaign() ? currentCampaign()->name : tr("Campaigns");
         case Screen::Briefing: return tr("Mission Briefing");
+        case Screen::Ratings: return tr("Ratings");
+        case Screen::Credits: return tr("Credits");
         case Screen::Launch:
         case Screen::Quit: break;
     }
@@ -210,6 +212,14 @@ std::vector<MenuItem> FrontEnd::items() const {
             items.push_back({"start", tr("Start"), "S", true});
             items.push_back({"cancel", tr("Cancel"), "Esc", true});
             break;
+        case Screen::Ratings:
+            items.push_back({"ratings_campaigns", tr("Campaigns"), "C", true});
+            items.push_back({"ratings_missions", tr("Single Missions"), "S", true});
+            items.push_back({"cancel", tr("Cancel"), "Esc", true});
+            break;
+        case Screen::Credits:
+            items.push_back({"cancel", tr("Cancel"), "Esc", true});
+            break;
         case Screen::Launch:
         case Screen::Quit:
             break;
@@ -245,9 +255,10 @@ void FrontEnd::activate(const std::string& id) {
     switch (screen_) {
         case Screen::MainMenu:
             if (id == "single") screen_ = Screen::SinglePlayer;
+            else if (id == "ratings") screen_ = Screen::Ratings;
+            else if (id == "credits") screen_ = Screen::Credits;
             else if (id == "quit") screen_ = Screen::Quit;
-            else if (id == "multi" || id == "options" || id == "ratings" ||
-                     id == "replay" || id == "credits") notice_ = tr("Not implemented yet.");
+            else if (id == "multi" || id == "options" || id == "replay") notice_ = tr("Not implemented yet.");
             break;
         case Screen::SinglePlayer:
             if (id == "missions") {
@@ -300,6 +311,15 @@ void FrontEnd::activate(const std::string& id) {
                 screen_ = briefingFromCampaign_ ? Screen::CampaignMissions : Screen::SingleMissions;
             }
             break;
+        case Screen::Ratings:
+            if (id == "ratings_campaigns") ratingsMode_ = RatingsMode::Campaigns;
+            else if (id == "ratings_missions") ratingsMode_ = RatingsMode::SingleMissions;
+            else if (id == "ratings_toggle") toggleRatingsMode();
+            else if (id == "cancel" || id == "back") screen_ = Screen::MainMenu;
+            break;
+        case Screen::Credits:
+            if (id == "cancel" || id == "back") screen_ = Screen::MainMenu;
+            break;
         case Screen::Launch:
         case Screen::Quit:
             break;
@@ -315,6 +335,10 @@ void FrontEnd::back() {
         case Screen::CampaignMissions: screen_ = Screen::Campaigns; break;
         case Screen::Briefing:
             screen_ = briefingFromCampaign_ ? Screen::CampaignMissions : Screen::SingleMissions;
+            break;
+        case Screen::Ratings:
+        case Screen::Credits:
+            screen_ = Screen::MainMenu;
             break;
         case Screen::Launch:
         case Screen::Quit: break;
@@ -362,6 +386,11 @@ std::string FrontEnd::shortcutId(char letter) const {
         case Screen::Briefing:
             if (c == 's') return "start";
             break;
+        case Screen::Ratings:
+            if (c == 'c') return "ratings_campaigns";
+            if (c == 's') return "ratings_missions";
+            break;
+        case Screen::Credits:
         case Screen::Launch:
         case Screen::Quit:
             break;
