@@ -1,4 +1,5 @@
 #pragma once
+#include "sim/command.hpp"
 #include "sim/tutorial.hpp"
 #include "sim/tutorial_units.hpp"
 #include <atomic>
@@ -7,11 +8,17 @@
 #include <mutex>
 #include <optional>
 #include <set>
+#include <span>
 #include <thread>
+#include <vector>
 
 namespace ss2 {
 // The mission worker owns script execution. Only presentation events and input
 // cross between this clock and SDL's main thread.
+//
+// Every simulation mutation below is a thin wrapper that submits a cmd::Command.
+// Commands are applied between ticks under mutex_ and, while recording, logged
+// with the tick at which they were applied.
 class MissionRunner {
 public:
     MissionRunner(assets::TutorialData, unsigned delayMs, TutorialUnits);
@@ -114,6 +121,13 @@ public:
     void acknowledge();
     bool togglePause();
     const assets::TutorialData& data() const { return tutorial_.data(); }
+
+    // Applies a command exactly as the matching wrapper would, discarding its result.
+    void apply(const cmd::Command& command);
+    // Starts a fresh in-memory log of every submitted command.
+    void startRecording();
+    // Stops recording and returns the log.
+    std::vector<cmd::RecordedCommand> takeRecording();
 private:
     struct ScheduledReinforcement {
         MissionEvent event;
@@ -136,6 +150,60 @@ private:
         const std::array<std::vector<assets::ReinforcementUnit>, 64>& waves,
         std::span<const std::pair<int, int>> markers) const;
     void run(std::stop_token, unsigned delayMs);
+    template<class C> typename C::Result submit(const C& c);
+    template<class C> typename C::Result submitLocked(const C& c);
+    cmd::Move::Result applyLocked(const cmd::Move&);
+    cmd::AttackMove::Result applyLocked(const cmd::AttackMove&);
+    cmd::Patrol::Result applyLocked(const cmd::Patrol&);
+    cmd::Scatter::Result applyLocked(const cmd::Scatter&);
+    cmd::Attack::Result applyLocked(const cmd::Attack&);
+    cmd::Stop::Result applyLocked(const cmd::Stop&);
+    cmd::ToggleHoldFire::Result applyLocked(const cmd::ToggleHoldFire&);
+    cmd::ToggleCrouch::Result applyLocked(const cmd::ToggleCrouch&);
+    cmd::ToggleBinoculars::Result applyLocked(const cmd::ToggleBinoculars&);
+    cmd::SpawnInfantry::Result applyLocked(const cmd::SpawnInfantry&);
+    cmd::MoveVehicles::Result applyLocked(const cmd::MoveVehicles&);
+    cmd::ReverseMoveVehicles::Result applyLocked(const cmd::ReverseMoveVehicles&);
+    cmd::FaceVehicles::Result applyLocked(const cmd::FaceVehicles&);
+    cmd::AttackMoveVehicles::Result applyLocked(const cmd::AttackMoveVehicles&);
+    cmd::PatrolVehicles::Result applyLocked(const cmd::PatrolVehicles&);
+    cmd::AttackWithVehicles::Result applyLocked(const cmd::AttackWithVehicles&);
+    cmd::AttackVehicle::Result applyLocked(const cmd::AttackVehicle&);
+    cmd::StopVehicles::Result applyLocked(const cmd::StopVehicles&);
+    cmd::SupportVehicle::Result applyLocked(const cmd::SupportVehicle&);
+    cmd::SupportBuilding::Result applyLocked(const cmd::SupportBuilding&);
+    cmd::HealSoldier::Result applyLocked(const cmd::HealSoldier&);
+    cmd::EscortVehicle::Result applyLocked(const cmd::EscortVehicle&);
+    cmd::EscortSoldier::Result applyLocked(const cmd::EscortSoldier&);
+    cmd::ToggleVehicleHoldFire::Result applyLocked(const cmd::ToggleVehicleHoldFire&);
+    cmd::ToggleMarchMode::Result applyLocked(const cmd::ToggleMarchMode&);
+    cmd::BoardVehicle::Result applyLocked(const cmd::BoardVehicle&);
+    cmd::EmbarkImmediate::Result applyLocked(const cmd::EmbarkImmediate&);
+    cmd::UnloadVehicles::Result applyLocked(const cmd::UnloadVehicles&);
+    cmd::CaptureVehicle::Result applyLocked(const cmd::CaptureVehicle&);
+    cmd::AbandonVehicles::Result applyLocked(const cmd::AbandonVehicles&);
+    cmd::TowVehicle::Result applyLocked(const cmd::TowVehicle&);
+    cmd::UnhitchVehicles::Result applyLocked(const cmd::UnhitchVehicles&);
+    cmd::SpawnVehicle::Result applyLocked(const cmd::SpawnVehicle&);
+    cmd::AddReserveUnit::Result applyLocked(const cmd::AddReserveUnit&);
+    cmd::TakeReserveUnits::Result applyLocked(const cmd::TakeReserveUnits&);
+    cmd::AttackGroundVehicles::Result applyLocked(const cmd::AttackGroundVehicles&);
+    cmd::AttackGroundSoldiers::Result applyLocked(const cmd::AttackGroundSoldiers&);
+    cmd::LayMine::Result applyLocked(const cmd::LayMine&);
+    cmd::DisarmMine::Result applyLocked(const cmd::DisarmMine&);
+    cmd::GroupMove::Result applyLocked(const cmd::GroupMove&);
+    cmd::GarrisonBuilding::Result applyLocked(const cmd::GarrisonBuilding&);
+    cmd::EvacuateBuilding::Result applyLocked(const cmd::EvacuateBuilding&);
+    cmd::ToggleBuildingHoldFire::Result applyLocked(const cmd::ToggleBuildingHoldFire&);
+    cmd::ToggleBuildingBinoculars::Result applyLocked(const cmd::ToggleBuildingBinoculars&);
+    cmd::BuildingAttack::Result applyLocked(const cmd::BuildingAttack&);
+    cmd::BuildingAttackBuilding::Result applyLocked(const cmd::BuildingAttackBuilding&);
+    cmd::AttackBuilding::Result applyLocked(const cmd::AttackBuilding&);
+    cmd::AttackBuildingWithVehicles::Result applyLocked(const cmd::AttackBuildingWithVehicles&);
+    cmd::CallAirSupport::Result applyLocked(const cmd::CallAirSupport&);
+    cmd::LoadSnapshot::Result applyLocked(const cmd::LoadSnapshot&);
+    cmd::Acknowledge::Result applyLocked(const cmd::Acknowledge&);
+    cmd::TogglePause::Result applyLocked(const cmd::TogglePause&);
     TutorialUnits units_;
     std::array<bool, 64> spawnedReinforcementWaves_{};
     std::array<int, 64> reinforcementWaveOwner_{};
@@ -156,6 +224,7 @@ private:
     std::vector<MissionEvent> pending_;
     std::optional<std::pair<std::uint32_t, std::uint32_t>> nextMissionSignal_;
     std::exception_ptr error_;
+    std::optional<std::vector<cmd::RecordedCommand>> recording_;
     std::jthread worker_;
 };
 }

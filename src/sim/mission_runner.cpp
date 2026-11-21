@@ -21,6 +21,32 @@ std::array<int, 64> extractReinforcementWaveOwners(const std::vector<std::vector
     }
     return owners;
 }
+
+cmd::Ids ids(std::span<const std::size_t> indices) { return {indices.begin(), indices.end()}; }
+}
+
+template<class C> typename C::Result MissionRunner::submit(const C& c) {
+    std::lock_guard lock(mutex_);
+    return submitLocked(c);
+}
+// Logged before applying, even when modal_ makes applyLocked reject the
+// command, so replay re-evaluates the same gate at the same tick.
+template<class C> typename C::Result MissionRunner::submitLocked(const C& c) {
+    if (recording_) recording_->push_back({units_.tick_, c});
+    return applyLocked(c);
+}
+void MissionRunner::apply(const cmd::Command& command) {
+    std::visit([this](const auto& c) { (void)submit(c); }, command);
+}
+void MissionRunner::startRecording() {
+    std::lock_guard lock(mutex_);
+    recording_.emplace();
+}
+std::vector<cmd::RecordedCommand> MissionRunner::takeRecording() {
+    std::lock_guard lock(mutex_);
+    auto log = std::move(recording_).value_or(std::vector<cmd::RecordedCommand>{});
+    recording_.reset();
+    return log;
 }
 
 MissionRunner::MissionRunner(assets::TutorialData data, unsigned delayMs, TutorialUnits units)
@@ -328,110 +354,146 @@ bool MissionRunner::canMove(std::span<const size_t> indices, int x, int y) {
     return !modal_ && units_.canMoveSelection(indices, x, y);
 }
 std::optional<size_t> MissionRunner::move(std::span<const size_t> indices, int x, int y, bool append) {
-    std::lock_guard lock(mutex_);
+    return submit(cmd::Move{ids(indices), x, y, append});
+}
+cmd::Move::Result MissionRunner::applyLocked(const cmd::Move& c) {
     if (modal_) return {};
-    return units_.orderSelection(indices, x, y, append);
+    return units_.orderSelection(c.ids, c.x, c.y, c.append);
 }
 std::optional<size_t> MissionRunner::attackMove(std::span<const size_t> indices, int x, int y, bool append) {
-    std::lock_guard lock(mutex_);
+    return submit(cmd::AttackMove{ids(indices), x, y, append});
+}
+cmd::AttackMove::Result MissionRunner::applyLocked(const cmd::AttackMove& c) {
     if (modal_) return {};
-    return units_.orderAttackMove(indices, x, y, append);
+    return units_.orderAttackMove(c.ids, c.x, c.y, c.append);
 }
 std::optional<size_t> MissionRunner::patrol(std::span<const size_t> indices, int mapX, int mapY) {
-    std::lock_guard lock(mutex_);
+    return submit(cmd::Patrol{ids(indices), mapX, mapY});
+}
+cmd::Patrol::Result MissionRunner::applyLocked(const cmd::Patrol& c) {
     if (modal_) return {};
-    return units_.orderPatrol(indices, mapX, mapY);
+    return units_.orderPatrol(c.ids, c.x, c.y);
 }
 size_t MissionRunner::scatter(std::span<const size_t> indices) {
-    std::lock_guard lock(mutex_);
+    return submit(cmd::Scatter{ids(indices)});
+}
+cmd::Scatter::Result MissionRunner::applyLocked(const cmd::Scatter& c) {
     if (modal_) return 0;
-    return units_.orderScatter(indices);
+    return units_.orderScatter(c.ids);
 }
 bool MissionRunner::isValidAttackTarget(size_t targetIndex) {
     std::lock_guard lock(mutex_);
     return !modal_ && units_.isValidAttackTarget(targetIndex, 0);
 }
 std::optional<size_t> MissionRunner::attack(std::span<const size_t> indices, size_t targetIndex) {
-    std::lock_guard lock(mutex_);
+    return submit(cmd::Attack{ids(indices), targetIndex});
+}
+cmd::Attack::Result MissionRunner::applyLocked(const cmd::Attack& c) {
     if (modal_) return {};
-    return units_.orderAttack(indices, targetIndex);
+    return units_.orderAttack(c.ids, c.target);
 }
 size_t MissionRunner::stop(std::span<const size_t> indices) {
-    std::lock_guard lock(mutex_);
+    return submit(cmd::Stop{ids(indices)});
+}
+cmd::Stop::Result MissionRunner::applyLocked(const cmd::Stop& c) {
     if (modal_) return 0;
-    return units_.stopSelection(indices);
+    return units_.stopSelection(c.ids);
 }
 std::optional<bool> MissionRunner::toggleHoldFire(std::span<const size_t> indices) {
-    std::lock_guard lock(mutex_);
-    if (modal_ || indices.empty()) return std::nullopt;
-    return units_.toggleHoldFire(indices);
+    return submit(cmd::ToggleHoldFire{ids(indices)});
+}
+cmd::ToggleHoldFire::Result MissionRunner::applyLocked(const cmd::ToggleHoldFire& c) {
+    if (modal_ || c.ids.empty()) return std::nullopt;
+    return units_.toggleHoldFire(c.ids);
 }
 std::optional<bool> MissionRunner::toggleCrouch(std::span<const size_t> indices) {
-    std::lock_guard lock(mutex_);
-    if (modal_ || indices.empty()) return std::nullopt;
-    const bool crouched = units_.toggleCrouch(indices);
+    return submit(cmd::ToggleCrouch{ids(indices)});
+}
+cmd::ToggleCrouch::Result MissionRunner::applyLocked(const cmd::ToggleCrouch& c) {
+    if (modal_ || c.ids.empty()) return std::nullopt;
+    const bool crouched = units_.toggleCrouch(c.ids);
     collectVehiclePoses();
     if (auto snap = units_.takeFogSnapshot()) fog_ = std::move(snap);
     return crouched;
 }
 std::optional<bool> MissionRunner::toggleBinoculars(std::span<const size_t> indices) {
-    std::lock_guard lock(mutex_);
-    if (modal_ || indices.empty()) return std::nullopt;
+    return submit(cmd::ToggleBinoculars{ids(indices)});
+}
+cmd::ToggleBinoculars::Result MissionRunner::applyLocked(const cmd::ToggleBinoculars& c) {
+    if (modal_ || c.ids.empty()) return std::nullopt;
     std::vector<SoldierPose> changed;
-    const bool active = units_.toggleBinocularsWithPoses(indices, &changed);
+    const bool active = units_.toggleBinocularsWithPoses(c.ids, &changed);
     mergeSoldierPoses(changed);
     collectVehiclePoses();
     if (auto snap = units_.takeFogSnapshot()) fog_ = std::move(snap);
     return active;
 }
 size_t MissionRunner::spawnInfantry(const assets::Infantry& unit, int expa) {
-    std::lock_guard lock(mutex_);
-    const size_t index = units_.spawnInfantry(unit, expa);
+    return submit(cmd::SpawnInfantry{unit, expa});
+}
+cmd::SpawnInfantry::Result MissionRunner::applyLocked(const cmd::SpawnInfantry& c) {
+    const size_t index = units_.spawnInfantry(c.unit, c.expa);
     collectVehiclePoses();
     if (auto snap = units_.takeFogSnapshot()) fog_ = std::move(snap);
     return index;
 }
 std::optional<size_t> MissionRunner::moveVehicles(std::span<const size_t> indices, int mapX, int mapY, bool append) {
-    std::lock_guard lock(mutex_);
+    return submit(cmd::MoveVehicles{ids(indices), mapX, mapY, append});
+}
+cmd::MoveVehicles::Result MissionRunner::applyLocked(const cmd::MoveVehicles& c) {
     if (modal_) return {};
-    return units_.moveVehicles(indices, mapX, mapY, append);
+    return units_.moveVehicles(c.ids, c.x, c.y, c.append);
 }
 std::optional<size_t> MissionRunner::reverseMoveVehicles(std::span<const size_t> indices, int mapX, int mapY) {
-    std::lock_guard lock(mutex_);
+    return submit(cmd::ReverseMoveVehicles{ids(indices), mapX, mapY});
+}
+cmd::ReverseMoveVehicles::Result MissionRunner::applyLocked(const cmd::ReverseMoveVehicles& c) {
     if (modal_) return {};
-    return units_.reverseMoveVehicles(indices, mapX, mapY);
+    return units_.reverseMoveVehicles(c.ids, c.x, c.y);
 }
 std::optional<size_t> MissionRunner::faceVehicles(std::span<const size_t> indices, int mapX, int mapY) {
-    std::lock_guard lock(mutex_);
+    return submit(cmd::FaceVehicles{ids(indices), mapX, mapY});
+}
+cmd::FaceVehicles::Result MissionRunner::applyLocked(const cmd::FaceVehicles& c) {
     if (modal_) return {};
-    const size_t res = units_.faceVehicles(indices, mapX, mapY);
+    const size_t res = units_.faceVehicles(c.ids, c.x, c.y);
     collectVehiclePoses();
     return res;
 }
 std::optional<size_t> MissionRunner::attackMoveVehicles(std::span<const size_t> indices, int mapX, int mapY, bool append) {
-    std::lock_guard lock(mutex_);
+    return submit(cmd::AttackMoveVehicles{ids(indices), mapX, mapY, append});
+}
+cmd::AttackMoveVehicles::Result MissionRunner::applyLocked(const cmd::AttackMoveVehicles& c) {
     if (modal_) return {};
-    return units_.attackMoveVehicles(indices, mapX, mapY, append);
+    return units_.attackMoveVehicles(c.ids, c.x, c.y, c.append);
 }
 std::optional<size_t> MissionRunner::patrolVehicles(std::span<const size_t> indices, int mapX, int mapY) {
-    std::lock_guard lock(mutex_);
+    return submit(cmd::PatrolVehicles{ids(indices), mapX, mapY});
+}
+cmd::PatrolVehicles::Result MissionRunner::applyLocked(const cmd::PatrolVehicles& c) {
     if (modal_) return {};
-    return units_.patrolVehicles(indices, mapX, mapY);
+    return units_.patrolVehicles(c.ids, c.x, c.y);
 }
 std::optional<size_t> MissionRunner::attackWithVehicles(std::span<const size_t> indices, bool targetIsVehicle, size_t targetIdx) {
-    std::lock_guard lock(mutex_);
+    return submit(cmd::AttackWithVehicles{ids(indices), targetIsVehicle, targetIdx});
+}
+cmd::AttackWithVehicles::Result MissionRunner::applyLocked(const cmd::AttackWithVehicles& c) {
     if (modal_) return {};
-    return units_.attackWithVehicles(indices, targetIsVehicle, targetIdx);
+    return units_.attackWithVehicles(c.ids, c.targetIsVehicle, c.target);
 }
 std::optional<size_t> MissionRunner::attackVehicle(std::span<const size_t> indices, size_t targetVehicleIdx) {
-    std::lock_guard lock(mutex_);
+    return submit(cmd::AttackVehicle{ids(indices), targetVehicleIdx});
+}
+cmd::AttackVehicle::Result MissionRunner::applyLocked(const cmd::AttackVehicle& c) {
     if (modal_) return {};
-    return units_.attackVehicle(indices, targetVehicleIdx);
+    return units_.attackVehicle(c.ids, c.targetVehicle);
 }
 size_t MissionRunner::stopVehicles(std::span<const size_t> indices) {
-    std::lock_guard lock(mutex_);
+    return submit(cmd::StopVehicles{ids(indices)});
+}
+cmd::StopVehicles::Result MissionRunner::applyLocked(const cmd::StopVehicles& c) {
     if (modal_) return 0;
-    const size_t stopped = units_.stopVehicles(indices);
+    const size_t stopped = units_.stopVehicles(c.ids);
     collectVehiclePoses();
     return stopped;
 }
@@ -441,9 +503,11 @@ bool MissionRunner::canSupportVehicle(std::span<const size_t> supporterVehicleId
 }
 std::optional<size_t> MissionRunner::orderSupportVehicle(std::span<const size_t> supporterVehicleIds,
                                                            size_t targetVehicleIdx) {
-    std::lock_guard lock(mutex_);
+    return submit(cmd::SupportVehicle{ids(supporterVehicleIds), targetVehicleIdx});
+}
+cmd::SupportVehicle::Result MissionRunner::applyLocked(const cmd::SupportVehicle& c) {
     if (modal_) return {};
-    const size_t res = units_.orderSupportVehicle(supporterVehicleIds, targetVehicleIdx);
+    const size_t res = units_.orderSupportVehicle(c.supporters, c.targetVehicle);
     collectVehiclePoses();
     return res;
 }
@@ -453,9 +517,11 @@ bool MissionRunner::canSupportBuilding(std::span<const size_t> supporterVehicleI
 }
 std::optional<size_t> MissionRunner::orderSupportBuilding(std::span<const size_t> supporterVehicleIds,
                                                             size_t buildingIdx) {
-    std::lock_guard lock(mutex_);
+    return submit(cmd::SupportBuilding{ids(supporterVehicleIds), buildingIdx});
+}
+cmd::SupportBuilding::Result MissionRunner::applyLocked(const cmd::SupportBuilding& c) {
     if (modal_) return {};
-    const size_t res = units_.orderSupportBuilding(supporterVehicleIds, buildingIdx);
+    const size_t res = units_.orderSupportBuilding(c.supporters, c.building);
     collectVehiclePoses();
     return res;
 }
@@ -468,9 +534,11 @@ bool MissionRunner::canHealSoldier(std::span<const size_t> medicSoldierIds,
 std::optional<size_t> MissionRunner::orderHealSoldier(std::span<const size_t> medicSoldierIds,
                                                         std::span<const size_t> ambulanceVehicleIds,
                                                         size_t targetSoldierIdx) {
-    std::lock_guard lock(mutex_);
+    return submit(cmd::HealSoldier{ids(medicSoldierIds), ids(ambulanceVehicleIds), targetSoldierIdx});
+}
+cmd::HealSoldier::Result MissionRunner::applyLocked(const cmd::HealSoldier& c) {
     if (modal_) return {};
-    const size_t res = units_.orderHealSoldier(medicSoldierIds, ambulanceVehicleIds, targetSoldierIdx);
+    const size_t res = units_.orderHealSoldier(c.medics, c.ambulances, c.targetSoldier);
     collectVehiclePoses();
     return res;
 }
@@ -482,9 +550,11 @@ bool MissionRunner::canEscortVehicle(std::span<const size_t> soldierIds, std::sp
 std::optional<size_t> MissionRunner::orderEscortVehicle(std::span<const size_t> soldierIds,
                                                           std::span<const size_t> vehicleIds,
                                                           size_t targetVehicleIdx) {
-    std::lock_guard lock(mutex_);
+    return submit(cmd::EscortVehicle{ids(soldierIds), ids(vehicleIds), targetVehicleIdx});
+}
+cmd::EscortVehicle::Result MissionRunner::applyLocked(const cmd::EscortVehicle& c) {
     if (modal_) return {};
-    const size_t res = units_.orderEscortVehicle(soldierIds, vehicleIds, targetVehicleIdx);
+    const size_t res = units_.orderEscortVehicle(c.soldiers, c.vehicles, c.targetVehicle);
     collectVehiclePoses();
     return res;
 }
@@ -496,21 +566,27 @@ bool MissionRunner::canEscortSoldier(std::span<const size_t> soldierIds, std::sp
 std::optional<size_t> MissionRunner::orderEscortSoldier(std::span<const size_t> soldierIds,
                                                           std::span<const size_t> vehicleIds,
                                                           size_t targetSoldierIdx) {
-    std::lock_guard lock(mutex_);
+    return submit(cmd::EscortSoldier{ids(soldierIds), ids(vehicleIds), targetSoldierIdx});
+}
+cmd::EscortSoldier::Result MissionRunner::applyLocked(const cmd::EscortSoldier& c) {
     if (modal_) return {};
-    const size_t res = units_.orderEscortSoldier(soldierIds, vehicleIds, targetSoldierIdx);
+    const size_t res = units_.orderEscortSoldier(c.soldiers, c.vehicles, c.targetSoldier);
     collectVehiclePoses();
     return res;
 }
 std::optional<bool> MissionRunner::toggleVehicleHoldFire(std::span<const size_t> indices) {
-    std::lock_guard lock(mutex_);
-    if (modal_ || indices.empty()) return std::nullopt;
-    return units_.toggleVehicleHoldFire(indices);
+    return submit(cmd::ToggleVehicleHoldFire{ids(indices)});
+}
+cmd::ToggleVehicleHoldFire::Result MissionRunner::applyLocked(const cmd::ToggleVehicleHoldFire& c) {
+    if (modal_ || c.ids.empty()) return std::nullopt;
+    return units_.toggleVehicleHoldFire(c.ids);
 }
 std::optional<bool> MissionRunner::toggleMarchMode(std::span<const size_t> vehicleIds) {
-    std::lock_guard lock(mutex_);
-    if (modal_ || vehicleIds.empty()) return std::nullopt;
-    const auto toggled = units_.toggleMarchMode(vehicleIds);
+    return submit(cmd::ToggleMarchMode{ids(vehicleIds)});
+}
+cmd::ToggleMarchMode::Result MissionRunner::applyLocked(const cmd::ToggleMarchMode& c) {
+    if (modal_ || c.vehicles.empty()) return std::nullopt;
+    const auto toggled = units_.toggleMarchMode(c.vehicles);
     collectVehiclePoses();
     if (auto snap = units_.takeFogSnapshot()) fog_ = std::move(snap);
     return toggled;
@@ -524,15 +600,19 @@ bool MissionRunner::canBoardVehicle(size_t vehicleIdx) {
     return !modal_ && units_.canBoardVehicle(vehicleIdx, 0);
 }
 std::optional<size_t> MissionRunner::boardVehicle(std::span<const size_t> soldierIds, size_t vehicleIdx) {
-    std::lock_guard lock(mutex_);
+    return submit(cmd::BoardVehicle{ids(soldierIds), vehicleIdx});
+}
+cmd::BoardVehicle::Result MissionRunner::applyLocked(const cmd::BoardVehicle& c) {
     if (modal_) return {};
-    return units_.orderBoardVehicle(soldierIds, vehicleIdx);
+    return units_.orderBoardVehicle(c.soldiers, c.vehicle);
 }
 size_t MissionRunner::unloadVehicles(std::span<const size_t> vehicleIds) {
-    std::lock_guard lock(mutex_);
+    return submit(cmd::UnloadVehicles{ids(vehicleIds)});
+}
+cmd::UnloadVehicles::Result MissionRunner::applyLocked(const cmd::UnloadVehicles& c) {
     if (modal_) return 0;
     std::vector<SoldierPose> outPoses;
-    const size_t count = units_.unloadVehicles(vehicleIds, &outPoses);
+    const size_t count = units_.unloadVehicles(c.vehicles, &outPoses);
     mergeSoldierPoses(outPoses);
     collectVehiclePoses();
     if (auto snap = units_.takeFogSnapshot()) fog_ = std::move(snap);
@@ -543,25 +623,33 @@ bool MissionRunner::canCaptureVehicle(size_t vehicleIdx) {
     return !modal_ && units_.canCaptureVehicle(vehicleIdx, 0);
 }
 std::optional<size_t> MissionRunner::captureVehicle(std::span<const size_t> soldierIds, size_t vehicleIdx) {
-    std::lock_guard lock(mutex_);
+    return submit(cmd::CaptureVehicle{ids(soldierIds), vehicleIdx});
+}
+cmd::CaptureVehicle::Result MissionRunner::applyLocked(const cmd::CaptureVehicle& c) {
     if (modal_) return {};
-    return units_.orderCaptureVehicle(soldierIds, vehicleIdx);
+    return units_.orderCaptureVehicle(c.soldiers, c.vehicle);
 }
 std::optional<size_t> MissionRunner::attackGroundVehicles(std::span<const size_t> indices, int mapX, int mapY) {
-    std::lock_guard lock(mutex_);
+    return submit(cmd::AttackGroundVehicles{ids(indices), mapX, mapY});
+}
+cmd::AttackGroundVehicles::Result MissionRunner::applyLocked(const cmd::AttackGroundVehicles& c) {
     if (modal_) return {};
-    return units_.orderAttackGroundVehicles(indices, mapX, mapY);
+    return units_.orderAttackGroundVehicles(c.ids, c.x, c.y);
 }
 std::optional<size_t> MissionRunner::attackGroundSoldiers(std::span<const size_t> indices, int mapX, int mapY) {
-    std::lock_guard lock(mutex_);
+    return submit(cmd::AttackGroundSoldiers{ids(indices), mapX, mapY});
+}
+cmd::AttackGroundSoldiers::Result MissionRunner::applyLocked(const cmd::AttackGroundSoldiers& c) {
     if (modal_) return {};
-    return units_.orderAttackGroundSoldiers(indices, mapX, mapY);
+    return units_.orderAttackGroundSoldiers(c.ids, c.x, c.y);
 }
 size_t MissionRunner::layMine(std::span<const size_t> soldierIds) {
-    std::lock_guard lock(mutex_);
+    return submit(cmd::LayMine{ids(soldierIds)});
+}
+cmd::LayMine::Result MissionRunner::applyLocked(const cmd::LayMine& c) {
     if (modal_) return 0;
     std::vector<SoldierPose> changed;
-    const size_t n = units_.orderLayMine(soldierIds, &changed);
+    const size_t n = units_.orderLayMine(c.soldiers, &changed);
     mergeSoldierPoses(changed);
     auto evs = units_.takeMineEvents();
     if (!evs.empty()) mineEvents_.insert(mineEvents_.end(), evs.begin(), evs.end());
@@ -572,13 +660,17 @@ bool MissionRunner::canDisarmMineAt(std::span<const size_t> soldierIds, int mapX
     return !modal_ && units_.canDisarmMineAt(soldierIds, mapX, mapY);
 }
 std::optional<size_t> MissionRunner::orderDisarmMine(std::span<const size_t> soldierIds, int mapX, int mapY) {
-    std::lock_guard lock(mutex_);
+    return submit(cmd::DisarmMine{ids(soldierIds), mapX, mapY});
+}
+cmd::DisarmMine::Result MissionRunner::applyLocked(const cmd::DisarmMine& c) {
     if (modal_) return {};
-    return units_.orderDisarmMine(soldierIds, mapX, mapY);
+    return units_.orderDisarmMine(c.soldiers, c.x, c.y);
 }
 size_t MissionRunner::orderGroupMove(unsigned group, int mapX, int mapY, bool onlyNonPlayer) {
-    std::lock_guard lock(mutex_);
-    return units_.orderGroupMove(group, mapX, mapY, onlyNonPlayer);
+    return submit(cmd::GroupMove{group, mapX, mapY, onlyNonPlayer});
+}
+cmd::GroupMove::Result MissionRunner::applyLocked(const cmd::GroupMove& c) {
+    return units_.orderGroupMove(c.group, c.x, c.y, c.onlyNonPlayer);
 }
 std::vector<MineEvent> MissionRunner::pollMineEvents() {
     std::lock_guard lock(mutex_);
@@ -597,16 +689,20 @@ bool MissionRunner::canTowVehicle(size_t tractorIdx, size_t gunIdx) {
     return !modal_ && units_.canTowVehicle(tractorIdx, gunIdx, 0);
 }
 std::optional<size_t> MissionRunner::towVehicle(size_t tractorIdx, size_t gunIdx) {
-    std::lock_guard lock(mutex_);
+    return submit(cmd::TowVehicle{tractorIdx, gunIdx});
+}
+cmd::TowVehicle::Result MissionRunner::applyLocked(const cmd::TowVehicle& c) {
     if (modal_) return {};
-    const size_t res = units_.orderTowVehicle(tractorIdx, gunIdx);
+    const size_t res = units_.orderTowVehicle(c.tractor, c.gun);
     collectVehiclePoses();
     return res;
 }
 size_t MissionRunner::unhitchVehicles(std::span<const size_t> vehicleIndices) {
-    std::lock_guard lock(mutex_);
+    return submit(cmd::UnhitchVehicles{ids(vehicleIndices)});
+}
+cmd::UnhitchVehicles::Result MissionRunner::applyLocked(const cmd::UnhitchVehicles& c) {
     if (modal_) return 0;
-    const size_t n = units_.unhitchVehicles(vehicleIndices);
+    const size_t n = units_.unhitchVehicles(c.vehicles);
     collectVehiclePoses();
     return n;
 }
@@ -615,53 +711,69 @@ bool MissionRunner::canGarrisonBuilding(size_t buildingIdx) {
     return !modal_ && units_.canGarrisonBuilding(buildingIdx, 0);
 }
 std::optional<size_t> MissionRunner::garrisonBuilding(std::span<const size_t> soldierIds, size_t buildingIdx) {
-    std::lock_guard lock(mutex_);
+    return submit(cmd::GarrisonBuilding{ids(soldierIds), buildingIdx});
+}
+cmd::GarrisonBuilding::Result MissionRunner::applyLocked(const cmd::GarrisonBuilding& c) {
     if (modal_) return {};
-    return units_.orderGarrisonBuilding(soldierIds, buildingIdx);
+    return units_.orderGarrisonBuilding(c.soldiers, c.building);
 }
 size_t MissionRunner::evacuateBuilding(size_t buildingIdx) {
-    std::lock_guard lock(mutex_);
+    return submit(cmd::EvacuateBuilding{buildingIdx});
+}
+cmd::EvacuateBuilding::Result MissionRunner::applyLocked(const cmd::EvacuateBuilding& c) {
     if (modal_) return 0;
     std::vector<SoldierPose> outPoses;
-    const size_t count = units_.evacuateBuilding(buildingIdx, &outPoses);
+    const size_t count = units_.evacuateBuilding(c.building, &outPoses);
     mergeSoldierPoses(outPoses);
     collectBuildingUpdates();
     if (auto snap = units_.takeFogSnapshot()) fog_ = std::move(snap);
     return count;
 }
 std::optional<bool> MissionRunner::toggleBuildingHoldFire(size_t buildingIdx) {
-    std::lock_guard lock(mutex_);
+    return submit(cmd::ToggleBuildingHoldFire{buildingIdx});
+}
+cmd::ToggleBuildingHoldFire::Result MissionRunner::applyLocked(const cmd::ToggleBuildingHoldFire& c) {
     if (modal_) return {};
-    return units_.toggleBuildingHoldFire(buildingIdx);
+    return units_.toggleBuildingHoldFire(c.building);
 }
 std::optional<bool> MissionRunner::toggleBuildingBinoculars(size_t buildingIdx) {
-    std::lock_guard lock(mutex_);
+    return submit(cmd::ToggleBuildingBinoculars{buildingIdx});
+}
+cmd::ToggleBuildingBinoculars::Result MissionRunner::applyLocked(const cmd::ToggleBuildingBinoculars& c) {
     if (modal_) return {};
     std::vector<SoldierPose> outPoses;
-    const auto active = units_.toggleBuildingBinoculars(buildingIdx, &outPoses);
+    const auto active = units_.toggleBuildingBinoculars(c.building, &outPoses);
     mergeSoldierPoses(outPoses);
     if (auto snap = units_.takeFogSnapshot()) fog_ = std::move(snap);
     return active;
 }
 std::optional<size_t> MissionRunner::orderBuildingAttack(size_t buildingIdx, bool targetIsVehicle, size_t targetIdx) {
-    std::lock_guard lock(mutex_);
+    return submit(cmd::BuildingAttack{buildingIdx, targetIsVehicle, targetIdx});
+}
+cmd::BuildingAttack::Result MissionRunner::applyLocked(const cmd::BuildingAttack& c) {
     if (modal_) return {};
-    return units_.orderBuildingAttack(buildingIdx, targetIsVehicle, targetIdx);
+    return units_.orderBuildingAttack(c.building, c.targetIsVehicle, c.target);
 }
 std::optional<size_t> MissionRunner::orderBuildingAttackBuilding(size_t buildingIdx, size_t targetBuildingIdx) {
-    std::lock_guard lock(mutex_);
+    return submit(cmd::BuildingAttackBuilding{buildingIdx, targetBuildingIdx});
+}
+cmd::BuildingAttackBuilding::Result MissionRunner::applyLocked(const cmd::BuildingAttackBuilding& c) {
     if (modal_) return {};
-    return units_.orderBuildingAttackBuilding(buildingIdx, targetBuildingIdx);
+    return units_.orderBuildingAttackBuilding(c.building, c.targetBuilding);
 }
 std::optional<size_t> MissionRunner::attackBuilding(std::span<const size_t> soldierIds, size_t buildingIdx) {
-    std::lock_guard lock(mutex_);
+    return submit(cmd::AttackBuilding{ids(soldierIds), buildingIdx});
+}
+cmd::AttackBuilding::Result MissionRunner::applyLocked(const cmd::AttackBuilding& c) {
     if (modal_) return {};
-    return units_.orderAttackBuilding(soldierIds, buildingIdx);
+    return units_.orderAttackBuilding(c.soldiers, c.building);
 }
 std::optional<size_t> MissionRunner::attackBuildingWithVehicles(std::span<const size_t> vehicleIds, size_t buildingIdx) {
-    std::lock_guard lock(mutex_);
+    return submit(cmd::AttackBuildingWithVehicles{ids(vehicleIds), buildingIdx});
+}
+cmd::AttackBuildingWithVehicles::Result MissionRunner::applyLocked(const cmd::AttackBuildingWithVehicles& c) {
     if (modal_) return {};
-    return units_.attackBuildingWithVehicles(vehicleIds, buildingIdx);
+    return units_.attackBuildingWithVehicles(c.vehicles, c.building);
 }
 std::vector<BuildingSnapshot> MissionRunner::pollBuildingUpdates() {
     std::lock_guard lock(mutex_);
@@ -676,9 +788,11 @@ std::array<assets::AirSupportSlot, 5> MissionRunner::playerAirSupport() {
     return units_.playerAirSupport();
 }
 bool MissionRunner::callAirSupport(assets::AirMissionKind kind, int targetX, int targetY) {
-    std::lock_guard lock(mutex_);
+    return submit(cmd::CallAirSupport{kind, targetX, targetY});
+}
+cmd::CallAirSupport::Result MissionRunner::applyLocked(const cmd::CallAirSupport& c) {
     if (modal_) return false;
-    const bool ok = units_.callAirSupport(kind, targetX, targetY, 0);
+    const bool ok = units_.callAirSupport(c.kind, c.x, c.y, 0);
     if (ok) collectAirSorties();
     return ok;
 }
@@ -695,9 +809,11 @@ TutorialUnits::Snapshot MissionRunner::takeSnapshot() {
     return units_.takeSnapshot();
 }
 bool MissionRunner::loadSnapshot(const TutorialUnits::Snapshot& snap) {
-    std::lock_guard lock(mutex_);
+    return submit(cmd::LoadSnapshot{snap});
+}
+cmd::LoadSnapshot::Result MissionRunner::applyLocked(const cmd::LoadSnapshot& c) {
     std::vector<SoldierPose> restoredPoses;
-    if (!units_.loadSnapshot(snap, &restoredPoses)) return false;
+    if (!units_.loadSnapshot(c.snapshot, &restoredPoses)) return false;
     poses_ = std::move(restoredPoses);
     vehiclePoses_.clear();
     mineEvents_.clear();
@@ -718,15 +834,19 @@ void MissionRunner::setSpeedPercent(int percent) {
     changed_.notify_all();
 }
 size_t MissionRunner::spawnVehicle(const assets::VehicleUnit& unit) {
-    std::lock_guard lock(mutex_);
-    const size_t index = units_.spawnVehicle(unit);
+    return submit(cmd::SpawnVehicle{unit});
+}
+cmd::SpawnVehicle::Result MissionRunner::applyLocked(const cmd::SpawnVehicle& c) {
+    const size_t index = units_.spawnVehicle(c.unit);
     collectVehiclePoses();
     if (auto snap = units_.takeFogSnapshot()) fog_ = std::move(snap);
     return index;
 }
 bool MissionRunner::embarkImmediate(size_t soldierIdx, size_t vehicleIdx) {
-    std::lock_guard lock(mutex_);
-    const bool ok = units_.embarkImmediate(soldierIdx, vehicleIdx);
+    return submit(cmd::EmbarkImmediate{soldierIdx, vehicleIdx});
+}
+cmd::EmbarkImmediate::Result MissionRunner::applyLocked(const cmd::EmbarkImmediate& c) {
+    const bool ok = units_.embarkImmediate(c.soldier, c.vehicle);
     if (ok) {
         collectVehiclePoses();
         if (auto snap = units_.takeFogSnapshot()) fog_ = std::move(snap);
@@ -744,33 +864,43 @@ std::vector<VehicleRangePreview> MissionRunner::selectionRangePreviews(std::span
     return units_.selectionRangePreviews(vehicleIds, soldierIds);
 }
 std::vector<assets::Placement> MissionRunner::abandonVehicles(std::span<const size_t> vehicleIds) {
-    std::lock_guard lock(mutex_);
-    if (modal_ || vehicleIds.empty()) return {};
+    return submit(cmd::AbandonVehicles{ids(vehicleIds)});
+}
+cmd::AbandonVehicles::Result MissionRunner::applyLocked(const cmd::AbandonVehicles& c) {
+    if (modal_ || c.vehicles.empty()) return {};
     std::vector<SoldierPose> changed;
-    auto spawns = units_.abandonVehicles(vehicleIds, &changed);
+    auto spawns = units_.abandonVehicles(c.vehicles, &changed);
     mergeSoldierPoses(changed);
     collectVehiclePoses();
     if (auto snap = units_.takeFogSnapshot()) fog_ = std::move(snap);
     return spawns;
 }
 void MissionRunner::addReserveUnit(const TutorialUnits::ReserveUnit& entry) {
-    std::lock_guard lock(mutex_);
-    units_.addReserveUnit(entry);
+    submit(cmd::AddReserveUnit{entry});
+}
+cmd::AddReserveUnit::Result MissionRunner::applyLocked(const cmd::AddReserveUnit& c) {
+    units_.addReserveUnit(c.entry);
 }
 std::vector<TutorialUnits::ReserveUnit> MissionRunner::takeReserveUnits(unsigned group, int pool, std::size_t maxCount) {
-    std::lock_guard lock(mutex_);
-    return units_.takeReserveUnits(group, pool, maxCount);
+    return submit(cmd::TakeReserveUnits{group, pool, maxCount});
+}
+cmd::TakeReserveUnits::Result MissionRunner::applyLocked(const cmd::TakeReserveUnits& c) {
+    return units_.takeReserveUnits(c.group, c.pool, c.maxCount);
 }
 bool MissionRunner::isElevatedMapPoint(int mapX, int mapY) const {
     std::lock_guard lock(mutex_);
     return units_.isElevatedMapPoint(mapX, mapY);
 }
 void MissionRunner::acknowledge() {
-    std::lock_guard lock(mutex_);
+    submit(cmd::Acknowledge{});
+}
+cmd::Acknowledge::Result MissionRunner::applyLocked(const cmd::Acknowledge&) {
     modal_ = false;
 }
 bool MissionRunner::togglePause() {
-    std::lock_guard lock(mutex_);
+    return submit(cmd::TogglePause{});
+}
+cmd::TogglePause::Result MissionRunner::applyLocked(const cmd::TogglePause&) {
     paused_ = !paused_;
     return paused_;
 }
