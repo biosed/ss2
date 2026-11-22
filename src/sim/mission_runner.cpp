@@ -92,15 +92,18 @@ std::vector<cmd::RecordedCommand> MissionRunner::takeRecording() {
     return log;
 }
 
-MissionRunner::MissionRunner(assets::TutorialData data, unsigned delayMs, TutorialUnits units, bool startRecordingNow)
-    : MissionRunner(ManualClock{}, std::move(data), std::move(units)) {
+MissionRunner::MissionRunner(assets::TutorialData data, unsigned delayMs, TutorialUnits units, bool startRecordingNow,
+                             std::map<unsigned, std::vector<assets::ReinforcementUnit>> initialSavedPools)
+    : MissionRunner(ManualClock{}, std::move(data), std::move(units), std::move(initialSavedPools)) {
     if (startRecordingNow) recording_.emplace();
     worker_ = std::jthread([this, delayMs](std::stop_token stop) { run(stop, delayMs); });
 }
-MissionRunner::MissionRunner(ManualClock, assets::TutorialData data, TutorialUnits units)
+MissionRunner::MissionRunner(ManualClock, assets::TutorialData data, TutorialUnits units,
+                             std::map<unsigned, std::vector<assets::ReinforcementUnit>> initialSavedPools)
     : units_(std::move(units)),
       spawnedReinforcementWaves_{},
       reinforcementWaveOwner_(extractReinforcementWaveOwners(data.scripts)),
+      savedUnitPools_(std::move(initialSavedPools)),
       tutorial_(data, makeQueriesLocked(data.zones, data.reinforcements, data.markers)) {
     units_.setWeather(data.weather);
     fog_ = units_.takeFogSnapshot();
@@ -120,6 +123,8 @@ void MissionRunner::collect() {
     for (const auto e : tutorial_.takeEvents()) {
         if (e.kind == MissionEvent::Dialog) modal_ = true;
         if (e.kind == MissionEvent::Reinforcement) {
+            const auto* wave = reinforcementWaveLocked(e.index);
+            if (!wave || wave->empty()) continue;
             if (e.index < 64u && e.owner < 4u) {
                 reinforcementWaveOwner_[e.index] = static_cast<int>(e.owner);
             }
@@ -174,6 +179,143 @@ void MissionRunner::collect() {
                 }
                 if (anyLaunched) collectAirSorties();
             }
+            continue;
+        }
+        if (e.kind == MissionEvent::AirStrikeZone) {
+            const auto& locs = tutorial_.data().locations;
+            if (e.index < locs.size()) {
+                int gx = locs[e.index].first;
+                int gy = locs[e.index].second;
+                if (gx == 0 && gy == 0) {
+                    gx = units_.mapPixelW_ / 2;
+                    gy = units_.mapPixelH_ / 2;
+                }
+                const unsigned cnt = std::min<unsigned>(e.destZone, 16u);
+                bool anyLaunched = false;
+                for (unsigned k = 0; k < cnt; ++k) {
+                    const int offset = (static_cast<int>(k) - static_cast<int>(cnt / 2u)) * 32;
+                    if (units_.callAirSupport(static_cast<assets::AirMissionKind>(e.gate), gx + offset, gy, int(e.owner))) {
+                        anyLaunched = true;
+                    }
+                }
+                if (anyLaunched) collectAirSorties();
+            }
+            continue;
+        }
+        if (e.kind == MissionEvent::DeployReserve) {
+            const unsigned hpPct = std::max(1u, e.owner & 0xffu);
+            const unsigned ammoPct = (e.owner >> 8) & 0xffu;
+            const unsigned expaPct = (e.owner >> 16) & 0xffu;
+            auto taken = units_.takeReserveUnits(e.index);
+            if (!taken.empty()) {
+                std::array<std::vector<assets::ReinforcementUnit>, 4> byOwner;
+                for (const auto& r : taken) {
+                    const unsigned o = (r.owner >= 0 && r.owner < 4) ? static_cast<unsigned>(r.owner) : 0u;
+                    assets::ReinforcementUnit ru;
+                    ru.id = r.id;
+                    ru.group = r.group;
+                    ru.hp = std::clamp((r.hp * static_cast<int>(hpPct)) / 100, 1, 100);
+                    ru.ammo = std::clamp((r.ammo * static_cast<int>(ammoPct)) / 100, 0, 100);
+                    ru.expa = expaPct > 0u ? std::clamp(static_cast<int>(expaPct), 0, 100) : std::clamp(r.expa, 0, 100);
+                    byOwner[o].push_back(std::move(ru));
+                }
+                for (unsigned o = 0; o < 4u; ++o) {
+                    if (byOwner[o].empty()) continue;
+                    const unsigned dynIdx = nextDynamicWaveId_++;
+                    dynamicWaves_[dynIdx] = std::move(byOwner[o]);
+                    MissionEvent spawnEv{MissionEvent::Reinforcement, dynIdx, o, e.gate, e.destZone, e.delaySec};
+                    if (e.delaySec > 0u) {
+                        scheduledReinforcements_.push_back({spawnEv, tutorial_.tick() + e.delaySec * 25u});
+                    } else {
+                        pending_.push_back(spawnEv);
+                    }
+                }
+            }
+            continue;
+        }
+        if (e.kind == MissionEvent::UnitPoolClear) {
+            savedUnitPools_.erase(e.index);
+            continue;
+        }
+        if (e.kind == MissionEvent::UnitPoolSaveGroup || e.kind == MissionEvent::UnitPoolSavePlayer) {
+            auto live = units_.collectLiveUnitsForPool(e.kind == MissionEvent::UnitPoolSaveGroup, e.owner);
+            if (!live.empty()) {
+                auto& pool = savedUnitPools_[e.index];
+                pool.insert(pool.end(), std::make_move_iterator(live.begin()), std::make_move_iterator(live.end()));
+            }
+            continue;
+        }
+        if (e.kind == MissionEvent::UnitPoolToWave) {
+            const auto it = savedUnitPools_.find(e.owner);
+            if (it == savedUnitPools_.end() || it->second.empty()) {
+                dynamicWaves_.erase(e.index);
+            } else {
+                auto built = it->second;
+                if (e.gate != 0xffffffffu) {
+                    const int newGroup = static_cast<int>(e.gate);
+                    for (auto& u : built) {
+                        u.group = newGroup;
+                        for (auto& p : u.passengers) p.group = newGroup;
+                    }
+                }
+                dynamicWaves_[e.index] = std::move(built);
+                if (e.index < 64u) spawnedReinforcementWaves_[e.index] = false;
+            }
+            continue;
+        }
+        if (e.kind == MissionEvent::GroupSetStat) {
+            std::vector<SoldierPose> changed;
+            if (units_.setGroupStat(e.index, e.owner, e.gate, e.destZone, &changed) > 0u) {
+                mergeSoldierPoses(changed);
+                collectVehiclePoses();
+            }
+            continue;
+        }
+        if (e.kind == MissionEvent::GroupEvacuate || e.kind == MissionEvent::ZoneEvacuate) {
+            const auto& data = tutorial_.data();
+            int gx = 0, gy = 0;
+            bool foundGate = false;
+            if (e.gate < data.gates.size() && (data.gates[e.gate].first != 0 || data.gates[e.gate].second != 0)) {
+                gx = data.gates[e.gate].first;
+                gy = data.gates[e.gate].second;
+                foundGate = true;
+            } else if (e.gate < data.gateTargets.size() &&
+                       (data.gateTargets[e.gate].first != 0 || data.gateTargets[e.gate].second != 0)) {
+                gx = data.gateTargets[e.gate].first;
+                gy = data.gateTargets[e.gate].second;
+                foundGate = true;
+            } else if (e.gate < data.markers.size() &&
+                       (data.markers[e.gate].first != 0 || data.markers[e.gate].second != 0)) {
+                gx = data.markers[e.gate].first;
+                gy = data.markers[e.gate].second;
+                foundGate = true;
+            }
+            if (foundGate) {
+                if (e.kind == MissionEvent::GroupEvacuate) {
+                    (void)units_.orderGroupEvacuate(e.index, gx, gy);
+                } else {
+                    (void)units_.orderZoneEvacuate(data.zones, e.index, gx, gy);
+                }
+            }
+            continue;
+        }
+        if (e.kind == MissionEvent::GroupAirfieldOrder) {
+            const auto& data = tutorial_.data();
+            int tx = units_.mapPixelW_ / 2;
+            int ty = units_.mapPixelH_ / 2;
+            const std::size_t locIdx = static_cast<std::size_t>(e.gate) + 1u;
+            if (locIdx < data.locations.size() && (data.locations[locIdx].first != 0 || data.locations[locIdx].second != 0)) {
+                tx = data.locations[locIdx].first;
+                ty = data.locations[locIdx].second;
+            } else if (e.gate < data.markers.size() &&
+                       (data.markers[e.gate].first != 0 || data.markers[e.gate].second != 0)) {
+                tx = data.markers[e.gate].first;
+                ty = data.markers[e.gate].second;
+            } else if (e.gate < data.gates.size() && (data.gates[e.gate].first != 0 || data.gates[e.gate].second != 0)) {
+                tx = data.gates[e.gate].first;
+                ty = data.gates[e.gate].second;
+            }
+            (void)units_.orderGroupMoveLimited(e.index, e.destZone, tx, ty);
             continue;
         }
         if (e.kind == MissionEvent::GroupTransferOwner) {
@@ -1324,12 +1466,31 @@ std::optional<std::pair<std::uint32_t, std::uint32_t>> MissionRunner::nextMissio
     std::lock_guard lock(mutex_);
     return nextMissionSignal_;
 }
+const std::vector<assets::ReinforcementUnit>* MissionRunner::reinforcementWaveLocked(unsigned waveIdx) const {
+    if (const auto it = dynamicWaves_.find(waveIdx); it != dynamicWaves_.end()) {
+        return &it->second;
+    }
+    const auto& staticWaves = tutorial_.data().reinforcements;
+    if (waveIdx < staticWaves.size()) return &staticWaves[waveIdx];
+    return nullptr;
+}
+std::vector<assets::ReinforcementUnit> MissionRunner::reinforcementWave(unsigned waveIdx) const {
+    std::lock_guard lock(mutex_);
+    const auto* w = reinforcementWaveLocked(waveIdx);
+    return w ? *w : std::vector<assets::ReinforcementUnit>{};
+}
+std::map<unsigned, std::vector<assets::ReinforcementUnit>> MissionRunner::savedUnitPools() const {
+    std::lock_guard lock(mutex_);
+    return savedUnitPools_;
+}
 unsigned MissionRunner::countPendingReinforcementsByGroup(
     const std::array<std::vector<assets::ReinforcementUnit>, 64>& waves, unsigned group) const {
     unsigned total = 0;
     for (std::size_t wi = 0; wi < waves.size(); ++wi) {
         if (spawnedReinforcementWaves_[wi]) continue;
-        for (const auto& u : waves[wi]) {
+        const auto dynIt = dynamicWaves_.find(static_cast<unsigned>(wi));
+        const auto& waveVec = (dynIt != dynamicWaves_.end()) ? dynIt->second : waves[wi];
+        for (const auto& u : waveVec) {
             if (u.group >= 0 && static_cast<unsigned>(u.group) == group) {
                 ++total;
             }
@@ -1349,7 +1510,9 @@ unsigned MissionRunner::countPendingReinforcementsByGroupTeam(
         if (spawnedReinforcementWaves_[wi]) continue;
         const int owner = reinforcementWaveOwner_[wi];
         if (owner < 0 || units_.playerTeam(owner) != team) continue;
-        for (const auto& u : waves[wi]) {
+        const auto dynIt = dynamicWaves_.find(static_cast<unsigned>(wi));
+        const auto& waveVec = (dynIt != dynamicWaves_.end()) ? dynIt->second : waves[wi];
+        for (const auto& u : waveVec) {
             if (u.group >= 0 && static_cast<unsigned>(u.group) == group) {
                 ++total;
             }
@@ -1369,7 +1532,9 @@ unsigned MissionRunner::countPendingReinforcementsByPlayer(
     for (std::size_t wi = 0; wi < waves.size(); ++wi) {
         if (spawnedReinforcementWaves_[wi]) continue;
         if (reinforcementWaveOwner_[wi] == owner) {
-            for (const auto& u : waves[wi]) {
+            const auto dynIt = dynamicWaves_.find(static_cast<unsigned>(wi));
+            const auto& waveVec = (dynIt != dynamicWaves_.end()) ? dynIt->second : waves[wi];
+            for (const auto& u : waveVec) {
                 total += 1u + static_cast<unsigned>(u.passengers.size());
             }
         }
@@ -1416,6 +1581,25 @@ MissionQueries MissionRunner::makeQueriesLocked(
             unsigned total = units_.countByGroupTeamMask(group, team, mask);
             if ((mask & 8u) != 0u) total += countPendingReinforcementsByGroupTeam(waves, group, team);
             return total;
+        },
+        [this](unsigned owner, unsigned slot) {
+            return units_.countAirPlanes(int(owner), slot);
+        },
+        [this](unsigned poolIdx) -> unsigned {
+            const auto it = savedUnitPools_.find(poolIdx);
+            if (it == savedUnitPools_.end()) return 0u;
+            unsigned total = 0u;
+            for (const auto& u : it->second) {
+                total += 1u + static_cast<unsigned>(u.passengers.size());
+            }
+            return total;
+        },
+        [this](unsigned group, unsigned slot) {
+            return units_.groupAmmoPercent(group, slot);
+        },
+        [this](unsigned waveIdx) -> bool {
+            const auto it = dynamicWaves_.find(waveIdx);
+            return it != dynamicWaves_.end() && !it->second.empty();
         }
     };
 }

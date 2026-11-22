@@ -990,11 +990,13 @@ int main(int argc, char** argv) try {
             autoEngage = true;
         }
     }
+    std::map<unsigned, std::vector<ss2::assets::ReinforcementUnit>> campaignUnitPools;
     for (;;) {
         std::optional<std::filesystem::path> nextMission;
         result = ss2::runGameSession(window.get(), validate ? &report : nullptr, limit, timing, gameDir, mission, hdPack,
                            originalInfantry, autoEngage, settings, persistSettings, overviewOnly, &nextMission,
-                           recordPath, parsedReplay ? &*parsedReplay : nullptr, false, loadSavePath, mpConfig);
+                           recordPath, parsedReplay ? &*parsedReplay : nullptr, false, loadSavePath, mpConfig,
+                           mpConfig.enabled ? nullptr : &campaignUnitPools);
         loadSavePath.clear();
         if (!nextMission || result != 0 || !recordPath.empty() || parsedReplay || mpConfig.enabled) break;
         mission = std::move(*nextMission);

@@ -252,7 +252,7 @@ int runCoreAnd4Ato4E() {
             caof.markers[4] = {2048, 1024};
             caof.locations[7] = {2240, 1120};
             caof.scripts.resize(2);
-            // Script 0: condition ops (41, 90, 91, 9, 31, 33, 93 all return 0), negated/ORed with op 51 (=1)
+            // Script 0: condition ops (41, 90, 91, 9, 31, 33, 93 all return 0 with valid comparison modes 0..2), negated/ORed with op 51 (=1)
             // -> executes 89 (FogReveal), 19/20 (GroupOrder), 8, 22, 23, 24, 25, 39, 42, 46, 58, 59, 62, 63, 71, 72, 75, 77, 79, 80, 82, 83, 84, 85, 86, 92, and ends with 15 (Message 0)!
             caof.scripts[0] = {
                 0x80000000u, 26u,
@@ -261,9 +261,9 @@ int runCoreAnd4Ato4E() {
                 0x80000001u, 0x80000002u, 0x80000003u, 90u, 2u,
                 0x80000001u, 0x80000002u, 0x80000003u, 0x80000004u, 9u, 2u,
                 0x80000001u, 0x80000002u, 0x80000003u, 0x80000004u, 31u, 2u,
-                0x80000001u, 0x80000002u, 0x80000003u, 0x80000004u, 91u, 2u,
+                0x80000001u, 0x80000002u, 0x80000001u, 0x80000004u, 91u, 2u,
                 0x80000001u, 0x80000002u, 0x80000003u, 0x80000001u, 0x80000005u, 93u, 2u,
-                0x80000001u, 0x80000002u, 0x80000003u, 0x80000004u, 0x80000005u, 0x80000006u, 33u, 2u,
+                0x80000001u, 0x80000002u, 0x80000001u, 0x80000004u, 0x80000005u, 0x80000006u, 33u, 2u,
                 51u, 2u, 7u, 11u,
                 // FogReveal(marker=4, radius=8, player=0)
                 0x80000004u, 0x80000008u, 0x80000000u, 89u,

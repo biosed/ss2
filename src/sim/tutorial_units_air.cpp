@@ -491,4 +491,15 @@ void TutorialUnits::stepAirSupport(std::vector<SoldierPose>& changed) {
     }
     sorties_ = std::move(aliveSorties);
 }
+
+unsigned TutorialUnits::countAirPlanes(int owner, unsigned slot) const {
+    if (owner < 0 || owner >= 4 || slot >= 5u) return 0u;
+    unsigned total = static_cast<unsigned>(std::max(0, airSupport_[static_cast<std::size_t>(owner)][slot].ready));
+    for (const auto& st : sorties_) {
+        if (st.hp > 0 && st.owner == owner && static_cast<unsigned>(st.kind) == slot) {
+            ++total;
+        }
+    }
+    return total;
+}
 }

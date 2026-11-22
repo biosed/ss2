@@ -572,6 +572,7 @@ size_t TutorialUnits::appendSoldier(const assets::Infantry& unit, SubCell cell, 
         : s.getMineTime;
     if (!s.isAntiVehicle && !s.isMedic && !s.isOfficer && !s.isMortar && !s.isKamikaze) s.atGrenades = 2;
     soldiers_.push_back(std::move(s));
+    soldierIds_.push_back(unit.id);
     grid_.setOccupied(cell, true);
     return soldiers_.size() - 1;
 }
@@ -1383,6 +1384,289 @@ unsigned TutorialUnits::countReserveByPlayer(int owner) const {
     return unsigned(std::ranges::count_if(reserveUnits_, [&](const ReserveUnit& r) { return r.owner == owner; }));
 }
 
+unsigned TutorialUnits::groupAmmoPercent(unsigned group, unsigned slot) const {
+    const int g = int(group);
+    unsigned sum = 0;
+    unsigned count = 0;
+    if (slot == 0u) {
+        for (const auto& s : soldiers_) {
+            if (s.hp <= 0 || s.group != g || s.desc.maxAmmo <= 0) continue;
+            sum += static_cast<unsigned>(std::clamp((s.ammo * 100) / s.desc.maxAmmo, 0, 100));
+            ++count;
+        }
+    }
+    for (const auto& v : vehicles_) {
+        if (!v.alive || v.hp <= 0 || v.group != g) continue;
+        if (slot == 0u && v.maxAmmo > 0) {
+            sum += static_cast<unsigned>(std::clamp((v.ammo * 100) / v.maxAmmo, 0, 100));
+            ++count;
+        } else if (slot == 1u && v.maxAmmo2 > 0) {
+            sum += static_cast<unsigned>(std::clamp((v.ammo2 * 100) / v.maxAmmo2, 0, 100));
+            ++count;
+        }
+    }
+    return count > 0u ? (sum / count) : 0u;
+}
+
+std::size_t TutorialUnits::setGroupStat(unsigned group, unsigned statKind, unsigned mode, unsigned pct,
+                                        std::vector<SoldierPose>* outSoldiers) {
+    const int g = int(group);
+    const int clampedPct = static_cast<int>(std::min(pct, 100u));
+    std::size_t modified = 0;
+    const auto shouldSet = [&](int current, int target) {
+        return mode == 0u ? (current > target) : (current < target);
+    };
+
+    for (std::size_t i = 0; i < soldiers_.size(); ++i) {
+        auto& s = soldiers_[i];
+        if (s.hp <= 0 || s.group != g) continue;
+        bool changedAny = false;
+        if (statKind == 0u) {
+            const int target = std::clamp((s.desc.maxHp * clampedPct) / 100, 1, std::max(1, s.desc.maxHp));
+            if (shouldSet(s.hp, target)) { s.hp = target; changedAny = true; }
+        } else if (statKind == 1u) {
+            const int maxA = std::max(0, s.desc.maxAmmo);
+            const int target = std::clamp((maxA * clampedPct) / 100, 0, maxA);
+            if (shouldSet(s.ammo, target)) { s.ammo = target; changedAny = true; }
+        } else if (statKind == 2u) {
+            const int target = missionExpaToSim(clampedPct);
+            if (shouldSet(s.expa, target)) { s.expa = target; changedAny = true; }
+        } else if (statKind == 3u) {
+            if (mode == 0u && clampedPct < 50) {
+                const int targetSup = (50 - clampedPct) * 4;
+                if (s.suppressionTicks < targetSup) { s.suppressionTicks = targetSup; changedAny = true; }
+            } else if (mode != 0u && clampedPct >= 50 && s.suppressionTicks > 0) {
+                s.suppressionTicks = 0;
+                changedAny = true;
+            }
+        }
+        if (changedAny) {
+            ++modified;
+            if (outSoldiers) {
+                const auto [su, sv] = s.garrisonBuilding
+                    ? tutorialFootWorld(buildings_[*s.garrisonBuilding].x, buildings_[*s.garrisonBuilding].y, originX_)
+                    : soldierWorld(s);
+                const bool vis = !s.embarked && isVisibleToViewer(s.owner, s.spottedMask);
+                pushOrUpdateSoldierPose(*outSoldiers, {
+                    i, originX_ + su - sv, (su + sv) / 2, s.direction, 0, false,
+                    s.hp, true, s.owner, s.group, false, vis, 0, 0, s.garrisonBuilding.has_value(),
+                    s.expa, s.kills, false, s.atGrenades, false, isSoldierCamouflaged(s), s.mineAmmo, s.ammo,
+                    false, s.isSuppressed()
+                });
+            }
+        }
+    }
+
+    for (std::size_t i = 0; i < vehicles_.size(); ++i) {
+        auto& v = vehicles_[i];
+        if (!v.alive || v.hp <= 0 || v.group != g) continue;
+        bool changedAny = false;
+        if (statKind == 0u) {
+            const int target = std::clamp((v.maxHp * clampedPct) / 100, 1, std::max(1, v.maxHp));
+            if (shouldSet(v.hp, target)) { v.hp = target; changedAny = true; }
+        } else if (statKind == 1u) {
+            const int target1 = std::clamp((v.maxAmmo * clampedPct) / 100, 0, std::max(0, v.maxAmmo));
+            if (v.maxAmmo > 0 && shouldSet(v.ammo, target1)) { v.ammo = target1; changedAny = true; }
+            const int target2 = std::clamp((v.maxAmmo2 * clampedPct) / 100, 0, std::max(0, v.maxAmmo2));
+            if (v.maxAmmo2 > 0 && shouldSet(v.ammo2, target2)) { v.ammo2 = target2; changedAny = true; }
+        } else if (statKind == 2u) {
+            const int target = missionExpaToSim(clampedPct);
+            if (shouldSet(v.expa, target)) { v.expa = target; changedAny = true; }
+        } else if (statKind == 3u) {
+            if (mode == 0u && clampedPct < 50) {
+                const int targetSup = (50 - clampedPct) * 4;
+                if (v.suppressionTicks < targetSup) { v.suppressionTicks = targetSup; changedAny = true; }
+            } else if (mode != 0u && clampedPct >= 50 && v.suppressionTicks > 0) {
+                v.suppressionTicks = 0;
+                changedAny = true;
+            }
+        }
+        if (changedAny) {
+            emitVehiclePose(i);
+            ++modified;
+        }
+    }
+    return modified;
+}
+
+std::vector<assets::ReinforcementUnit> TutorialUnits::collectLiveUnitsForPool(bool byGroup,
+                                                                               unsigned selector) const {
+    std::vector<assets::ReinforcementUnit> out;
+    const int sel = int(selector);
+    const auto soldierToPctAmmo = [](const Soldier& s) {
+        return s.desc.maxAmmo > 0 ? std::clamp((s.ammo * 100) / s.desc.maxAmmo, 0, 100) : 100;
+    };
+    for (const auto& v : vehicles_) {
+        if (!v.alive || v.hp <= 0) continue;
+        if ((byGroup ? v.group : v.owner) != sel) continue;
+        assets::ReinforcementUnit ru;
+        ru.id = v.id;
+        ru.group = v.group;
+        ru.hp = std::clamp((v.hp * 100) / std::max(1, v.maxHp), 1, 100);
+        ru.ammo = v.maxAmmo > 0 ? std::clamp((v.ammo * 100) / v.maxAmmo, 0, 100) : 100;
+        ru.expa = std::clamp((v.expa * 100) / 0x8000, 0, 100);
+        for (std::uint32_t pi : v.passengers) {
+            if (pi >= soldiers_.size()) continue;
+            const auto& p = soldiers_[pi];
+            if (p.hp <= 0) continue;
+            const std::string pid = (pi < soldierIds_.size() && !soldierIds_[pi].empty())
+                ? soldierIds_[pi] : std::string("dguner");
+            ru.passengers.push_back({
+                pid, p.group,
+                std::clamp((p.hp * 100) / std::max(1, p.desc.maxHp), 1, 100),
+                soldierToPctAmmo(p),
+                std::clamp((p.expa * 100) / 0x8000, 0, 100),
+                false
+            });
+        }
+        out.push_back(std::move(ru));
+    }
+    for (std::size_t i = 0; i < soldiers_.size(); ++i) {
+        const auto& s = soldiers_[i];
+        if (s.hp <= 0 || s.embarked) continue;
+        if ((byGroup ? s.group : s.owner) != sel) continue;
+        const std::string sid = (i < soldierIds_.size() && !soldierIds_[i].empty())
+            ? soldierIds_[i] : std::string("dguner");
+        out.push_back({
+            sid, s.group,
+            std::clamp((s.hp * 100) / std::max(1, s.desc.maxHp), 1, 100),
+            soldierToPctAmmo(s),
+            std::clamp((s.expa * 100) / 0x8000, 0, 100),
+            {}
+        });
+    }
+    return out;
+}
+
+std::size_t TutorialUnits::dispatchEvacuationOrders(std::vector<size_t> soldierIds,
+                                                    std::vector<SubCell> soldierSources,
+                                                    std::vector<size_t> vehIds,
+                                                    int clampedX, int clampedY) {
+    std::size_t ordered = 0;
+    const auto upsertOrder = [](std::vector<EvacuationOrder>& vec, std::size_t idx, int tx, int ty) {
+        for (auto& o : vec) {
+            if (o.index == idx) { o.targetX = tx; o.targetY = ty; return; }
+        }
+        vec.push_back({idx, tx, ty});
+    };
+    if (!soldierIds.empty()) {
+        const auto destCell = findSpawnCell(grid_, pointerCell(clampedX, clampedY, originX_));
+        const auto tiles = grid_.formationDestinations(soldierSources, destCell);
+        for (std::size_t k = 0; k < soldierIds.size(); ++k) {
+            const int tx = tiles[k].x / 2, ty = tiles[k].y / 2;
+            const int px = originX_ + (tx - ty) * 32;
+            const int py = (tx + ty) * 16 + 16;
+            if (orderSoldierInternal(soldierIds[k], px, py)) {
+                soldiers_[soldierIds[k]].attackMove = false;
+                upsertOrder(evacuatingSoldiers_, soldierIds[k], clampedX, clampedY);
+                ++ordered;
+            }
+        }
+    }
+    for (const auto& [vid, pt] : vehicleFormationTargets(vehIds, clampedX, clampedY)) {
+        moveVehicleInternal(vehicles_[vid], pt.first, pt.second);
+        vehicles_[vid].attackMove = false;
+        upsertOrder(evacuatingVehicles_, vid, clampedX, clampedY);
+        ++ordered;
+    }
+    return ordered;
+}
+
+std::size_t TutorialUnits::orderGroupEvacuate(unsigned group, int mapX, int mapY) {
+    const int g = int(group);
+    const int clampedX = std::clamp(mapX, 0, std::max(0, mapPixelW_ - 1));
+    const int clampedY = std::clamp(mapY, 0, std::max(0, mapPixelH_ - 1));
+    std::vector<size_t> soldierIds;
+    std::vector<SubCell> soldierSources;
+    for (std::size_t i = 0; i < soldiers_.size(); ++i) {
+        const auto& s = soldiers_[i];
+        if (s.hp <= 0 || s.embarked || s.garrisonBuilding || s.group != g) continue;
+        soldierIds.push_back(i);
+        soldierSources.push_back(s.cell);
+    }
+    std::vector<size_t> vehIds;
+    for (std::size_t i = 0; i < vehicles_.size(); ++i) {
+        const auto& v = vehicles_[i];
+        if (!v.alive || v.hp <= 0 || v.speedPx <= 0.0 || v.towedBy || v.group != g) continue;
+        vehIds.push_back(i);
+    }
+    return dispatchEvacuationOrders(std::move(soldierIds), std::move(soldierSources),
+                                    std::move(vehIds), clampedX, clampedY);
+}
+
+std::size_t TutorialUnits::orderZoneEvacuate(std::span<const std::uint8_t> zones, unsigned zone, int mapX, int mapY) {
+    const std::size_t tileW = std::size_t(grid_.width() / 2), tileH = std::size_t(grid_.height() / 2);
+    if (zones.size() != tileW * tileH) return 0u;
+    const auto inside = [&](SubCell cell) {
+        if (cell.x < 0 || cell.y < 0) return false;
+        const std::size_t tx = std::size_t(cell.x / 2), ty = std::size_t(cell.y / 2);
+        return tx < tileW && ty < tileH && (zones[ty * tileW + tx] & 63u) == zone;
+    };
+    const int clampedX = std::clamp(mapX, 0, std::max(0, mapPixelW_ - 1));
+    const int clampedY = std::clamp(mapY, 0, std::max(0, mapPixelH_ - 1));
+    std::vector<size_t> soldierIds;
+    std::vector<SubCell> soldierSources;
+    for (std::size_t i = 0; i < soldiers_.size(); ++i) {
+        const auto& s = soldiers_[i];
+        if (s.hp <= 0 || s.embarked || s.garrisonBuilding || !inside(s.cell)) continue;
+        soldierIds.push_back(i);
+        soldierSources.push_back(s.cell);
+    }
+    std::vector<size_t> vehIds;
+    for (std::size_t i = 0; i < vehicles_.size(); ++i) {
+        const auto& v = vehicles_[i];
+        if (!v.alive || v.hp <= 0 || v.speedPx <= 0.0 || v.towedBy || !inside(v.cell)) continue;
+        vehIds.push_back(i);
+    }
+    return dispatchEvacuationOrders(std::move(soldierIds), std::move(soldierSources),
+                                    std::move(vehIds), clampedX, clampedY);
+}
+
+std::size_t TutorialUnits::orderGroupMoveLimited(unsigned group, unsigned maxCount, int mapX, int mapY) {
+    if (maxCount == 0u) return 0u;
+    const int g = int(group);
+    const int clampedX = std::clamp(mapX, 0, std::max(0, mapPixelW_ - 1));
+    const int clampedY = std::clamp(mapY, 0, std::max(0, mapPixelH_ - 1));
+    std::size_t remaining = maxCount;
+    std::size_t accepted = 0;
+
+    std::vector<size_t> soldierIds;
+    std::vector<SubCell> soldierSources;
+    for (std::size_t i = 0; i < soldiers_.size() && remaining > 0u; ++i) {
+        const auto& s = soldiers_[i];
+        if (s.hp <= 0 || s.embarked || s.garrisonBuilding || s.group != g) continue;
+        soldierIds.push_back(i);
+        soldierSources.push_back(s.cell);
+        --remaining;
+    }
+    if (!soldierIds.empty()) {
+        const auto destCell = findSpawnCell(grid_, pointerCell(clampedX, clampedY, originX_));
+        const auto tiles = grid_.formationDestinations(soldierSources, destCell);
+        for (std::size_t k = 0; k < soldierIds.size(); ++k) {
+            const int tx = tiles[k].x / 2, ty = tiles[k].y / 2;
+            const int px = originX_ + (tx - ty) * 32;
+            const int py = (tx + ty) * 16 + 16;
+            if (orderSoldierInternal(soldierIds[k], px, py)) {
+                soldiers_[soldierIds[k]].attackMove = true;
+                ++accepted;
+            }
+        }
+    }
+    std::vector<size_t> vehIds;
+    for (std::size_t i = 0; i < vehicles_.size() && remaining > 0u; ++i) {
+        const auto& v = vehicles_[i];
+        if (!v.alive || v.hp <= 0 || v.speedPx <= 0.0 || v.towedBy || v.group != g) continue;
+        vehIds.push_back(i);
+        --remaining;
+    }
+    for (const auto& [vid, pt] : vehicleFormationTargets(vehIds, clampedX, clampedY)) {
+        moveVehicleInternal(vehicles_[vid], pt.first, pt.second);
+        vehicles_[vid].attackMove = true;
+        ++accepted;
+    }
+    return accepted;
+}
+
 void TutorialUnits::setPlayerTeam(unsigned player, int team) {
     if (player >= playerTeams_.size()) return;
     playerTeams_[player] = team;
@@ -1935,6 +2219,95 @@ std::vector<SoldierPose> TutorialUnits::step() {
     }
     stepVehicleCombat(changed);
     stepAirSupport(changed);
+    if (!evacuatingSoldiers_.empty() || !evacuatingVehicles_.empty()) {
+        for (auto it = evacuatingSoldiers_.begin(); it != evacuatingSoldiers_.end();) {
+            if (it->index >= soldiers_.size()) { it = evacuatingSoldiers_.erase(it); continue; }
+            auto& s = soldiers_[it->index];
+            if (s.hp <= 0 || s.embarked || s.garrisonBuilding) { it = evacuatingSoldiers_.erase(it); continue; }
+            const auto [su, sv] = soldierWorld(s);
+            const int px = originX_ + su - sv;
+            const int py = (su + sv) / 2;
+            const double dx = static_cast<double>(px - it->targetX);
+            const double dy = static_cast<double>(py - it->targetY);
+            const double dist2 = dx * dx + dy * dy;
+            const bool stopped = !s.motion && s.route.empty() && !s.goal;
+            if (dist2 <= 96.0 * 96.0 || (stopped && dist2 <= 192.0 * 192.0)) {
+                const std::string sid = (it->index < soldierIds_.size() && !soldierIds_[it->index].empty())
+                    ? soldierIds_[it->index] : std::string("dguner");
+                const int hpPct = std::clamp((s.hp * 100) / std::max(1, s.desc.maxHp), 1, 100);
+                const int ammoPct = s.desc.maxAmmo > 0 ? std::clamp((s.ammo * 100) / s.desc.maxAmmo, 0, 100) : 100;
+                const int expaPct = std::clamp((s.expa * 100) / 0x8000, 0, 100);
+                reserveUnits_.push_back({sid, s.owner, s.group, hpPct, ammoPct, expaPct, 0});
+                const SubCell oldCell = s.cell;
+                s.hp = 0;
+                s.motion.reset();
+                clearMovingSightPenalty(s);
+                s.goal.reset();
+                s.route.clear();
+                s.cursor = 0;
+                s.needsRoute = false;
+                s.queuedGoals.clear();
+                s.attackTarget.reset();
+                s.attackVehicleTarget.reset();
+                s.attackBuildingTarget.reset();
+                s.autoTarget.reset();
+                if (!soldierAtCell(oldCell) && !vehicleAtCell(oldCell)) grid_.setOccupied(oldCell, false);
+                fogDirty_ = true;
+                pushOrUpdateSoldierPose(changed, {
+                    it->index, px, py, s.direction, 0, false, 0, false, s.owner, s.group, false, false
+                });
+                it = evacuatingSoldiers_.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        for (auto it = evacuatingVehicles_.begin(); it != evacuatingVehicles_.end();) {
+            if (it->index >= vehicles_.size()) { it = evacuatingVehicles_.erase(it); continue; }
+            auto& v = vehicles_[it->index];
+            if (!v.alive || v.hp <= 0) { it = evacuatingVehicles_.erase(it); continue; }
+            const double dx = static_cast<double>(v.x - it->targetX);
+            const double dy = static_cast<double>(v.y - it->targetY);
+            const double dist2 = dx * dx + dy * dy;
+            const bool stopped = !v.moveTarget && v.waypoints.empty();
+            if (dist2 <= 112.0 * 112.0 || (stopped && dist2 <= 200.0 * 200.0)) {
+                if (v.towedVehicle) detachTowedGun(it->index);
+                const int hpPct = std::clamp((v.hp * 100) / std::max(1, v.maxHp), 1, 100);
+                const int ammoPct = v.maxAmmo > 0 ? std::clamp((v.ammo * 100) / v.maxAmmo, 0, 100) : 100;
+                const int expaPct = std::clamp((v.expa * 100) / 0x8000, 0, 100);
+                reserveUnits_.push_back({v.id, v.owner, v.group, hpPct, ammoPct, expaPct, 0});
+                for (std::uint32_t pi : v.passengers) {
+                    if (pi >= soldiers_.size()) continue;
+                    auto& ps = soldiers_[pi];
+                    if (ps.hp <= 0) continue;
+                    const std::string pid = (pi < soldierIds_.size() && !soldierIds_[pi].empty())
+                        ? soldierIds_[pi] : std::string("dguner");
+                    const int pHpPct = std::clamp((ps.hp * 100) / std::max(1, ps.desc.maxHp), 1, 100);
+                    const int pAmmoPct = ps.desc.maxAmmo > 0 ? std::clamp((ps.ammo * 100) / ps.desc.maxAmmo, 0, 100) : 100;
+                    const int pExpaPct = std::clamp((ps.expa * 100) / 0x8000, 0, 100);
+                    reserveUnits_.push_back({pid, ps.owner, ps.group, pHpPct, pAmmoPct, pExpaPct, 0});
+                    ps.hp = 0;
+                    ps.embarked = false;
+                    pushOrUpdateSoldierPose(changed, {
+                        pi, v.x, v.y, ps.direction, 0, false, 0, false, ps.owner, ps.group, false, false
+                    });
+                }
+                const SubCell oldCell = v.cell;
+                v.passengers.clear();
+                v.moveTarget.reset();
+                v.waypoints.clear();
+                v.queuedOrders.clear();
+                v.alive = false;
+                v.hp = 0;
+                v.visible = false;
+                if (!soldierAtCell(oldCell) && !vehicleAtCell(oldCell)) grid_.setOccupied(oldCell, false);
+                fogDirty_ = true;
+                emitVehiclePose(it->index);
+                it = evacuatingVehicles_.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
     if (fog_ && fogDirty_) refreshSpotting(&changed);
     if (tick_ % 25 == 0) {
         stepMedicHeal(changed);

@@ -7,6 +7,7 @@
 #include <condition_variable>
 #include <exception>
 #include <functional>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <set>
@@ -48,8 +49,10 @@ public:
     struct ManualClock {
         explicit ManualClock() = default;
     };
-    MissionRunner(assets::TutorialData, unsigned delayMs, TutorialUnits, bool startRecordingNow = false);
-    MissionRunner(ManualClock, assets::TutorialData, TutorialUnits);
+    MissionRunner(assets::TutorialData, unsigned delayMs, TutorialUnits, bool startRecordingNow = false,
+                  std::map<unsigned, std::vector<assets::ReinforcementUnit>> initialSavedPools = {});
+    MissionRunner(ManualClock, assets::TutorialData, TutorialUnits,
+                  std::map<unsigned, std::vector<assets::ReinforcementUnit>> initialSavedPools = {});
     bool canMove(std::span<const size_t> indices, int x, int y);
     std::optional<size_t> move(std::span<const size_t> indices, int mapX, int mapY, bool append = false);
     std::optional<size_t> attackMove(std::span<const size_t> indices, int mapX, int mapY, bool append = false);
@@ -104,6 +107,8 @@ public:
     void addReserveUnit(const TutorialUnits::ReserveUnit& entry);
     std::vector<TutorialUnits::ReserveUnit> takeReserveUnits(unsigned group, int pool = -1,
                                                              std::size_t maxCount = static_cast<std::size_t>(-1));
+    std::vector<assets::ReinforcementUnit> reinforcementWave(unsigned waveIdx) const;
+    std::map<unsigned, std::vector<assets::ReinforcementUnit>> savedUnitPools() const;
     std::optional<size_t> attackGroundVehicles(std::span<const size_t> indices, int mapX, int mapY);
     std::optional<size_t> attackGroundSoldiers(std::span<const size_t> indices, int mapX, int mapY);
     size_t layMine(std::span<const size_t> soldierIds);
@@ -204,6 +209,7 @@ private:
         const std::array<std::vector<assets::ReinforcementUnit>, 64>& waves, unsigned group, int team) const;
     unsigned countPendingReinforcementsByPlayer(
         const std::array<std::vector<assets::ReinforcementUnit>, 64>& waves, int owner) const;
+    const std::vector<assets::ReinforcementUnit>* reinforcementWaveLocked(unsigned waveIdx) const;
     MissionQueries makeQueriesLocked(
         std::span<const std::uint8_t> zones,
         const std::array<std::vector<assets::ReinforcementUnit>, 64>& waves,
@@ -299,6 +305,9 @@ private:
     TutorialUnits units_;
     std::array<bool, 64> spawnedReinforcementWaves_{};
     std::array<int, 64> reinforcementWaveOwner_{};
+    // Initialized before tutorial_ so tick-0 scan sees campaign-carried savedUnitPools_.
+    std::map<unsigned, std::vector<assets::ReinforcementUnit>> savedUnitPools_;
+    std::map<unsigned, std::vector<assets::ReinforcementUnit>> dynamicWaves_;
     Tutorial tutorial_;
     mutable std::mutex mutex_;
     std::condition_variable_any changed_;
@@ -320,6 +329,7 @@ private:
     std::function<void(cmd::Command)> commandSink_;
     std::vector<assets::Placement> pendingCrewSpawns_;
     bool inLockstepApply_{false};
+    unsigned nextDynamicWaveId_{64u};
     std::vector<MissionEvent> deferredMpScriptEvents_;
     std::optional<MpSkirmishState> mpSkirmish_;
     std::jthread worker_;

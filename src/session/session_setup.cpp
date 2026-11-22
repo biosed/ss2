@@ -69,7 +69,8 @@ GameSession::GameSession(SDL_Window* win, ValidationReport* rep, int lim, bool t
                          bool ovOnly, std::optional<std::filesystem::path>* nextOut,
                          const std::filesystem::path& recPath, const cmd::ReplayFile* repFile,
                          bool manualClk, const std::filesystem::path& loadSave,
-                         MultiplayerSessionConfig mpConfig)
+                         MultiplayerSessionConfig mpConfig,
+                         std::map<unsigned, std::vector<assets::ReinforcementUnit>>* campaignPools)
     : window(win),
       report(rep),
       limit(lim),
@@ -87,6 +88,7 @@ GameSession::GameSession(SDL_Window* win, ValidationReport* rep, int lim, bool t
       replayFile(repFile),
       manualClock(manualClk),
       loadSavePath(loadSave),
+      campaignUnitPools(campaignPools),
       multiplayer(std::move(mpConfig)),
       renderer(window, report),
       menu(window),
@@ -540,11 +542,15 @@ void GameSession::initializeMission() {
             });
             nextLockstepTickAt = std::chrono::steady_clock::now();
         } else if (manualClock) {
-            simulation.emplace(ss2::MissionRunner::ManualClock{}, std::move(data), std::move(soldiers));
+            simulation.emplace(ss2::MissionRunner::ManualClock{}, std::move(data), std::move(soldiers),
+                               campaignUnitPools ? *campaignUnitPools
+                                                 : std::map<unsigned, std::vector<assets::ReinforcementUnit>>{});
             simulation->startRecording();
         } else {
             simulation.emplace(std::move(data), ss2::tutorialTurnDelay(gameDir), std::move(soldiers),
-                               !recordPath.empty());
+                               !recordPath.empty(),
+                               campaignUnitPools ? *campaignUnitPools
+                                                 : std::map<unsigned, std::vector<assets::ReinforcementUnit>>{});
             if (settings.speedPercent != 100) simulation->setSpeedPercent(settings.speedPercent);
         }
         liveVisibleMines = simulation->visibleMines();
@@ -674,6 +680,9 @@ int GameSession::run() {
         (void)mpTransport->sendBye(ss2::ByePacket{static_cast<std::uint8_t>(localOwner()), "Session ended"});
     }
     writeRecordingIfRequested();
+    if (campaignUnitPools && simulation) {
+        *campaignUnitPools = simulation->savedUnitPools();
+    }
     std::cout << "Presented " << frames << " frames\n";
     if (timing && !sample.report(refreshRate)) return 1;
     return limit && frames < static_cast<unsigned>(limit) ? 1 : 0;
@@ -688,10 +697,11 @@ int runGameSession(SDL_Window* window, ValidationReport* report, int limit, bool
                    const cmd::ReplayFile* replayFile,
                    bool manualClock,
                    const std::filesystem::path& loadSavePath,
-                   MultiplayerSessionConfig multiplayer) {
+                   MultiplayerSessionConfig multiplayer,
+                   std::map<unsigned, std::vector<assets::ReinforcementUnit>>* campaignPools) {
     GameSession session(window, report, limit, timing, gameDir, mission, hdPack, originalInfantry,
                         autoEngage, settings, persistSettings, overviewOnly, nextMissionOut,
-                        recordPath, replayFile, manualClock, loadSavePath, std::move(multiplayer));
+                        recordPath, replayFile, manualClock, loadSavePath, std::move(multiplayer), campaignPools);
     return session.run();
 }
 
@@ -1309,8 +1319,7 @@ std::optional<std::pair<size_t, size_t>> GameSession::spawnAndRegisterVehicle(co
 void GameSession::spawnReinforcementWave(const MissionEvent& ev) {
     if (!simulation || !scene || !selection) return;
     const auto& data = simulation->data();
-    if (ev.index >= data.reinforcements.size()) return;
-    const auto& wave = data.reinforcements[ev.index];
+    const auto wave = simulation->reinforcementWave(ev.index);
     if (wave.empty()) return;
     int gateX = 0, gateY = 0;
     if (ev.gate < data.gates.size() && (data.gates[ev.gate].first != 0 || data.gates[ev.gate].second != 0)) {

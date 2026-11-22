@@ -320,6 +320,14 @@ public:
                                               std::size_t maxCount = static_cast<std::size_t>(-1));
     unsigned countReserveByGroup(unsigned group) const;
     unsigned countReserveByPlayer(int owner) const;
+    unsigned countAirPlanes(int owner, unsigned slot) const;
+    unsigned groupAmmoPercent(unsigned group, unsigned slot) const;
+    std::size_t setGroupStat(unsigned group, unsigned statKind, unsigned mode, unsigned pct,
+                             std::vector<SoldierPose>* outSoldiers = nullptr);
+    std::vector<assets::ReinforcementUnit> collectLiveUnitsForPool(bool byGroup, unsigned selector) const;
+    std::size_t orderGroupEvacuate(unsigned group, int mapX, int mapY);
+    std::size_t orderZoneEvacuate(std::span<const std::uint8_t> zones, unsigned zone, int mapX, int mapY);
+    std::size_t orderGroupMoveLimited(unsigned group, unsigned maxCount, int mapX, int mapY);
     size_t orderAttackGroundVehicles(std::span<const size_t> indices, int mapX, int mapY);
     size_t orderAttackGroundSoldiers(std::span<const size_t> indices, int mapX, int mapY);
     std::optional<unsigned> lastHitTick(unsigned player) const;
@@ -727,6 +735,14 @@ private:
     std::vector<AirStrikeEvent> airEvents_;
     std::uint32_t nextSortieId_{1};
     std::vector<ReserveUnit> reserveUnits_;
+    struct EvacuationOrder {
+        std::size_t index{0};
+        int targetX{0};
+        int targetY{0};
+    };
+    std::vector<std::string> soldierIds_;
+    std::vector<EvacuationOrder> evacuatingSoldiers_;
+    std::vector<EvacuationOrder> evacuatingVehicles_;
     int cookOffDepth_{0};
     WeatherKind weather_{WeatherKind::Clear};
     // View-only presentation seat (0..3); NEVER read by simulation logic or included in stateHash().
@@ -787,6 +803,10 @@ private:
     bool isVehicleTargetValidFor(int attackerOwner, bool targetIsVehicle, size_t targetIdx) const;
     bool orderSoldierInternal(size_t index, int mapX, int mapY);
     void moveVehicleInternal(Vehicle& v, int mapX, int mapY);
+    std::size_t dispatchEvacuationOrders(std::vector<size_t> soldierIds,
+                                         std::vector<SubCell> soldierSources,
+                                         std::vector<size_t> vehIds,
+                                         int clampedX, int clampedY);
     void detachTowedGun(size_t tractorIdx);
     void destroyVehicle(size_t vehicleIdx, std::vector<SoldierPose>& changed);
     void stepTowing();

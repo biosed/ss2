@@ -63,7 +63,7 @@ static_assert(sizeof(FogGrid) == 1600, "update FogGrid::hashState");
 static_assert(sizeof(TutorialUnits::ReserveUnit) == 56, "update hashValue(ReserveUnit)");
 static_assert(sizeof(assets::AirSupportSlot) == 40, "update hashValue(AirSupportSlot)");
 static_assert(sizeof(assets::ParatrooperEntry) == 40, "update hashValue(ParatrooperEntry)");
-static_assert(sizeof(TutorialUnits) == 3872, "update TutorialUnits::stateHash for the new member");
+static_assert(sizeof(TutorialUnits) == 3944, "update TutorialUnits::stateHash for the new member");
 #endif
 
 std::uint64_t TutorialUnits::stateHash() const {
@@ -165,6 +165,12 @@ std::uint64_t TutorialUnits::stateHash() const {
     // Excluded: sortiePoses_ and airEvents_ are presentation buffers drained by takeAirSorties()
     // and takeAirStrikeEvents().
     h.all(nextSortieId_, reserveUnits_, cookOffDepth_, weather_);
+    // Excluded: soldierIds_ holds immutable spawn-time unit-type IDs (like catalog_).
+    // Only hash evacuating orders when active so unaffected scenarios keep identical hashes.
+    if (!evacuatingSoldiers_.empty() || !evacuatingVehicles_.empty()) {
+        h.each(evacuatingSoldiers_, [&h](const EvacuationOrder& e) { h.all(e.index, e.targetX, e.targetY); });
+        h.each(evacuatingVehicles_, [&h](const EvacuationOrder& e) { h.all(e.index, e.targetX, e.targetY); });
+    }
     // Excluded: viewerOwner_ is presentation-only (fog/pose visibility perspective) and never affects
     // simulation state; commandActor_ is transient RAII context during applyAs() and always 0 at rest.
     // Keep SP stateHash() identical when multiplayerSymmetry_ is false.

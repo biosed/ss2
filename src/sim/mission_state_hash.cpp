@@ -17,7 +17,7 @@ static void hashValue(StateHasher& h, const MissionEvent& e) {
 static_assert(sizeof(MissionEvent) == 24, "update hashValue(MissionEvent) for the new field");
 #if defined(__GLIBCXX__) && defined(__LP64__)
 #define SS2_STATE_HASH_SIZE_GUARDS 1
-static_assert(sizeof(Tutorial) - sizeof(assets::TutorialData) == 6872,
+static_assert(sizeof(Tutorial) - sizeof(assets::TutorialData) == 6896,
               "update Tutorial::stateHash for the new member");
 #endif
 
@@ -34,6 +34,7 @@ std::uint64_t Tutorial::stateHash() const {
     });
     // Events raised but not yet taken by the runner still drive it on its next collect().
     h.add(events_);
+    if (!airRouteWaypoints_.empty()) h.add(airRouteWaypoints_);
     return h.value();
 }
 
@@ -42,7 +43,7 @@ std::uint64_t MissionRunner::stateHash() const {
     static_assert(sizeof(ScheduledReinforcement) == 28, "update the ScheduledReinforcement hash below");
     static_assert(sizeof(MissionRunner) - sizeof(TutorialUnits) - sizeof(Tutorial) - sizeof(std::mutex) -
                       sizeof(std::condition_variable_any) ==
-                      632 + sizeof(std::function<void(cmd::Command)>) + sizeof(std::vector<assets::Placement>) +
+                      728 + sizeof(std::function<void(cmd::Command)>) + sizeof(std::vector<assets::Placement>) +
                           sizeof(std::vector<MissionEvent>) + sizeof(std::optional<MpSkirmishState>) +
                           sizeof(void*),
                   "update MissionRunner::stateHash for the new member");
@@ -78,6 +79,25 @@ std::uint64_t MissionRunner::stateHash() const {
                 h.each(g.airPlanes, [&h](const MpZeppelinAirGrant& a) { h.all(a.slot, a.count); });
                 h.each(g.airSorties, [&h](const MpZeppelinAirGrant& a) { h.all(a.slot, a.count); });
             });
+        }
+    }
+    if (!savedUnitPools_.empty() || !dynamicWaves_.empty() || nextDynamicWaveId_ != 64u) {
+        auto hashWaveUnit = [&](const assets::ReinforcementUnit& u) {
+            h.all(u.id, u.group, u.hp, u.ammo, u.expa);
+            h.each(u.passengers, [&](const assets::PassengerPlacement& p) {
+                h.all(p.id, p.group, p.hp, p.ammo, p.expa, p.isCrew);
+            });
+        };
+        h.add(nextDynamicWaveId_);
+        h.add(savedUnitPools_.size());
+        for (const auto& [k, v] : savedUnitPools_) {
+            h.add(k);
+            h.each(v, hashWaveUnit);
+        }
+        h.add(dynamicWaves_.size());
+        for (const auto& [k, v] : dynamicWaves_) {
+            h.add(k);
+            h.each(v, hashWaveUnit);
         }
     }
     // Excluded: recording_, commandSink_, pendingCrewSpawns_, and inLockstepApply_ are transport/presentation helpers.

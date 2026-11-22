@@ -93,11 +93,12 @@ void Tutorial::step(const MissionQueries& queries) {
 std::vector<MissionEvent> Tutorial::takeEvents() { return std::exchange(events_, {}); }
 
 void Tutorial::scan(const MissionQueries& queries) {
+    uint64_t dynamicWaveMask = 0;
     for (unsigned i = 0; i < active_.size(); ++i)
-        if (active_[i]) evaluate(i, queries);
+        if (active_[i]) evaluate(i, queries, dynamicWaveMask);
 }
 
-void Tutorial::evaluate(unsigned script, const MissionQueries& queries) {
+void Tutorial::evaluate(unsigned script, const MissionQueries& queries, uint64_t& dynamicWaveMask) {
     std::vector<uint32_t> stack;
     const auto pop = [&]() {
         if (stack.empty()) throw std::runtime_error("Mission stack underflow");
@@ -205,12 +206,16 @@ void Tutorial::evaluate(unsigned script, const MissionQueries& queries) {
             break;
         }
         case 8: {
-            for (int k = 0; k < 5; ++k) (void)pop(); // spawn / reserve deployment action
+            const auto extra = pop(), zone = pop(), owner = pop(), slot = pop(), count = pop();
+            if (owner < 4u && slot < 5u && count > 0u && zone < data_.locations.size()) {
+                events_.push_back({MissionEvent::AirStrikeZone, zone, owner, slot, count, extra});
+            }
             break;
         }
-        case 9: case 31: case 91: {
-            for (int k = 0; k < 4; ++k) (void)pop(); // condition query
-            stack.push_back(0);
+        case 9: {
+            const auto slot = pop(), threshold = pop(), mode = pop(), owner = pop();
+            const unsigned total = queries.countAirPlanes ? queries.countAirPlanes(owner, slot) : 0u;
+            stack.push_back(compare(mode, int32_t(total), int32_t(threshold)));
             break;
         }
         case 19: {
@@ -312,39 +317,142 @@ void Tutorial::evaluate(unsigned script, const MissionQueries& queries) {
             stack.push_back(compare(mode, int32_t(count), int32_t(threshold)));
             break;
         }
-        case 63: case 71: case 84: case 85: case 86: {
-            (void)pop(); (void)pop(); // 2-arg mission state / bridge action
-            break;
-        }
-        case 72: case 75: {
-            (void)pop(); (void)pop(); (void)pop(); // 3-arg objective action
+        case 31: {
+            const auto zone = pop(), player = pop(), pct = pop(), mode = pop();
+            const unsigned active = queries.countByPlayerMask
+                ? queries.countByPlayerMask(int(player), 1u)
+                : (queries.countAliveByPlayer ? queries.countAliveByPlayer(player) : 0u);
+            const auto threshold = static_cast<int32_t>((static_cast<uint64_t>(active) * pct) / 100u);
+            const unsigned inZone = queries.countInZone ? queries.countInZone(zone, player) : 0u;
+            stack.push_back(compare(mode, int32_t(inZone), threshold));
             break;
         }
         case 33: {
-            for (int k = 0; k < 6; ++k) (void)pop(); // 6-arg unit/area query
-            stack.push_back(0);
+            const auto playerB = pop(), maskB = pop(), pct = pop(), mode = pop(), playerA = pop(), maskA = pop();
+            const unsigned cntB = queries.countByPlayerMask
+                ? queries.countByPlayerMask(int(playerB), maskB) : 0u;
+            const auto threshold = static_cast<int32_t>((static_cast<uint64_t>(cntB) * pct) / 100u);
+            const unsigned cntA = queries.countByPlayerMask
+                ? queries.countByPlayerMask(int(playerA), maskA) : 0u;
+            stack.push_back(compare(mode, int32_t(cntA), threshold));
             break;
         }
         case 39: {
-            for (int k = 0; k < 8; ++k) (void)pop(); // 8-arg custom reinforcement template
+            const auto moralePct = pop(), expaPct = pop(), ammoPct = pop(), hpPct = pop();
+            const auto delaySec = pop(), destZone = pop(), gateIdx = pop(), group = pop();
+            const std::uint32_t packedStats = packMpFourWaves(
+                std::min(hpPct, 100u), std::min(ammoPct, 100u),
+                std::min(expaPct, 100u), std::min(moralePct, 100u));
+            events_.push_back({MissionEvent::DeployReserve, group, packedStats, gateIdx, destZone, delaySec});
             break;
         }
-        case 46: case 83: {
-            for (int k = 0; k < 4; ++k) (void)pop(); // 4-arg objective / spawn action
+        case 43: {
+            airRouteWaypoints_.clear();
+            break;
+        }
+        case 44: {
+            const auto marker = pop();
+            if (airRouteWaypoints_.size() < 60u && marker < data_.markers.size()) {
+                airRouteWaypoints_.emplace_back(marker, 2u);
+            }
+            break;
+        }
+        case 45: {
+            const auto marker = pop();
+            if (airRouteWaypoints_.size() < 60u && marker < data_.markers.size()) {
+                airRouteWaypoints_.emplace_back(marker, 4u);
+            }
+            break;
+        }
+        case 46: {
+            const auto extra = pop(), owner = pop(), slot = pop(), count = pop();
+            if (owner < 4u && slot < 5u && count > 0u) {
+                if (!airRouteWaypoints_.empty()) {
+                    uint32_t chosenMarker = airRouteWaypoints_.back().first;
+                    for (auto it = airRouteWaypoints_.rbegin(); it != airRouteWaypoints_.rend(); ++it) {
+                        if (it->second == 4u) {
+                            chosenMarker = it->first;
+                            break;
+                        }
+                    }
+                    events_.push_back({MissionEvent::AirStrike, chosenMarker, owner, slot, count, extra});
+                } else {
+                    const uint32_t zoneIdx = extra > 0u ? (extra - 1u) : 0u;
+                    if (zoneIdx < data_.locations.size()) {
+                        events_.push_back({MissionEvent::AirStrikeZone, zoneIdx, owner, slot, count, extra});
+                    }
+                }
+            }
             break;
         }
         case 62: {
-            (void)pop(); // 1-arg objective / diplomacy toggle
+            const auto poolIdx = pop();
+            events_.push_back({MissionEvent::UnitPoolClear, poolIdx});
+            break;
+        }
+        case 63: {
+            const auto poolIdx = pop(), group = pop();
+            events_.push_back({MissionEvent::UnitPoolSaveGroup, poolIdx, group});
+            break;
+        }
+        case 71: {
+            const auto poolIdx = pop(), waveIdx = pop();
+            if (waveIdx < 64u) dynamicWaveMask |= (1ULL << waveIdx);
+            events_.push_back({MissionEvent::UnitPoolToWave, waveIdx, poolIdx, 0xffffffffu});
+            break;
+        }
+        case 72: {
+            const auto newGroup = pop(), poolIdx = pop(), waveIdx = pop();
+            if (waveIdx < 64u) dynamicWaveMask |= (1ULL << waveIdx);
+            events_.push_back({MissionEvent::UnitPoolToWave, waveIdx, poolIdx, newGroup});
+            break;
+        }
+        case 75: {
+            const auto target = pop(), group = pop(), count = pop();
+            if (count > 0u) {
+                events_.push_back({MissionEvent::GroupAirfieldOrder, group, 0u,
+                                   target > 0u ? (target - 1u) : 0u, count, 0u});
+            }
+            break;
+        }
+        case 83: {
+            const auto group = pop(), pct = pop(), mode = pop(), statKind = pop();
+            events_.push_back({MissionEvent::GroupSetStat, group, statKind, mode, pct});
+            break;
+        }
+        case 84: {
+            const auto poolIdx = pop(), owner = pop();
+            events_.push_back({MissionEvent::UnitPoolSavePlayer, poolIdx, owner});
+            break;
+        }
+        case 85: {
+            const auto gateIdx = pop(), group = pop();
+            events_.push_back({MissionEvent::GroupEvacuate, group, 0u, gateIdx});
+            break;
+        }
+        case 86: {
+            const auto gateIdx = pop(), zone = pop();
+            events_.push_back({MissionEvent::ZoneEvacuate, zone, 0u, gateIdx});
             break;
         }
         case 90: {
-            (void)pop(); (void)pop(); (void)pop(); // 3-arg condition query
-            stack.push_back(0);
+            const auto threshold = pop(), mode = pop(), poolIdx = pop();
+            const unsigned cnt = queries.countUnitPool ? queries.countUnitPool(poolIdx) : 0u;
+            stack.push_back(compare(mode, int32_t(cnt), int32_t(threshold)));
+            break;
+        }
+        case 91: {
+            const auto threshold = pop(), mode = pop(), slot = pop(), group = pop();
+            const unsigned avgPct = queries.groupAmmoPercent ? queries.groupAmmoPercent(group, slot) : 0u;
+            stack.push_back(compare(mode, int32_t(avgPct), int32_t(threshold)));
             break;
         }
         case 40: {
             const auto delaySec = pop(), destZone = pop(), gateIdx = pop(), waveIdx = pop(), owner = pop();
-            if (waveIdx < data_.reinforcements.size() && !data_.reinforcements[waveIdx].empty()) {
+            const bool hasStatic = waveIdx < data_.reinforcements.size() && !data_.reinforcements[waveIdx].empty();
+            const bool hasDyn = (waveIdx < 64u && (dynamicWaveMask & (1ULL << waveIdx)) != 0u) ||
+                                (queries.hasDynamicWave && queries.hasDynamicWave(waveIdx));
+            if (hasStatic || hasDyn) {
                 events_.push_back({MissionEvent::Reinforcement, waveIdx, owner, gateIdx, destZone, delaySec});
             }
             break;

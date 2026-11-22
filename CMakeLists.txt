@@ -169,7 +169,8 @@ if(BUILD_TESTING)
     tests/tutorial_vm_test_5c_5f.cpp
     tests/tutorial_vm_test_5g_5j.cpp
     tests/tutorial_vm_test_5k_5o.cpp
-    tests/tutorial_vm_test_5p_5u.cpp)
+    tests/tutorial_vm_test_5p_5u.cpp
+    tests/tutorial_vm_test_caof_complete.cpp)
   target_link_libraries(tutorial_vm_test PRIVATE ss2_sim)
   add_test(NAME tutorial_vm COMMAND tutorial_vm_test)
   add_executable(replay_test tests/replay_test.cpp)

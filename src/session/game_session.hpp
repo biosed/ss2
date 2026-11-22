@@ -66,7 +66,8 @@ int runGameSession(SDL_Window* window, ValidationReport* report, int limit, bool
                    const cmd::ReplayFile* replayFile = nullptr,
                    bool manualClock = false,
                    const std::filesystem::path& loadSavePath = {},
-                   MultiplayerSessionConfig multiplayer = {});
+                   MultiplayerSessionConfig multiplayer = {},
+                   std::map<unsigned, std::vector<assets::ReinforcementUnit>>* campaignPools = nullptr);
 
 class FrameSample {
     using Clock = std::chrono::steady_clock;
@@ -169,6 +170,7 @@ struct GameSession {
     const cmd::ReplayFile* replayFile;
     bool manualClock = false;
     std::filesystem::path loadSavePath;
+    std::map<unsigned, std::vector<assets::ReinforcementUnit>>* campaignUnitPools{nullptr};
     MultiplayerSessionConfig multiplayer;
     std::optional<LockstepCoordinator> lockstep;
     std::optional<StarRelayTransport> mpTransport;
@@ -326,7 +328,8 @@ struct GameSession {
                 bool overviewOnly, std::optional<std::filesystem::path>* nextMissionOut,
                 const std::filesystem::path& recordPath, const cmd::ReplayFile* replayFile,
                 bool manualClock = false, const std::filesystem::path& loadSavePath = {},
-                MultiplayerSessionConfig multiplayer = {});
+                MultiplayerSessionConfig multiplayer = {},
+                std::map<unsigned, std::vector<assets::ReinforcementUnit>>* campaignPools = nullptr);
 
     int run();
     int localOwner() const noexcept { return multiplayer.enabled ? multiplayer.localSeat : 0; }

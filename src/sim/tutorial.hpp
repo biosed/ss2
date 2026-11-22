@@ -12,7 +12,9 @@ struct MissionEvent {
     enum Kind {
         Dialog, Message, Camera, Marker, Victory, Defeat, Reinforcement, GroupOrder, FogReveal, PlayerTeam,
         AirSupportAddPlanes, AirSupportAddSorties, AirStrike, GroupTransferOwner, GroupReassignInZone, GroupBombard,
-        MultiplayerWave, MultiplayerZeppelinWave, MultiplayerZeppelinPlanes, MultiplayerZeppelinSorties
+        MultiplayerWave, MultiplayerZeppelinWave, MultiplayerZeppelinPlanes, MultiplayerZeppelinSorties,
+        AirStrikeZone, DeployReserve, UnitPoolClear, UnitPoolSaveGroup, UnitPoolSavePlayer, UnitPoolToWave,
+        GroupSetStat, GroupEvacuate, ZoneEvacuate, GroupAirfieldOrder
     } kind;
     unsigned index{0};
     unsigned owner{0}, gate{0}, destZone{0}, delaySec{0};
@@ -28,6 +30,10 @@ struct MissionQueries {
     std::function<unsigned(int owner, unsigned mask)> countByPlayerMask{};
     std::function<bool(unsigned marker)> isMarkerObjectDestroyed{};
     std::function<unsigned(unsigned group, int team, unsigned mask)> countByGroupTeamMask{};
+    std::function<unsigned(unsigned owner, unsigned slot)> countAirPlanes{};
+    std::function<unsigned(unsigned poolIdx)> countUnitPool{};
+    std::function<unsigned(unsigned group, unsigned slot)> groupAmmoPercent{};
+    std::function<bool(unsigned waveIdx)> hasDynamicWave{};
 };
 
 // Tutorial I mission trigger VM operating on mission ticks.
@@ -61,9 +67,10 @@ private:
     std::array<uint32_t, 100> timers_{}, timerPeriods_{}, variables_{};
     std::array<GroupAiState, 100> groupAi_{};
     std::vector<MissionEvent> events_;
+    std::vector<std::pair<uint32_t, uint32_t>> airRouteWaypoints_;
     void initActive(bool fullMission);
     void scan(const MissionQueries& queries);
-    void evaluate(unsigned script, const MissionQueries& queries);
+    void evaluate(unsigned script, const MissionQueries& queries, uint64_t& dynamicWaveMask);
 };
 unsigned tutorialTurnDelay(const std::filesystem::path& gameDir);
 

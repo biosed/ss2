@@ -84,5 +84,7 @@ void runPhase5Cto5F();
 void runPhase5Gto5J();
 void runPhase5Kto5O();
 void runPhase5Pto5U();
+void runCaofCompleteOpcodes();
+void runRetailCaofCorpusCheck(const std::filesystem::path& gameDir);
 
 }  // namespace ss2::vm_test
