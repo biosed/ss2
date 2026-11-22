@@ -1,10 +1,20 @@
 name: Linux Vulkan
 on: [push, pull_request]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-and-test:
     runs-on: ${{ matrix.runner }}
-    container: fedora:44
+    container: fedora:45
+    timeout-minutes: 30
     strategy:
+      fail-fast: false
       matrix:
         include:
           - runner: ubuntu-24.04
@@ -33,9 +43,9 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: ~/.cache/ccache
-          key: ccache-${{ matrix.icd_arch }}-${{ matrix.compiler }}-${{ matrix.type }}-${{ github.sha }}
+          key: ccache-${{ matrix.icd_arch }}-${{ matrix.compiler }}-${{ matrix.type }}
           restore-keys: |
-            ccache-${{ matrix.icd_arch }}-${{ matrix.compiler }}-${{ matrix.type }}-
+            ccache-${{ matrix.icd_arch }}-${{ matrix.compiler }}-${{ matrix.type }}
       - run: >
           cmake -S . -B build -G Ninja
           -DCMAKE_BUILD_TYPE=${{ matrix.type }}
@@ -44,8 +54,20 @@ jobs:
           "-DCMAKE_CXX_FLAGS=${{ matrix.flags }}"
           -DSS2_TEST_WINDOW=ON -DSS2_TEST_VALIDATION=ON
       - run: cmake --build build
-      - run: ctest --test-dir build --output-on-failure --no-tests=error
+      - name: ctest
+        run: ctest --test-dir build --output-on-failure --no-tests=error 2>&1 | tee ctest.log
+        shell: bash
         env:
           SDL_VIDEO_DRIVER: offscreen
           VK_DRIVER_FILES: /usr/share/vulkan/icd.d/lvp_icd.${{ matrix.icd_arch }}.json
           UBSAN_OPTIONS: halt_on_error=1
+      - name: Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: failure-${{ matrix.icd_arch }}-${{ matrix.compiler }}-${{ matrix.type }}
+          path: |
+            ctest.log
+            build
+          retention-days: 7
+          if-no-files-found: ignore
