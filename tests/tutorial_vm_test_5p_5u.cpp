@@ -1378,6 +1378,185 @@ void runPhase5Pto5U() {
 
                                 std::cout << "Phase 5U Gold CAOF opcodes (22-26/41-42/58-60/77-78/82/92-93) & weather marchsightbonus PASSED\n";
                             }
+
+                            // Phase 5V: Gold 0x1f sight cap, Easy 1.3x vehicle/march sight,
+                            // tanksonarmorprotection unbuttoned sniper 100% crew damage & suppression auto-button-up.
+                            {
+                                std::vector<std::uint32_t> flags5v(64u * 64u, 0u);
+                                std::vector<std::uint16_t> obst5v(64u * 64u, 0x000Fu);
+                                auto tc5v = [](int tx, int ty) -> std::pair<int, int> {
+                                    const int u = tx * 32 + 16;
+                                    const int v = ty * 32 + 16;
+                                    return {64 * 32 + u - v, (u + v) / 2};
+                                };
+
+                                ss2::assets::UnitSpec obs5v{};
+                                obs5v.id = "obs_5v";
+                                obs5v.health = 200;
+                                obs5v.sight = 4;
+
+                                ss2::assets::UnitSpec easy5v{};
+                                easy5v.id = "easy_5v";
+                                easy5v.isVehicle = true;
+                                easy5v.selType = "tank";
+                                easy5v.health = 600;
+                                easy5v.sight = 10;
+                                easy5v.marchSightBonus = 4;
+                                easy5v.marchEnabled = true;
+                                easy5v.crewNumber = 4;
+                                easy5v.hasCrewProtection = true;
+                                easy5v.crewProtection[static_cast<std::size_t>(ss2::assets::HitType::Sniper)] = {256, 256, 256};
+                                easy5v.armor[static_cast<std::size_t>(ss2::assets::HitType::Sniper)] = {256, 256, 256};
+
+                                ss2::assets::UnitSpec cap5v = easy5v;
+                                cap5v.id = "cap_5v";
+                                cap5v.sight = 22;
+                                cap5v.bonusSight = 6;
+                                cap5v.marchSightBonus = 4;
+
+                                ss2::assets::UnitSpec sniper5v{};
+                                sniper5v.id = "sniper_5v";
+                                sniper5v.selType = "sniper";
+                                sniper5v.health = 100;
+                                sniper5v.ammo1 = 20;
+                                sniper5v.sight = 14;
+                                sniper5v.shot1 = {"man_sniper", ss2::assets::HitType::Sniper, 90, 90, 240, 240, 0, 2, 1, 2, "gunshot"};
+
+                                ss2::assets::PlaneSpec leaflet5v{};
+                                leaflet5v.id = "b-17c_agit_5v";
+                                leaflet5v.health = 2050;
+                                leaflet5v.sight = 24;
+                                leaflet5v.flySpeed = 6.97;
+                                leaflet5v.bombDamage = 5000;
+                                leaflet5v.bombsNumber = 3;
+                                leaflet5v.bombId = "fsheet";
+
+                                auto cat5v = ss2::assets::UnitCatalog::fromSpecs(
+                                    {obs5v, easy5v, cap5v, sniper5v}, {leaflet5v});
+
+                                // 1. Easy 1.3x vehicle/march sight (13 buttoned, 22 open) and 0x1f (31-tile) cap.
+                                {
+                                    const auto [vx, vy] = tc5v(10, 20);
+                                    const auto [d13x, d13y] = tc5v(23, 20);
+                                    const auto [d14x, d14y] = tc5v(24, 20);
+                                    const auto [d22x, d22y] = tc5v(32, 20);
+                                    const auto [d23x, d23y] = tc5v(33, 20);
+                                    const auto [d31x, d31y] = tc5v(41, 20);
+                                    const auto [d32x, d32y] = tc5v(42, 20);
+                                    ss2::TutorialUnits simEasy(
+                                        ss2::InfantryPathGrid::fromSubCellMasks(64, 64, flags5v, obst5v),
+                                        std::vector<ss2::assets::Infantry>{
+                                            {"obs_5v", d13x, d13y, 200, 0, 11, 1}, // idx 0: dist 13
+                                            {"obs_5v", d14x, d14y, 200, 0, 12, 1}, // idx 1: dist 14
+                                            {"obs_5v", d22x, d22y, 200, 0, 13, 1}, // idx 2: dist 22
+                                            {"obs_5v", d23x, d23y, 200, 0, 14, 1}, // idx 3: dist 23
+                                        },
+                                        std::vector<ss2::assets::Placement>{{"easy_5v", vx, vy, 0, 100, 0, 1, 0}},
+                                        ss2::FogGrid(64, 64, flags5v), 1, false, {}, cat5v);
+                                    if (!simEasy.isValidAttackTarget(2u, 0) || simEasy.isValidAttackTarget(3u, 0)) {
+                                        throw std::runtime_error("Phase 5V Easy open march sight ((13+4)*1.3=22) check failed");
+                                    }
+                                    (void)simEasy.toggleMarchMode(std::array<size_t, 1>{0u});
+                                    (void)simEasy.step();
+                                    if (!simEasy.isValidAttackTarget(0u, 0) || simEasy.isValidAttackTarget(1u, 0)) {
+                                        throw std::runtime_error("Phase 5V Easy buttoned vehicle sight (10*1.3=13) check failed");
+                                    }
+
+                                    ss2::TutorialUnits simCap(
+                                        ss2::InfantryPathGrid::fromSubCellMasks(64, 64, flags5v, obst5v),
+                                        std::vector<ss2::assets::Infantry>{
+                                            {"obs_5v", d31x, d31y, 200, 0, 11, 1}, // idx 0: dist 31
+                                            {"obs_5v", d32x, d32y, 200, 0, 12, 1}, // idx 1: dist 32
+                                        },
+                                        std::vector<ss2::assets::Placement>{{"cap_5v", vx, vy, 0, 100, 0, 1, 0}},
+                                        ss2::FogGrid(64, 64, flags5v), 1, false, {}, cat5v);
+                                    if (!simCap.isValidAttackTarget(0u, 0) || simCap.isValidAttackTarget(1u, 0)) {
+                                        throw std::runtime_error("Phase 5V Gold 0x1f (31-tile) vehicle sight cap check failed");
+                                    }
+                                }
+
+                                // 2a. Gold tanksonarmorprotection unbuttoned sniper 100% crew damage & follow-up protection.
+                                {
+                                    const auto [tx, ty] = tc5v(20, 20);
+                                    const auto [fx, fy] = tc5v(33, 20); // 13t away: visible open (14), hidden buttoned (10)
+                                    const auto [sx, sy] = tc5v(23, 20); // 96px east (< 240px sniper reach)
+                                    ss2::TutorialUnits simSnip(
+                                        ss2::InfantryPathGrid::fromSubCellMasks(64, 64, flags5v, obst5v),
+                                        std::vector<ss2::assets::Infantry>{
+                                            {"obs_5v", fx, fy, 200, 0, 11, 1},
+                                            {"sniper_5v", sx, sy, 100, 20, 12, 1},
+                                        },
+                                        std::vector<ss2::assets::Placement>{{"easy_5v", tx, ty, 0, 100, 0, 1, 0}},
+                                        ss2::FogGrid(64, 64, flags5v), 2, true, {}, cat5v);
+                                    const auto snap0 = simSnip.takeSnapshot();
+                                    if (snap0.vehicles[0].crewHp != 210 || !simSnip.isValidAttackTarget(0u, 0)) {
+                                        throw std::runtime_error("Phase 5V unbuttoned sniper baseline setup failed");
+                                    }
+                                    bool hitLanded = false;
+                                    for (int t = 0; t < 10; ++t) {
+                                        (void)simSnip.step();
+                                        const auto snapNow = simSnip.takeSnapshot();
+                                        if (snapNow.vehicles[0].crewHp < snap0.vehicles[0].crewHp) {
+                                            hitLanded = true;
+                                            if (snapNow.vehicles[0].crewHp != 120) {
+                                                throw std::runtime_error("Phase 5V unbuttoned sniper should deal 100% rawDamage (210->120)");
+                                            }
+                                            if (simSnip.isValidAttackTarget(0u, 0)) {
+                                                throw std::runtime_error("Phase 5V suppressed/hit tank failed to button up sight");
+                                            }
+                                            break;
+                                        }
+                                    }
+                                    if (!hitLanded) {
+                                        throw std::runtime_error("Phase 5V sniper failed to hit unbuttoned commander");
+                                    }
+                                    for (int t = 0; t < 10; ++t) (void)simSnip.step();
+                                    if (simSnip.takeSnapshot().vehicles[0].crewHp != 120) {
+                                        throw std::runtime_error("Phase 5V auto-buttoned tank should be immune to follow-up sniper fire");
+                                    }
+                                }
+
+                                // 2b. Pure suppression auto-button-up & recovery (0x1001d0b7) without weapon combat timer.
+                                {
+                                    const auto [tx, ty] = tc5v(20, 20);
+                                    const auto [fx, fy] = tc5v(33, 20); // 13t away: visible open (14), hidden suppressed (10)
+                                    ss2::TutorialUnits simSup(
+                                        ss2::InfantryPathGrid::fromSubCellMasks(64, 64, flags5v, obst5v),
+                                        std::vector<ss2::assets::Infantry>{{"obs_5v", fx, fy, 200, 0, 11, 1}},
+                                        std::vector<ss2::assets::Placement>{{"easy_5v", tx, ty, 0, 100, 0, 1, 0}},
+                                        ss2::FogGrid(64, 64, flags5v), 2, false, {}, cat5v);
+                                    std::array<std::array<ss2::assets::AirSupportSlot, 5>, 4> air5v{};
+                                    air5v[1][0] = {"b-17c_agit_5v", 1, 1};
+                                    std::array<int, 4> pGrp5v{};
+                                    std::array<std::vector<ss2::assets::ParatrooperEntry>, 4> pRos5v{};
+                                    simSup.setAirSupport(air5v, pGrp5v, pRos5v);
+                                    if (!simSup.isValidAttackTarget(0u, 0) ||
+                                        !simSup.callAirSupport(ss2::assets::AirMissionKind::Bomber, tx, ty, 1)) {
+                                        throw std::runtime_error("Phase 5V suppression button-up initial setup failed");
+                                    }
+                                    bool sawSuppressedButtonUp = false;
+                                    for (int t = 0; t < 260; ++t) {
+                                        (void)simSup.step();
+                                        bool dropped = false;
+                                        for (const auto& ae : simSup.takeAirStrikeEvents()) {
+                                            if (ae.kind == ss2::AirStrikeEvent::BombImpact) dropped = true;
+                                        }
+                                        if (dropped && !simSup.isValidAttackTarget(0u, 0)) {
+                                            sawSuppressedButtonUp = true;
+                                            break;
+                                        }
+                                    }
+                                    if (!sawSuppressedButtonUp || simSup.takeSnapshot().vehicles[0].hp != 600) {
+                                        throw std::runtime_error("Phase 5V suppression failed to auto-button open hatch");
+                                    }
+                                    for (int t = 0; t < 70; ++t) (void)simSup.step();
+                                    if (!simSup.isValidAttackTarget(0u, 0)) {
+                                        throw std::runtime_error("Phase 5V tank failed to unbutton once suppression decayed");
+                                    }
+                                }
+
+                                std::cout << "Phase 5V Gold 0x1f sight cap, Easy 1.3x vehicle sight, unbuttoned 100% sniper damage & suppression button-up PASSED\n";
+                            }
                         }
                     }
 }

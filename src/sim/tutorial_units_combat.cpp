@@ -155,8 +155,12 @@ void TutorialUnits::applyVehicleSuppression(size_t vehicleIdx, int addTicks, int
     } else if (tv.moraleResist >= 4000) {
         effective = std::max(1, addTicks / 2);
     }
+    const bool wasSuppressed = tv.suppressionTicks > 0;
     const int cap = (tv.moraleRndMove < 0) ? 60 : 35;
     tv.suppressionTicks = std::min(cap, tv.suppressionTicks + effective);
+    if (!wasSuppressed && tv.suppressionTicks > 0 && tv.marchEnabled && tv.hatchOpen) {
+        fogDirty_ = true;
+    }
     if (tv.moraleRndMove < 0 && tv.moraleResist < 10000 && tv.speedPx > 0.0 &&
         !tv.towedBy && !tv.isMoveImpaired() &&
         (tv.lastPanicTick == 0u || tick_ >= tv.lastPanicTick + 60u)) {
@@ -453,7 +457,10 @@ void TutorialUnits::applyVehicleCrewDamage(size_t vehicleIdx, int attackerX, int
                              attackerX, attackerY, rawDamage, hitType)
         : 0;
     if (rawCrewDmg <= 0 && unbuttonedCommander) {
-        rawCrewDmg = std::max(1, rawDamage / 2);
+        // Gold 0x1001ceb0 / 0x100014c9: unbuttoned crew uses MISC\MISC tanksonarmorprotection ((256 - val) * dmg) >> 8;
+        // sniper keeps default 0x100 (0 protection -> full 100% rawDamage).
+        const int prot = catalog_ ? std::clamp(catalog_->tankArmorProtection(hitType), 0, 256) : 0;
+        rawCrewDmg = std::max(1, ((256 - prot) * rawDamage) >> 8);
     }
     if (rawCrewDmg <= 0) return;
 

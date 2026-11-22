@@ -1500,32 +1500,41 @@ void TutorialUnits::refreshSpotting(std::vector<SoldierPose>* changed, bool emit
         if (s.hp <= 0 || s.embarked) continue;
         int r = effectiveSightRadius(s.desc, s.expa, s.crouched, s.owner, difficulty_);
         if (s.garrisonBuilding) {
-            r = std::min(63, r + 3 + (s.hasBinoculars && s.binoculars ? s.binoSightBonus : 0));
+            r = std::min(31, r + 3 + (s.hasBinoculars && s.binoculars ? s.binoSightBonus : 0));
             const auto& b = buildings_[*s.garrisonBuilding];
             revealWithAllies(b.entryCell.x / 2, b.entryCell.y / 2, applyWeatherSight(r), s.owner);
             continue;
         }
         if (s.hasBinoculars && s.binoculars && !s.motion && s.route.empty()) {
-            r = std::min(63, r + s.binoSightBonus);
+            r = std::min(31, r + s.binoSightBonus);
         }
         if (fog_->isElevated(s.cell.x / 2, s.cell.y / 2)) {
-            r = std::min(63, r + 2);
+            r = std::min(31, r + 2);
         }
         revealWithAllies(s.cell.x / 2, s.cell.y / 2, applyWeatherSight(r), s.owner);
     }
     for (const auto& v : vehicles_) {
         if (!v.alive || v.hp <= 0 || !v.hasCrew) continue;
-        const bool buttonedUp = !v.hatchOpen || (v.lastCombatTick != 0u && tick_ < v.lastCombatTick + 125u);
+        const bool buttonedUp = !v.hatchOpen || v.suppressionTicks > 0 ||
+                                (v.lastCombatTick != 0u && tick_ < v.lastCombatTick + 125u);
         const int marchBonus = buttonedUp ? 0 : v.marchSightBonus;
         const int elevBonus = fog_->isElevated(v.cell.x / 2, v.cell.y / 2) ? 2 : 0;
-        const int vr = std::min(63, v.sightTiles + elevBonus + (v.expa >= 16384 ? 2 : (v.expa >= 8192 ? 1 : 0)));
+        const int vr = std::min(31, v.sightTiles + elevBonus + (v.expa >= 16384 ? 2 : (v.expa >= 8192 ? 1 : 0)));
         int effVr = applyWeatherSight(vr);
         if (v.bonusSight != 0) {
-            effVr = std::clamp(effVr + (v.bonusSight * visPct) / 100, 1, 63);
+            effVr = std::clamp(effVr + (v.bonusSight * visPct) / 100, 1, 31);
+        }
+        if (difficulty_ == 1 && v.owner == 0) {
+            effVr = std::clamp((effVr * 13) / 10, 1, 31);
         }
         if (marchBonus > 0) {
-            // Gold 0x1001d3e0 adds (marchsightbonus * visPct) / 100 after base weather sight.
-            effVr = std::clamp(effVr + (marchBonus * visPct) / 100, effVr, 63);
+            // Gold 0x1001d3e0..0x1001d46f adds (marchsightbonus * visPct) / 100 after base vehicle sight,
+            // re-applies Easy 1.3x for player units, clamps to 31 (0x1f), and takes max(base, result).
+            int withMarch = effVr + (marchBonus * visPct) / 100;
+            if (difficulty_ == 1 && v.owner == 0) {
+                withMarch = (withMarch * 13) / 10;
+            }
+            effVr = std::max(effVr, std::min(31, withMarch));
         }
         revealWithAllies(v.cell.x / 2, v.cell.y / 2, effVr, v.owner);
     }
@@ -1789,6 +1798,10 @@ std::vector<SoldierPose> TutorialUnits::step() {
             const int decay = (v.alive && v.hp > 0 && v.hasCrew)
                 ? officerAuraDecayAt(v.owner, v.fx, v.fy) : 1;
             v.suppressionTicks = std::max(0, v.suppressionTicks - decay);
+            if (v.suppressionTicks == 0 && v.marchEnabled && v.hatchOpen) {
+                fogDirty_ = true;
+                emitVehiclePose(i);
+            }
         }
     }
     stepSupportApproach();

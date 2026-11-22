@@ -34,6 +34,11 @@ void testSightAndLosControls() {
     assert(effectiveSightRadius(smg, 0, false, 0, 1) == 14);
     assert(effectiveSightRadius(dg, 0, false, 0, 1) == 15);
     assert(effectiveSightRadius(off, 0, false, 0, 1) == 16);
+    // Gold CSoldier::GetSightRadius (0x100213a7: cmp eax, 0x1f) caps sight at 31 tiles.
+    auto maxSightDesc = dg;
+    maxSightDesc.sightBase = 30;
+    maxSightDesc.sightDelta = 0;
+    assert(effectiveSightRadius(maxSightDesc, 0, false, 0, 1) == 31);
     // Crouching sight drop
     assert(effectiveSightRadius(dg, 0, true, 0, 2) == 9);
     // Fallback crouch sight follows retail crouchsight base..max: dguner/aguner

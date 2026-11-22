@@ -30,7 +30,7 @@ int TutorialUnits::scaleVehicleDamageForDifficulty(int targetOwner, int rawDamag
 }
 
 bool TutorialUnits::isVehicleUnbuttoned(const Vehicle& v) const {
-    return v.hasCrew && v.marchEnabled && v.hatchOpen &&
+    return v.hasCrew && v.marchEnabled && v.hatchOpen && v.suppressionTicks == 0 &&
            (v.lastCombatTick == 0u || tick_ >= v.lastCombatTick + 125u);
 }
 
