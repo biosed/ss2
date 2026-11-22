@@ -8,8 +8,11 @@
 
 #include <SDL3/SDL.h>
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -382,6 +385,229 @@ int main(int argc, char** argv) try {
                 "Reloaded ALONE GameSession re-fired OP(40) Wave 0");
         s2.updateHudAndBeams();
         s2.renderer.present(s2.empty);
+    }
+
+    // End-to-end British Campaign carryover test (030000.ssc -> 030001.ssc):
+    // real OP(84) player pool save + OP(17) next-mission signal + Easy/Normal resolution +
+    // per-profile SS2POOL1 disk persistence + 030001.ssc OP(72)/OP(40) carryover spawn +
+    // --record / ReplayFile initialSavedPools stateHash parity.
+    {
+        const auto britM1 = gameDir / "maps/campaign/030000.ssc";
+        const auto britM2 = gameDir / "maps/campaign/030001.ssc";
+        const auto britM2Easy = gameDir / "maps/campaign/EASY/030001.ssc";
+        require(std::filesystem::is_regular_file(britM1) &&
+                    std::filesystem::is_regular_file(britM2) &&
+                    std::filesystem::is_regular_file(britM2Easy),
+                "Missing retail British Campaign 030000.ssc / 030001.ssc / EASY/030001.ssc");
+
+        const auto nonce = std::chrono::steady_clock::now().time_since_epoch().count();
+        const auto xdgRoot = std::filesystem::temp_directory_path() /
+                             ("ss2_camp_e2e_" + std::to_string(nonce));
+        const char* prevData = std::getenv("XDG_DATA_HOME");
+        const char* prevCfg = std::getenv("XDG_CONFIG_HOME");
+        struct XdgGuard {
+            std::filesystem::path root;
+            std::optional<std::string> oldData;
+            std::optional<std::string> oldCfg;
+            ~XdgGuard() {
+                if (oldData) ::setenv("XDG_DATA_HOME", oldData->c_str(), 1);
+                else ::unsetenv("XDG_DATA_HOME");
+                if (oldCfg) ::setenv("XDG_CONFIG_HOME", oldCfg->c_str(), 1);
+                else ::unsetenv("XDG_CONFIG_HOME");
+                std::error_code ec;
+                std::filesystem::remove_all(root, ec);
+            }
+        } xdgGuard{
+            xdgRoot,
+            prevData ? std::optional<std::string>(prevData) : std::nullopt,
+            prevCfg ? std::optional<std::string>(prevCfg) : std::nullopt,
+        };
+        const auto xdgData = xdgRoot / "data";
+        const auto xdgCfg = xdgRoot / "config";
+        ::setenv("XDG_DATA_HOME", xdgData.c_str(), 1);
+        ::setenv("XDG_CONFIG_HOME", xdgCfg.c_str(), 1);
+
+        std::optional<std::filesystem::path> nextMission;
+        ss2::SavedUnitPoolMap inMemPools;
+        {
+            ss2::UserSettings m1Settings{};
+            m1Settings.activeProfile = "BritCmdr";
+            m1Settings.difficulty = 2;
+            ss2::GameSession m1(
+                win, validate ? &report : nullptr,
+                0, false, gameDir, britM1, {}, false, true,
+                m1Settings, true, false, &nextMission, {}, nullptr, true, {}, {}, &inMemPools);
+            require(m1.simulation && m1.scene && m1.selection,
+                    "British 030000.ssc GameSession failed to initialize");
+            while (m1.briefing.active()) m1.handleInputEvent(makeKeyDown(win, SDLK_RETURN));
+
+            // Step 030000.ssc so Script 0's immediate Wave 0 spawns Player 0 units.
+            for (int t = 0; t < 30; ++t) {
+                m1.simulation->advanceTicks(1);
+                m1.stepSimulationEvents();
+                while (m1.briefing.active()) m1.handleInputEvent(makeKeyDown(win, SDLK_RETURN));
+            }
+            const auto preWinSnap = m1.simulation->takeSnapshot();
+            std::size_t aliveP0BeforeWin = 0;
+            for (const auto& s : preWinSnap.soldiers) {
+                if (s.owner == 0 && s.hp > 0 && !s.embarked) ++aliveP0BeforeWin;
+            }
+            for (const auto& v : preWinSnap.vehicles) {
+                if (v.owner == 0 && v.alive && v.hp > 0) ++aliveP0BeforeWin;
+            }
+            require(aliveP0BeforeWin > 0u, "British 030000.ssc must have living Player 0 units after Wave 0");
+
+            // Advance timer 64 to fire real Script 15 (#64 OP(27) ... #7681 OP(17) #0 #0 OP(84) #1 OP(18)).
+            auto full = m1.simulation->takeFullSnapshot();
+            require(full.tutorial.active.size() > 15u && full.tutorial.active[15],
+                    "British 030000.ssc Script 15 must be active");
+            full.tutorial.timers[64] = m1.simulation->simTick() + 1u;
+            require(m1.simulation->loadFullSnapshot(full), "loadFullSnapshot failed on British 030000.ssc");
+
+            for (int t = 0; t < 80 && !m1.menu.active(); ++t) {
+                m1.simulation->advanceTicks(1);
+                m1.stepSimulationEvents();
+                while (m1.briefing.active()) m1.handleInputEvent(makeKeyDown(win, SDLK_RETURN));
+            }
+            require(m1.menu.active(), "British 030000.ssc Script 15 OP(18) must open Victory Debrief Menu");
+            require(inMemPools.contains(0u) && inMemPools[0u].size() == aliveP0BeforeWin,
+                    "OP(84) on British 030000.ssc must save all surviving top-level Player 0 units into Pool 0");
+            require(m1.nextCampaignMissionPath.has_value() &&
+                        std::filesystem::weakly_canonical(*m1.nextCampaignMissionPath) ==
+                            std::filesystem::weakly_canonical(britM2),
+                    "Normal-difficulty OP(17) #7681 must resolve to maps/campaign/030001.ssc");
+
+            // Verify Easy difficulty OP(17) resolves to EASY/030001.ssc, then restore Normal.
+            m1.closeMenu();
+            m1Settings.difficulty = 1;
+            m1.openDebriefMenu(true);
+            require(m1.nextCampaignMissionPath.has_value() &&
+                        std::filesystem::weakly_canonical(*m1.nextCampaignMissionPath) ==
+                            std::filesystem::weakly_canonical(britM2Easy),
+                    "Easy-difficulty OP(17) #7681 must resolve to maps/campaign/EASY/030001.ssc");
+            m1.closeMenu();
+            m1Settings.difficulty = 2;
+            m1.openDebriefMenu(true);
+
+            // Verify SS2POOL1 disk persistence under XDG_DATA_HOME/ss2/campaigns/.
+            const auto poolDiskPath = ss2::campaignPoolPathForMission("BritCmdr", *m1.nextCampaignMissionPath);
+            const auto diskPools = ss2::readCampaignPoolFile(poolDiskPath);
+            require(diskPools.has_value() && *diskPools == inMemPools,
+                    "Debrief Menu Victory must persist SS2POOL1 carryover file for next campaign mission");
+
+            // Activate "next_campaign" from the Debrief Menu via keyboard navigation.
+            for (int step = 0; step < 16 && m1.menu.highlighted() != "next_campaign"; ++step) {
+                m1.handleInputEvent(makeKeyDown(win, SDLK_DOWN));
+            }
+            require(m1.menu.highlighted() == "next_campaign", "Debrief Menu must highlight next_campaign item");
+            m1.handleInputEvent(makeKeyDown(win, SDLK_RETURN));
+            require(!m1.running && nextMission.has_value() &&
+                        std::filesystem::weakly_canonical(*nextMission) ==
+                            std::filesystem::weakly_canonical(britM2),
+                    "Activating next_campaign must exit Mission 1 and output 030001.ssc");
+        }
+
+        // Control session on 030001.ssc with empty pools: Group 70 carryover wave must be empty.
+        std::size_t emptyTotalP0 = 0;
+        {
+            ss2::UserSettings ctrlSettings{};
+            ss2::GameSession m2Empty(
+                win, validate ? &report : nullptr,
+                0, false, gameDir, *nextMission, {}, false, true,
+                ctrlSettings, false, false, nullptr, {}, nullptr, true);
+            while (m2Empty.briefing.active()) m2Empty.handleInputEvent(makeKeyDown(win, SDLK_RETURN));
+            for (int t = 0; t < 25; ++t) {
+                m2Empty.simulation->advanceTicks(1);
+                m2Empty.stepSimulationEvents();
+                while (m2Empty.briefing.active()) m2Empty.handleInputEvent(makeKeyDown(win, SDLK_RETURN));
+            }
+            const auto snapEmpty = m2Empty.simulation->takeSnapshot();
+            std::size_t grp70Empty = 0;
+            for (const auto& s : snapEmpty.soldiers) {
+                if (s.owner == 0 && s.hp > 0) {
+                    ++emptyTotalP0;
+                    if (s.group == 70) ++grp70Empty;
+                }
+            }
+            for (const auto& v : snapEmpty.vehicles) {
+                if (v.owner == 0 && v.alive && v.hp > 0) {
+                    ++emptyTotalP0;
+                    if (v.group == 70) ++grp70Empty;
+                }
+            }
+            require(grp70Empty == 0u, "Control 030001.ssc without carryover pools must have 0 Group 70 units");
+        }
+
+        // Carryover session on 030001.ssc loaded from disk SS2POOL1 (simulating process restart) + --record.
+        const auto m2RepPath = xdgRoot / "brit_030001.ss2rep";
+        auto reloadedPools = ss2::readCampaignPoolFile(
+            ss2::campaignPoolPathForMission("BritCmdr", *nextMission));
+        require(reloadedPools.has_value() && !reloadedPools->empty(),
+                "Failed to reload persisted SS2POOL1 for 030001.ssc");
+
+        std::uint32_t m2EndTick = 0;
+        std::uint64_t m2EndHash = 0;
+        ss2::TutorialUnits::Snapshot m2EndSnap{};
+        {
+            ss2::UserSettings m2Settings{};
+            m2Settings.activeProfile = "BritCmdr";
+            m2Settings.difficulty = 2;
+            ss2::GameSession m2Carry(
+                win, validate ? &report : nullptr,
+                0, false, gameDir, *nextMission, {}, false, true,
+                m2Settings, false, false, nullptr, m2RepPath, nullptr, true, {}, {}, &*reloadedPools);
+            while (m2Carry.briefing.active()) m2Carry.handleInputEvent(makeKeyDown(win, SDLK_RETURN));
+            for (int t = 0; t < 25; ++t) {
+                m2Carry.simulation->advanceTicks(1);
+                m2Carry.stepSimulationEvents();
+                while (m2Carry.briefing.active()) m2Carry.handleInputEvent(makeKeyDown(win, SDLK_RETURN));
+            }
+            m2Carry.updateHudAndBeams();
+            m2Carry.renderer.present(m2Carry.empty);
+
+            m2EndTick = m2Carry.simulation->simTick();
+            m2EndHash = m2Carry.simulation->stateHash();
+            m2EndSnap = m2Carry.simulation->takeSnapshot();
+            std::size_t carryTotalP0 = 0;
+            std::size_t grp70Carry = 0;
+            for (const auto& s : m2EndSnap.soldiers) {
+                if (s.owner == 0 && s.hp > 0) {
+                    ++carryTotalP0;
+                    if (s.group == 70) ++grp70Carry;
+                }
+            }
+            for (const auto& v : m2EndSnap.vehicles) {
+                if (v.owner == 0 && v.alive && v.hp > 0) {
+                    ++carryTotalP0;
+                    if (v.group == 70) ++grp70Carry;
+                }
+            }
+            require(grp70Carry > 0u && carryTotalP0 > emptyTotalP0,
+                    "030001.ssc OP(72)+OP(40) must spawn carried-over units in Group 70");
+            m2Carry.writeRecordingIfRequested();
+        }
+
+        // Replay 030001.ssc solely from the recorded .ss2rep (nullptr campaignPools) and verify bit-identical stateHash.
+        std::ifstream repIn(m2RepPath, std::ios::binary);
+        require(static_cast<bool>(repIn), "Recorded 030001.ss2rep file missing");
+        std::ostringstream repBuf;
+        repBuf << repIn.rdbuf();
+        const auto parsedM2Rep = cmd::fromReplayFileText(repBuf.str());
+        require(parsedM2Rep.has_value() && parsedM2Rep->initialSavedPools == *reloadedPools,
+                "Recorded 030001.ss2rep must preserve initialSavedPools");
+
+        ss2::UserSettings m2RepSettings{};
+        ss2::GameSession m2Replay(
+            win, validate ? &report : nullptr,
+            0, false, gameDir, *nextMission, {}, false, true,
+            m2RepSettings, false, false, nullptr, {}, &*parsedM2Rep, false);
+        require(m2Replay.simulation != std::nullopt, "030001.ssc Replay GameSession missing simulation");
+        require(m2Replay.simulation->simTick() == m2EndTick &&
+                    m2Replay.simulation->stateHash() == m2EndHash &&
+                    m2Replay.simulation->takeSnapshot() == m2EndSnap,
+                "030001.ssc Replay GameSession stateHash/snapshot diverged from carryover live session");
+        m2Replay.updateHudAndBeams();
+        m2Replay.renderer.present(m2Replay.empty);
     }
 
     require(report.errors.load() == 0, "Vulkan validation errors observed during GameSession input test");

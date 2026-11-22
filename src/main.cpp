@@ -991,6 +991,12 @@ int main(int argc, char** argv) try {
         }
     }
     std::map<unsigned, std::vector<ss2::assets::ReinforcementUnit>> campaignUnitPools;
+    if (!mpConfig.enabled && !parsedReplay && loadSavePath.empty() && !mission.empty()) {
+        const auto poolPath = ss2::campaignPoolPathForMission(settings.activeProfile, mission);
+        if (auto diskPools = ss2::readCampaignPoolFile(poolPath)) {
+            campaignUnitPools = std::move(*diskPools);
+        }
+    }
     for (;;) {
         std::optional<std::filesystem::path> nextMission;
         result = ss2::runGameSession(window.get(), validate ? &report : nullptr, limit, timing, gameDir, mission, hdPack,

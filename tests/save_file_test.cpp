@@ -4,6 +4,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -404,6 +405,74 @@ int main() try {
         const auto disk2 = ss2::readSaveFile(path2);
         check(disk2.has_value() && disk2->fullSnapshot.has_value() && *disk2->fullSnapshot == full,
               "readSaveFile reloads SS2SAVE2 identically");
+    }
+
+    // 6. SS2POOL1 campaign carryover unit pool binary codec and per-profile disk persistence.
+    {
+        ss2::SavedUnitPoolMap pools;
+        pools[0u] = {
+            {"bedford", 70, 95, 100, 600, {
+                {"bcrew", 70, 100, 25, 300, true},
+                {"bofficer", 70, 90, 40, 1200, false},
+            }},
+            {"brifle", 70, 88, 55, 450, {}},
+        };
+        pools[4u] = {
+            {"cromwell", 71, 100, 64, 2000, {{"bcrew", 71, 100, 20, 900, true}}},
+        };
+        pools[9u] = {}; // empty wave should be stripped on encode
+
+        ss2::SavedUnitPoolMap expected = pools;
+        expected.erase(9u);
+
+        const auto poolBytes = ss2::encodeCampaignPools(pools);
+        check(poolBytes.size() >= 12u &&
+                  std::string_view(reinterpret_cast<const char*>(poolBytes.data()), 8u) == "SS2POOL1",
+              "encodeCampaignPools emits SS2POOL1 header");
+        const auto decPools = ss2::decodeCampaignPools(poolBytes);
+        check(decPools.has_value() && *decPools == expected,
+              "decodeCampaignPools round-trips non-empty waves losslessly");
+
+        check(!ss2::decodeCampaignPools({}).has_value(), "SS2POOL1 rejects empty buffer");
+        auto badPoolMagic = poolBytes;
+        badPoolMagic[7] = '9';
+        check(!ss2::decodeCampaignPools(badPoolMagic).has_value(), "SS2POOL1 rejects bad magic");
+        check(!ss2::decodeCampaignPools(
+                  std::span<const std::uint8_t>(poolBytes.data(), poolBytes.size() - 1u)).has_value(),
+              "SS2POOL1 rejects truncated payload");
+        auto trailingPool = poolBytes;
+        trailingPool.push_back(0u);
+        check(!ss2::decodeCampaignPools(trailingPool).has_value(), "SS2POOL1 rejects trailing byte");
+
+        const auto nonce = std::chrono::steady_clock::now().time_since_epoch().count();
+        TempDirGuard guard{std::filesystem::temp_directory_path() / ("ss2_pool_disk_" + std::to_string(nonce))};
+        const char* prevXdg = std::getenv("XDG_DATA_HOME");
+        const std::optional<std::string> savedXdg = prevXdg ? std::optional<std::string>(prevXdg) : std::nullopt;
+        struct EnvRestore {
+            std::optional<std::string> prev;
+            ~EnvRestore() {
+                if (prev) ::setenv("XDG_DATA_HOME", prev->c_str(), 1);
+                else ::unsetenv("XDG_DATA_HOME");
+            }
+        } envRestore{savedXdg};
+        ::setenv("XDG_DATA_HOME", guard.dir.c_str(), 1);
+
+        const auto pNorm = ss2::campaignPoolPathForMission("YourID", "maps/campaign/030001.ssc");
+        const auto pEasy = ss2::campaignPoolPathForMission("yourid", "maps/campaign/EASY/030001.ssc");
+        const auto pOther = ss2::campaignPoolPathForMission("Commander B", "maps/campaign/030001.ssc");
+        check(!pNorm.empty() && pNorm == pEasy, "Normal and EASY mission paths share case-insensitive profile pool path");
+        check(pNorm != pOther, "Distinct player profiles isolate campaign pool files");
+
+        check(ss2::writeCampaignPoolFile(pNorm, pools), "writeCampaignPoolFile writes SS2POOL1 file");
+        check(std::filesystem::is_regular_file(pNorm), "SS2POOL1 file exists on disk");
+        check(!ss2::readCampaignPoolFile(pOther).has_value(), "Other profile has no campaign pool file");
+        const auto diskPools = ss2::readCampaignPoolFile(pNorm);
+        check(diskPools.has_value() && *diskPools == expected, "readCampaignPoolFile reloads SS2POOL1 identically");
+
+        // Writing an empty pool map removes stale carryover from disk.
+        check(ss2::writeCampaignPoolFile(pNorm, {}), "writeCampaignPoolFile({}) cleans up existing pool file");
+        check(!std::filesystem::exists(pNorm) && !ss2::readCampaignPoolFile(pNorm).has_value(),
+              "Cleared campaign pool file is removed from disk");
     }
 
     std::cout << "save_file_test PASSED\n";

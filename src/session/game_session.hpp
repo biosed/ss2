@@ -182,6 +182,7 @@ struct GameSession {
     bool manualClock = false;
     std::filesystem::path loadSavePath;
     std::map<unsigned, std::vector<assets::ReinforcementUnit>>* campaignUnitPools{nullptr};
+    std::map<unsigned, std::vector<assets::ReinforcementUnit>> initialSavedPools;
     MultiplayerSessionConfig multiplayer;
     std::optional<LockstepCoordinator> lockstep;
     std::optional<StarRelayTransport> mpTransport;

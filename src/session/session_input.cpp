@@ -1,4 +1,5 @@
 #include "session/game_session.hpp"
+#include "session/save_file.hpp"
 #include <algorithm>
 #include <charconv>
 #include <cmath>
@@ -229,10 +230,16 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
             audio->nextMusicTrack();
             logHud(ss2::tr("Switched to next soundtrack track."));
         } else if (mr.activated == "next_campaign" && nextCampaignMissionPath && nextMissionOut) {
+            if (campaignUnitPools && simulation) {
+                *campaignUnitPools = simulation->savedUnitPools();
+            }
             *nextMissionOut = *nextCampaignMissionPath;
             menu.close();
             running = false;
         } else if (mr.activated == "replay" && !currentMissionPath.empty() && nextMissionOut) {
+            if (campaignUnitPools) {
+                *campaignUnitPools = initialSavedPools;
+            }
             *nextMissionOut = currentMissionPath;
             menu.close();
             running = false;
@@ -255,7 +262,18 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
                 if (ec1 == std::errc{} && e1 == rest.data() + sep &&
                     ec2 == std::errc{} && e2 == rest.data() + rest.size() &&
                     cIdx < menuCampaigns.size() && mIdx < menuCampaigns[cIdx].missions.size()) {
-                    *nextMissionOut = menuCampaigns[cIdx].missions[mIdx].path;
+                    const auto& cm = menuCampaigns[cIdx].missions[mIdx];
+                    const auto chosenPath = (settings.difficulty <= 1 && !cm.easyPath.empty()) ? cm.easyPath : cm.path;
+                    if (campaignUnitPools) {
+                        campaignUnitPools->clear();
+                        if (persistSettings) {
+                            const auto poolPath = ss2::campaignPoolPathForMission(settings.activeProfile, chosenPath);
+                            if (auto diskPools = ss2::readCampaignPoolFile(poolPath)) {
+                                *campaignUnitPools = std::move(*diskPools);
+                            }
+                        }
+                    }
+                    *nextMissionOut = chosenPath;
                     menu.close();
                     running = false;
                 }
@@ -269,6 +287,7 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
             std::size_t idx = 0;
             const auto [end, ec] = std::from_chars(idxStr.data(), idxStr.data() + idxStr.size(), idx);
             if (ec == std::errc{} && end == idxStr.data() + idxStr.size() && idx < menuMissions.size()) {
+                if (campaignUnitPools) campaignUnitPools->clear();
                 *nextMissionOut = menuMissions[idx].path;
                 menu.close();
                 running = false;

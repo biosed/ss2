@@ -21,6 +21,12 @@ auto fields(const assets::VehicleUnit& u) {
 auto fields(const TutorialUnits::ReserveUnit& r) {
     return std::tie(r.id, r.owner, r.group, r.hp, r.ammo, r.expa, r.pool);
 }
+auto fields(const assets::PassengerPlacement& p) {
+    return std::tie(p.id, p.group, p.hp, p.ammo, p.expa, p.isCrew);
+}
+auto fields(const assets::ReinforcementUnit& u) {
+    return std::tie(u.id, u.group, u.hp, u.ammo, u.expa, u.passengers);
+}
 auto fields(const TutorialUnits::Snapshot::SoldierState& s) {
     return std::tie(s.cellX, s.cellY, s.hp, s.maxHp, s.ammo, s.expa, s.kills, s.atGrenades, s.mineAmmo, s.owner,
                     s.group, s.direction, s.crouched, s.holdFire, s.binoculars, s.embarked, s.garrisonBuilding,
@@ -344,6 +350,13 @@ std::string toReplayFileText(const ReplayFile& file) {
     if (file.autoEngage) out += std::string("# auto_engage: ") + (*file.autoEngage ? "1\n" : "0\n");
     out += "# end_tick: " + std::to_string(file.endTick) + '\n';
     if (file.endStateHash) out += "# end_state_hash: " + formatHex64(*file.endStateHash) + '\n';
+    for (const auto& [poolIdx, wave] : file.initialSavedPools) {
+        if (wave.empty()) continue;
+        Writer w;
+        w.put(poolIdx);
+        w.put(wave);
+        out += "# saved_pool: " + w.take() + '\n';
+    }
     out += toText(file.commands);
     return out;
 }
@@ -387,6 +400,17 @@ std::optional<ReplayFile> fromReplayFileText(std::string_view text) {
                 const auto [p, ec] = std::from_chars(val.data(), val.data() + val.size(), h, 16);
                 if (ec != std::errc{} || p != val.data() + val.size()) return std::nullopt;
                 out.endStateHash = h;
+            } else if (meta.starts_with("saved_pool:")) {
+                const auto val = trimAsciiSpace(meta.substr(11));
+                if (val.empty()) return std::nullopt;
+                Reader r(val);
+                unsigned poolIdx = 0;
+                std::vector<assets::ReinforcementUnit> wave;
+                if (!r.get(poolIdx) || !r.get(wave) || !r.atEnd() || wave.empty() ||
+                    out.initialSavedPools.contains(poolIdx)) {
+                    return std::nullopt;
+                }
+                out.initialSavedPools.emplace(poolIdx, std::move(wave));
             }
             continue;
         }

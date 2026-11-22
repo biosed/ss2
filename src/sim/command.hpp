@@ -2,6 +2,7 @@
 #include "sim/tutorial_units.hpp"
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <span>
 #include <string>
@@ -433,6 +434,7 @@ struct ReplayFile {
     std::optional<bool> autoEngage;
     std::uint32_t endTick{0};
     std::optional<std::uint64_t> endStateHash;
+    std::map<unsigned, std::vector<assets::ReinforcementUnit>> initialSavedPools;
     std::vector<RecordedCommand> commands;
     bool operator==(const ReplayFile&) const = default;
 };

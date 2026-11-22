@@ -110,6 +110,16 @@ inline std::filesystem::path defaultCustomCampaignsDir() {
     return {};
 }
 
+inline std::filesystem::path defaultCampaignPoolsDir() {
+    if (const char* xdg = std::getenv("XDG_DATA_HOME"); xdg && *xdg) {
+        return std::filesystem::path(xdg) / "ss2" / "campaigns";
+    }
+    if (const char* home = std::getenv("HOME"); home && *home) {
+        return std::filesystem::path(home) / ".local" / "share" / "ss2" / "campaigns";
+    }
+    return {};
+}
+
 inline bool profileNameEquals(std::string_view a, std::string_view b) {
     if (a.size() != b.size()) return false;
     for (std::size_t i = 0; i < a.size(); ++i) {

@@ -135,6 +135,16 @@ void testSerialization() {
     repFile.autoEngage = false;
     repFile.endTick = 0xffffffffu;
     repFile.endStateHash = 0xdeadbeefcafef00dull;
+    repFile.initialSavedPools[0u] = {
+        {"sdkfz 251", 70, 95, 80, 1200, {
+            {"dcrew", 70, 100, 40, 800, true},
+            {"dofficer 'a%b", 70, 88, 30, 1500, false},
+        }},
+        {"dguner", 70, 92, 45, 400, {}},
+    };
+    repFile.initialSavedPools[3u] = {
+        {"sherman.v", 12, 100, 71, 2400, {{"acrew", 12, 100, 20, 600, true}}},
+    };
     repFile.commands = {
         {0u, cmd::Acknowledge{}},
         {12u, cmd::Move{{0, 1}, 2960, 1776, false}},
@@ -145,6 +155,14 @@ void testSerialization() {
             "plain fromText must still read a ReplayFile body");
     const auto parsedRep = cmd::fromReplayFileText(repText);
     require(parsedRep && *parsedRep == repFile, "ReplayFile round trip failed");
+    require(!cmd::fromReplayFileText("# saved_pool:\n"), "fromReplayFileText must reject empty saved_pool");
+    require(!cmd::fromReplayFileText("# saved_pool: 0 0\n"), "fromReplayFileText must reject empty saved_pool wave");
+    require(!cmd::fromReplayFileText("# saved_pool: 0 1 'rifle 1 100\n"),
+            "fromReplayFileText must reject truncated saved_pool unit");
+    require(!cmd::fromReplayFileText("# saved_pool: 0 1 'rifle 1 100 50 0 0 extra\n"),
+            "fromReplayFileText must reject trailing saved_pool tokens");
+    require(!cmd::fromReplayFileText("# saved_pool: 0 1 'rifle 1 100 50 0 0\n# saved_pool: 0 1 'rifle 1 100 50 0 0\n"),
+            "fromReplayFileText must reject duplicate saved_pool index");
     require(!cmd::fromReplayFileText("# difficulty: 4\n"), "fromReplayFileText must reject out-of-range difficulty");
     require(!cmd::fromReplayFileText("# auto_engage: maybe\n"), "fromReplayFileText must reject bad auto_engage");
     require(!cmd::fromReplayFileText("# end_state_hash: 0xzz\n"), "fromReplayFileText must reject bad hex hash");

@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <map>
 #include <optional>
 #include <span>
 #include <string>
@@ -54,5 +55,14 @@ std::optional<DecodedSaveFile> readSaveFile(const std::filesystem::path& path);
 std::string inferSaveSlotLabel(std::string_view fileStem);
 std::string stripSaveSlotSuffix(std::string_view fileStem);
 std::string formatSaveTimestamp(std::int64_t epochSec);
+
+using SavedUnitPoolMap = std::map<unsigned, std::vector<assets::ReinforcementUnit>>;
+
+std::vector<std::uint8_t> encodeCampaignPools(const SavedUnitPoolMap& pools);
+std::optional<SavedUnitPoolMap> decodeCampaignPools(std::span<const std::uint8_t> bytes);
+bool writeCampaignPoolFile(const std::filesystem::path& path, const SavedUnitPoolMap& pools);
+std::optional<SavedUnitPoolMap> readCampaignPoolFile(const std::filesystem::path& path);
+std::filesystem::path campaignPoolPathForMission(std::string_view profileName,
+                                                 const std::filesystem::path& missionPath);
 
 } // namespace ss2

@@ -538,8 +538,17 @@ void GameSession::initializeMission() {
         const std::string selTitle = isTutorial1 ? (mapScale == 2 ? "Tutorial I (2x HD)" : "Tutorial I")
                                                  : missionPath.stem().string();
         currentMissionTitle = selTitle;
+        initialSavedPools.clear();
+        const auto& rawPools = replayFile
+            ? replayFile->initialSavedPools
+            : (campaignUnitPools ? *campaignUnitPools
+                                 : std::map<unsigned, std::vector<assets::ReinforcementUnit>>{});
+        for (const auto& [poolIdx, wave] : rawPools) {
+            if (!wave.empty()) initialSavedPools.emplace(poolIdx, wave);
+        }
         if (replayFile) {
-            simulation.emplace(ss2::MissionRunner::ManualClock{}, std::move(data), std::move(soldiers));
+            simulation.emplace(ss2::MissionRunner::ManualClock{}, std::move(data), std::move(soldiers),
+                               initialSavedPools);
             if (!simulation->replay(replayFile->commands, replayFile->endTick)) {
                 throw std::runtime_error("Replay log failed before reaching end_tick " +
                                          std::to_string(replayFile->endTick));
@@ -577,14 +586,11 @@ void GameSession::initializeMission() {
             nextLockstepTickAt = std::chrono::steady_clock::now();
         } else if (manualClock) {
             simulation.emplace(ss2::MissionRunner::ManualClock{}, std::move(data), std::move(soldiers),
-                               campaignUnitPools ? *campaignUnitPools
-                                                 : std::map<unsigned, std::vector<assets::ReinforcementUnit>>{});
+                               initialSavedPools);
             simulation->startRecording();
         } else {
             simulation.emplace(std::move(data), ss2::tutorialTurnDelay(gameDir), std::move(soldiers),
-                               !recordPath.empty(),
-                               campaignUnitPools ? *campaignUnitPools
-                                                 : std::map<unsigned, std::vector<assets::ReinforcementUnit>>{});
+                               !recordPath.empty(), initialSavedPools);
             if (settings.speedPercent != 100) simulation->setSpeedPercent(settings.speedPercent);
         }
         liveVisibleMines = simulation->visibleMines();
@@ -686,6 +692,7 @@ void GameSession::writeRecordingIfRequested() {
         recorded.autoEngage = autoEngage;
         recorded.endTick = simulation->simTick();
         recorded.endStateHash = simulation->stateHash();
+        recorded.initialSavedPools = initialSavedPools;
         recorded.commands = simulation->takeRecording();
         if (recordPath.has_parent_path()) {
             std::error_code dirEc;
@@ -715,7 +722,7 @@ int GameSession::run() {
         (void)mpTransport->sendBye(ss2::ByePacket{static_cast<std::uint8_t>(localOwner()), "Session ended"});
     }
     writeRecordingIfRequested();
-    if (campaignUnitPools && simulation) {
+    if (campaignUnitPools && simulation && (!nextMissionOut || !nextMissionOut->has_value())) {
         *campaignUnitPools = simulation->savedUnitPools();
     }
     std::cout << "Presented " << frames << " frames\n";

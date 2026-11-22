@@ -333,8 +333,20 @@ void GameSession::openDebriefMenu(bool victory) {
                 return str;
             };
             if (const auto m = ss2::assets::findCampaignMission(gameDir, pad3(sig->first) + pad3(sig->second))) {
-                nextCampaignMissionPath = m->path;
+                nextCampaignMissionPath = (settings.difficulty <= 1 && !m->easyPath.empty()) ? m->easyPath : m->path;
                 nextCampaignMissionTitle = m->title;
+            }
+        }
+    }
+    if (victory && simulation && !multiplayer.enabled) {
+        const auto pools = simulation->savedUnitPools();
+        if (campaignUnitPools) {
+            *campaignUnitPools = pools;
+        }
+        if (persistSettings && nextCampaignMissionPath) {
+            const auto poolPath = ss2::campaignPoolPathForMission(settings.activeProfile, *nextCampaignMissionPath);
+            if (!poolPath.empty()) {
+                (void)ss2::writeCampaignPoolFile(poolPath, pools);
             }
         }
     }

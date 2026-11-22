@@ -1,4 +1,5 @@
 #include "session/save_file.hpp"
+#include "ui/settings.hpp"
 
 #include <algorithm>
 #include <array>
@@ -12,6 +13,7 @@ namespace {
 
 constexpr std::array<std::uint8_t, 8> kSaveMagicV1{'S', 'S', '2', 'S', 'A', 'V', 'E', '1'};
 constexpr std::array<std::uint8_t, 8> kSaveMagicV2{'S', 'S', '2', 'S', 'A', 'V', 'E', '2'};
+constexpr std::array<std::uint8_t, 8> kPoolMagicV1{'S', 'S', '2', 'P', 'O', 'O', 'L', '1'};
 constexpr std::uint32_t kMaxStringBytes = 4096u;
 
 void appendU32(std::vector<std::uint8_t>& out, std::uint32_t v) {
@@ -302,6 +304,151 @@ std::string formatSaveTimestamp(std::int64_t epochSec) {
     char buf[32];
     if (std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M", &tm) == 0) return {};
     return std::string(buf);
+}
+
+std::vector<std::uint8_t> encodeCampaignPools(const SavedUnitPoolMap& pools) {
+    std::uint32_t nonEmptyCount = 0;
+    for (const auto& [poolIdx, wave] : pools) {
+        (void)poolIdx;
+        if (!wave.empty()) ++nonEmptyCount;
+    }
+    std::vector<std::uint8_t> out;
+    out.reserve(16u + nonEmptyCount * 64u);
+    out.insert(out.end(), kPoolMagicV1.begin(), kPoolMagicV1.end());
+    appendU32(out, nonEmptyCount);
+    for (const auto& [poolIdx, wave] : pools) {
+        if (wave.empty()) continue;
+        appendU32(out, static_cast<std::uint32_t>(poolIdx));
+        appendU32(out, static_cast<std::uint32_t>(wave.size()));
+        for (const auto& u : wave) {
+            appendString(out, u.id);
+            appendI32(out, static_cast<std::int32_t>(u.group));
+            appendI32(out, static_cast<std::int32_t>(u.hp));
+            appendI32(out, static_cast<std::int32_t>(u.ammo));
+            appendI32(out, static_cast<std::int32_t>(u.expa));
+            appendU32(out, static_cast<std::uint32_t>(u.passengers.size()));
+            for (const auto& p : u.passengers) {
+                appendString(out, p.id);
+                appendI32(out, static_cast<std::int32_t>(p.group));
+                appendI32(out, static_cast<std::int32_t>(p.hp));
+                appendI32(out, static_cast<std::int32_t>(p.ammo));
+                appendI32(out, static_cast<std::int32_t>(p.expa));
+                out.push_back(p.isCrew ? 1u : 0u);
+            }
+        }
+    }
+    return out;
+}
+
+std::optional<SavedUnitPoolMap> decodeCampaignPools(std::span<const std::uint8_t> bytes) {
+    if (bytes.size() < kPoolMagicV1.size() ||
+        !std::equal(kPoolMagicV1.begin(), kPoolMagicV1.end(), bytes.begin())) {
+        return std::nullopt;
+    }
+    Reader r{bytes, kPoolMagicV1.size()};
+    std::uint32_t poolCount = 0;
+    if (!r.readU32(poolCount) || poolCount > (bytes.size() - r.pos) / 8u) return std::nullopt;
+    SavedUnitPoolMap out;
+    for (std::uint32_t pi = 0; pi < poolCount; ++pi) {
+        std::uint32_t poolIdx = 0;
+        std::uint32_t unitCount = 0;
+        if (!r.readU32(poolIdx) || !r.readU32(unitCount) || unitCount == 0u ||
+            unitCount > (bytes.size() - r.pos) / 24u || out.contains(poolIdx)) {
+            return std::nullopt;
+        }
+        std::vector<assets::ReinforcementUnit> wave(unitCount);
+        for (auto& u : wave) {
+            std::int32_t grp = 0, hp = 0, ammo = 0, expa = 0;
+            std::uint32_t paxCount = 0;
+            if (!r.readString(u.id) || !r.readI32(grp) || !r.readI32(hp) || !r.readI32(ammo) ||
+                !r.readI32(expa) || !r.readU32(paxCount) || paxCount > (bytes.size() - r.pos) / 21u) {
+                return std::nullopt;
+            }
+            u.group = grp;
+            u.hp = hp;
+            u.ammo = ammo;
+            u.expa = expa;
+            u.passengers.resize(paxCount);
+            for (auto& p : u.passengers) {
+                std::int32_t pgrp = 0, php = 0, pammo = 0, pexpa = 0;
+                if (!r.readString(p.id) || !r.readI32(pgrp) || !r.readI32(php) ||
+                    !r.readI32(pammo) || !r.readI32(pexpa) || r.pos >= bytes.size()) {
+                    return std::nullopt;
+                }
+                const std::uint8_t crewByte = bytes[r.pos++];
+                if (crewByte > 1u) return std::nullopt;
+                p.group = pgrp;
+                p.hp = php;
+                p.ammo = pammo;
+                p.expa = pexpa;
+                p.isCrew = (crewByte == 1u);
+            }
+        }
+        out.emplace(poolIdx, std::move(wave));
+    }
+    if (r.pos != bytes.size()) return std::nullopt;
+    return out;
+}
+
+bool writeCampaignPoolFile(const std::filesystem::path& path, const SavedUnitPoolMap& pools) {
+    if (path.empty()) return false;
+    bool hasAny = false;
+    for (const auto& [poolIdx, wave] : pools) {
+        (void)poolIdx;
+        if (!wave.empty()) {
+            hasAny = true;
+            break;
+        }
+    }
+    if (!hasAny) {
+        std::error_code ec;
+        (void)std::filesystem::remove(path, ec);
+        return !ec;
+    }
+    return writeEncodedBytes(path, encodeCampaignPools(pools));
+}
+
+std::optional<SavedUnitPoolMap> readCampaignPoolFile(const std::filesystem::path& path) {
+    if (path.empty()) return std::nullopt;
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(path, ec) || ec) return std::nullopt;
+    std::ifstream in(path, std::ios::binary | std::ios::ate);
+    if (!in) return std::nullopt;
+    const auto endPos = in.tellg();
+    if (endPos <= 0) return std::nullopt;
+    std::vector<std::uint8_t> bytes(static_cast<std::size_t>(endPos));
+    in.seekg(0);
+    if (!in.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()))) {
+        return std::nullopt;
+    }
+    return decodeCampaignPools(bytes);
+}
+
+std::filesystem::path campaignPoolPathForMission(std::string_view profileName,
+                                                 const std::filesystem::path& missionPath) {
+    const std::string missionKey = normalizeMissionKey(missionPath.stem().string());
+    if (missionKey.empty()) return {};
+    std::string cleanProf = sanitizeProfileName(profileName);
+    if (cleanProf.empty()) cleanProf = "YourID";
+    static constexpr char hex[] = "0123456789ABCDEF";
+    std::string profKey;
+    profKey.reserve(cleanProf.size() * 2u);
+    for (const unsigned char ch : cleanProf) {
+        if ((ch >= '0' && ch <= '9') || (ch >= 'A' && ch <= 'Z') || ch == '-') {
+            profKey.push_back(static_cast<char>(ch));
+        } else if (ch >= 'a' && ch <= 'z') {
+            profKey.push_back(static_cast<char>(ch - 'a' + 'A'));
+        } else {
+            profKey.push_back('_');
+            profKey.push_back(hex[ch >> 4u]);
+            profKey.push_back(hex[ch & 0xfu]);
+        }
+    }
+    std::filesystem::path dir = defaultCampaignPoolsDir();
+    if (dir.empty()) {
+        dir = std::filesystem::temp_directory_path() / "ss2" / "campaigns";
+    }
+    return dir / (profKey + "_" + missionKey + ".ss2pool");
 }
 
 } // namespace ss2
