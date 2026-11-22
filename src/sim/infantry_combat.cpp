@@ -133,6 +133,12 @@ void FogGrid::clearCurrentVisibility() {
     for (auto& cell : fog_) cell &= 0xf0u;
 }
 
+bool FogGrid::setRaw(std::span<const std::uint8_t> raw) {
+    if (raw.size() != fog_.size()) return false;
+    std::copy(raw.begin(), raw.end(), fog_.begin());
+    return true;
+}
+
 void FogGrid::castRay(int startX, int startY, int dx, int dy, std::uint8_t mask) {
     if (startX < 0 || startX >= tileWidth_ || startY < 0 || startY >= tileHeight_) return;
 

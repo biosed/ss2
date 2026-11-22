@@ -23,6 +23,7 @@ public:
 
     void clearAll();
     void clearCurrentVisibility();
+    bool setRaw(std::span<const std::uint8_t> raw);
     void revealCircle(int tileX, int tileY, int radius, int side);
     void castRay(int startX, int startY, int dx, int dy, std::uint8_t mask);
 

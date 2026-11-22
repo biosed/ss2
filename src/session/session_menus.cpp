@@ -547,7 +547,7 @@ void GameSession::doSaveSlot(int slot) {
     meta.enemyScoreEarned = enemyScoreEarned;
     meta.friendlyScoreLost = friendlyScoreLost;
 
-    if (!ss2::writeSaveFile(path, meta, simulation->takeSnapshot())) {
+    if (!ss2::writeSaveFile(path, meta, simulation->takeFullSnapshot())) {
         orderNotice.show(ss2::tr("Could not write quick-save file."), ss2::NoticeKind::blocked);
         return;
     }
@@ -587,13 +587,23 @@ bool GameSession::loadSaveFromPath(const std::filesystem::path& path, const std:
         return false;
     }
     const auto& snap = decoded->snapshot;
-    if (!simulation->loadSnapshot(snap)) {
+    const bool loadedOk = decoded->fullSnapshot
+        ? simulation->loadFullSnapshot(*decoded->fullSnapshot)
+        : simulation->loadSnapshot(snap);
+    if (!loadedOk) {
         if (!isStartupLoad) {
             orderNotice.show(ss2::tr("Quick-save data is incompatible with this mission."), ss2::NoticeKind::blocked);
         }
         return false;
     }
 
+    if (campaignUnitPools) {
+        *campaignUnitPools = simulation->savedUnitPools();
+    }
+    pendingDialogs.clear();
+    manualBriefingOpen = false;
+    paused = simulation->isPaused();
+    menuPausedClock = false;
     fallenSoldiers.clear();
     recoilUntil.clear();
     woundedBarLogged.clear();
@@ -607,6 +617,7 @@ bool GameSession::loadSaveFromPath(const std::filesystem::path& path, const std:
     eventHistoryCursor = 0;
     syncMarkers();
     selectedBuilding.reset();
+    selection->setSelection({}, {});
     if (decoded->meta.hasMetadata) {
         enemyInfKilled = decoded->meta.enemyInfKilled;
         enemyVehDestroyed = decoded->meta.enemyVehDestroyed;
@@ -664,7 +675,42 @@ bool GameSession::loadSaveFromPath(const std::filesystem::path& path, const std:
             renderer.updateMapRegion(fogPatch.x, fogPatch.y, fogPatch.pixels);
         updateMinimapFog(*fogSnap, true);
     }
-    for (const auto& pose : simulation->pollPoses()) {
+    auto sortedSoldierPoses = simulation->pollPoses();
+    std::ranges::sort(sortedSoldierPoses, {}, &SoldierPose::index);
+    if (initialUnitHp.size() < snap.soldiers.size()) initialUnitHp.resize(snap.soldiers.size(), 100);
+    if (unitExpa.size() < snap.soldiers.size()) unitExpa.resize(snap.soldiers.size(), 0);
+    if (unitKills.size() < snap.soldiers.size()) unitKills.resize(snap.soldiers.size(), 0);
+    if (unitGrenades.size() < snap.soldiers.size()) unitGrenades.resize(snap.soldiers.size(), 0);
+    if (unitMineAmmo.size() < snap.soldiers.size()) unitMineAmmo.resize(snap.soldiers.size(), 0);
+    for (const auto& pose : sortedSoldierPoses) {
+        if (decoded->fullSnapshot && pose.index >= scene->units().size()) {
+            const auto& ids = decoded->fullSnapshot->unitsExtra.soldierIds;
+            const std::string wantId = (pose.index < ids.size() && !ids[pose.index].empty())
+                ? ids[pose.index]
+                : std::string("dguner");
+            ss2::assets::Placement p{wantId, pose.x, pose.y, static_cast<int>(pose.direction),
+                                     std::max(1, pose.hp), pose.ammo, pose.group, pose.owner, {}, pose.expa};
+            (void)ensureGpuInfantrySlot(wantId);
+            auto spawned = scene->spawn(p);
+            if (!spawned && wantId != "dguner") {
+                p.id = "dguner";
+                (void)ensureGpuInfantrySlot("dguner");
+                spawned = scene->spawn(p);
+            }
+            if (spawned) {
+                const auto& [newIdx, patch] = *spawned;
+                const auto& u = scene->units().at(newIdx);
+                ensureUnitPortrait(u.id, false);
+                selection->addUnit(scaleInfantry(u, mapScale));
+                if (newIdx >= initialUnitHp.size()) initialUnitHp.resize(newIdx + 1, 100);
+                if (newIdx >= unitGrenades.size()) unitGrenades.resize(newIdx + 1, 0);
+                if (newIdx >= unitMineAmmo.size()) unitMineAmmo.resize(newIdx + 1, 0);
+                unitGrenades[newIdx] = initialGrenadesForId(u.id);
+                unitMineAmmo[newIdx] = initialMinesForId(u.id);
+                if (patch.pixels.width && patch.pixels.height)
+                    renderer.updateMapRegion(patch.x, patch.y, patch.pixels);
+            }
+        }
         if (pose.index < scene->units().size()) {
             const auto patch = scene->update(pose.index, pose.x, pose.y, pose.direction,
                                              pose.progress, pose.walking, pose.hp,
@@ -672,6 +718,9 @@ bool GameSession::loadSaveFromPath(const std::filesystem::path& path, const std:
             if (patch.pixels.width && patch.pixels.height)
                 renderer.updateMapRegion(patch.x, patch.y, patch.pixels);
             selection->update(pose.index, scaleInfantry(scene->units().at(pose.index), mapScale));
+        }
+        if (pose.index < snap.soldiers.size()) {
+            initialUnitHp[pose.index] = std::max(1, snap.soldiers[pose.index].maxHp);
         }
         if (pose.index >= unitExpa.size()) unitExpa.resize(pose.index + 1, 0);
         if (pose.index >= unitKills.size()) unitKills.resize(pose.index + 1, 0);
@@ -684,8 +733,45 @@ bool GameSession::loadSaveFromPath(const std::filesystem::path& path, const std:
         if (pose.camouflaged) camouflagedUnits.insert(pose.index);
         if (pose.alive && pose.suppressed) suppressedUnits.insert(pose.index);
     }
+    for (std::size_t i = snap.soldiers.size(); i < scene->units().size(); ++i) {
+        const auto& u = scene->units().at(i);
+        const auto patch = scene->update(i, u.x, u.y, u.direction, 0u, false, 0, 0, 0);
+        if (patch.pixels.width && patch.pixels.height)
+            renderer.updateMapRegion(patch.x, patch.y, patch.pixels);
+        auto deadInf = scaleInfantry(scene->units().at(i), mapScale);
+        deadInf.hp = 0;
+        deadInf.visible = false;
+        selection->update(i, deadInf);
+    }
     if (vehicleScene) {
-        for (const auto& vp : simulation->pollVehiclePoses()) {
+        auto sortedVehPoses = simulation->pollVehiclePoses();
+        std::ranges::sort(sortedVehPoses, {}, &VehiclePose::index);
+        const std::size_t needVeh = std::max(snap.vehicles.size(),
+                                             sortedVehPoses.empty() ? 0u : (sortedVehPoses.back().index + 1u));
+        if (initialVehicleHp.size() < needVeh) initialVehicleHp.resize(needVeh, 100);
+        if (vehicleCargo.size() < needVeh) vehicleCargo.resize(needVeh, {0, 0});
+        if (vehicleTowed.size() < needVeh) vehicleTowed.resize(needVeh, -1);
+        if (vehicleTowedBy.size() < needVeh) vehicleTowedBy.resize(needVeh, -1);
+        if (vehicleAmmo2.size() < needVeh) vehicleAmmo2.resize(needVeh, 0);
+        if (vehExpa.size() < needVeh) vehExpa.resize(needVeh, 0);
+        if (vehKills.size() < needVeh) vehKills.resize(needVeh, 0);
+        if (vehicleCrewImpaired.size() < needVeh) vehicleCrewImpaired.resize(needVeh, false);
+        if (vehicleMoveImpaired.size() < needVeh) vehicleMoveImpaired.resize(needVeh, false);
+        if (vehicleSuppressed.size() < needVeh) vehicleSuppressed.resize(needVeh, false);
+        if (vehicleHatchOpen.size() < needVeh) vehicleHatchOpen.resize(needVeh, false);
+        for (const auto& vp : sortedVehPoses) {
+            if (decoded->fullSnapshot && vp.index >= vehicleScene->vehicles().size()) {
+                const auto& vids = decoded->fullSnapshot->unitsExtra.vehicleIds;
+                const std::string wantVeh = (vp.index < vids.size() && !vids[vp.index].empty())
+                    ? vids[vp.index]
+                    : std::string("tank");
+                ss2::assets::Placement vpPlace{wantVeh, vp.x, vp.y, static_cast<int>(vp.hullDir & 31u),
+                                               std::clamp(vp.hp, 1, 100), vp.ammo, vp.group, vp.owner, {}, 0};
+                if (const auto vIdx = vehicleScene->spawn(vpPlace)) {
+                    ensureUnitPortrait(wantVeh, true);
+                    selection->addVehicle(scaleVehicle(vehicleScene->vehicles().at(*vIdx), mapScale));
+                }
+            }
             if (vp.index < vehicleScene->vehicles().size()) {
                 vehicleScene->setOwner(vp.index, vp.owner);
                 const auto dirty = vehicleScene->update(vp.index, vp.x, vp.y, vp.hullDir, vp.turretDir,
@@ -697,18 +783,11 @@ bool GameSession::loadSaveFromPath(const std::filesystem::path& path, const std:
                 }
                 selection->updateVehicle(vp.index, scaleVehicle(vehicleScene->vehicles().at(vp.index), mapScale));
             }
-            if (vp.maxHp > 0 && vp.index < initialVehicleHp.size()) initialVehicleHp[vp.index] = vp.maxHp;
-            if (vp.index < vehicleCargo.size()) vehicleCargo[vp.index] = {vp.passengerCount, vp.passengerCapacity};
-            if (vp.index < vehicleTowed.size()) vehicleTowed[vp.index] = vp.towedIndex;
-            if (vp.index < vehicleTowedBy.size()) vehicleTowedBy[vp.index] = vp.towedByIndex;
-            if (vp.index >= vehicleAmmo2.size()) vehicleAmmo2.resize(vp.index + 1, 0);
+            if (vp.maxHp > 0) initialVehicleHp[vp.index] = vp.maxHp;
+            vehicleCargo[vp.index] = {vp.passengerCount, vp.passengerCapacity};
+            vehicleTowed[vp.index] = vp.towedIndex;
+            vehicleTowedBy[vp.index] = vp.towedByIndex;
             vehicleAmmo2[vp.index] = vp.ammo2;
-            if (vp.index >= vehExpa.size()) vehExpa.resize(vp.index + 1, 0);
-            if (vp.index >= vehKills.size()) vehKills.resize(vp.index + 1, 0);
-            if (vp.index >= vehicleCrewImpaired.size()) vehicleCrewImpaired.resize(vp.index + 1, false);
-            if (vp.index >= vehicleMoveImpaired.size()) vehicleMoveImpaired.resize(vp.index + 1, false);
-            if (vp.index >= vehicleSuppressed.size()) vehicleSuppressed.resize(vp.index + 1, false);
-            if (vp.index >= vehicleHatchOpen.size()) vehicleHatchOpen.resize(vp.index + 1, false);
             vehExpa[vp.index] = vp.expa;
             vehKills[vp.index] = vp.kills;
             vehicleCrewImpaired[vp.index] = vp.crewImpaired;
@@ -716,7 +795,22 @@ bool GameSession::loadSaveFromPath(const std::filesystem::path& path, const std:
             vehicleSuppressed[vp.index] = vp.suppressed;
             vehicleHatchOpen[vp.index] = vp.hatchOpen;
         }
+        for (std::size_t i = snap.vehicles.size(); i < vehicleScene->vehicles().size(); ++i) {
+            const auto& v = vehicleScene->vehicles().at(i);
+            const auto dirty = vehicleScene->update(i, v.x, v.y, v.hullDir, v.turretDir, 0, 0, 0);
+            if (mapScale == 1 && dirty.valid()) {
+                const auto patch = scene->repaintRegion(dirty.left, dirty.top, dirty.right, dirty.bottom);
+                if (patch.pixels.width && patch.pixels.height)
+                    renderer.updateMapRegion(patch.x, patch.y, patch.pixels);
+            }
+            auto deadVeh = scaleVehicle(vehicleScene->vehicles().at(i), mapScale);
+            deadVeh.hp = 0;
+            deadVeh.alive = false;
+            deadVeh.visible = false;
+            selection->updateVehicle(i, deadVeh);
+        }
     }
+    reportedLosses = selection->playerLosses();
     for (const auto& bu : simulation->pollBuildingUpdates()) {
         if (bu.index < liveBuildings.size()) {
             auto& lb = liveBuildings[bu.index];

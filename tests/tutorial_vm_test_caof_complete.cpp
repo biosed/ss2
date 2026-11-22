@@ -431,6 +431,144 @@ void runCaofCompleteOpcodes() {
         check(runnerD.stateHash() != runnerC.stateHash(), "MissionRunner::stateHash did not reflect mission diff");
     }
 
+    // 5. Complete FullSnapshot mid-mission save/load parity across OP(40) reinforcements,
+    //    VM timers/variables/AI/air-routes/pools, scheduled waves, evacuations, mines, fog & weather.
+    {
+        auto buildRichMission = [&](ss2::assets::WeatherKind initWeather)
+            -> std::pair<ss2::assets::MissionData, ss2::TutorialUnits> {
+            auto md = makeFlatMission();
+            md.weather = initWeather;
+            md.airSupport[0][0] = {"he111", 2, 1};
+            md.reinforcements[0] = {
+                {"rifle_caof", 31, 95, 90, 20, {}},
+                {"tank_caof", 31, 100, 100, 40, {{"rifle_caof", 31, 100, 100, 20, true}}},
+            };
+            md.reinforcements[1] = {
+                {"rifle_caof", 32, 100, 100, 0, {}},
+            };
+            md.scripts.push_back({
+                51u, 7u, 11u,
+                lit(1), lit(3), 12u,
+                lit(0x7fffff02u), lit(77), 47u,
+                lit(5), lit(11), 19u,
+                lit(1), lit(2), lit(5), 79u,
+                lit(1), lit(2), 44u,
+                lit(0), lit(2), lit(0), 24u,
+                lit(0), lit(0), lit(0), lit(1), lit(0), 40u,
+                lit(0), lit(1), lit(0), lit(1), lit(2), 40u,
+                lit(1), lit(2), 63u,
+                lit(6), lit(2), lit(44), 72u,
+                lit(2), lit(0), 85u,
+                0x7fffffffu
+            });
+            md.scripts.push_back({
+                lit(1), 27u, 7u,
+                lit(10), 14u, 51u,
+                0x7fffffffu
+            });
+
+            const auto [sx, sy] = px64(32, 32);
+            const auto [mx, my] = px64(14, 14);
+            std::vector<ss2::assets::Infantry> initInf{
+                {"rifle_caof", sx, sy, 100, 40, 1, 0},
+                {"rifle_caof", mx, my, 100, 40, 2, 0},
+            };
+            auto fog = ss2::FogGrid(md.width, md.height, md.flags);
+            fog.revealCircle(32, 32, 8, 0);
+            ss2::TutorialUnits units(
+                ss2::InfantryPathGrid::fromSubCellMasks(md.width, md.height, md.flags, md.obstacles),
+                initInf, {}, std::move(fog), 2, false, {}, cat);
+            units.setWeather(initWeather);
+            units.setAirSupport(md.airSupport, md.paratrooperGroup, md.paratrooperRoster);
+            return {std::move(md), std::move(units)};
+        };
+
+        auto [mdA, uA] = buildRichMission(ss2::assets::WeatherKind::Snow);
+        ss2::MissionRunner runnerA(ss2::MissionRunner::ManualClock{}, std::move(mdA), std::move(uA));
+        const auto earlyFull = runnerA.takeFullSnapshot();
+        check(earlyFull.units.soldiers.size() == 2u && earlyFull.units.vehicles.empty(),
+              "Pre-reinforcement FullSnapshot initial counts mismatch");
+
+        // Trigger tick-0 OP(51) fires and queues OP(40) wave 0 (immediate) + wave 1 (2s = 50 ticks delayed).
+        const auto ev0 = runnerA.poll();
+        bool sawWave0 = false;
+        for (const auto& ev : ev0) {
+            if (ev.kind == ss2::MissionEvent::Reinforcement && ev.index == 0u) sawWave0 = true;
+        }
+        check(sawWave0, "OP(40) wave 0 did not emit on tick 0");
+        // Spawn reinforcement units matching Session behavior (1 rifleman + 1 tank).
+        (void)runnerA.spawnInfantry({"rifle_caof", px64(14, 14).first, px64(14, 14).second, 95, 36, 31, 0}, 6553);
+        ss2::assets::VehicleUnit reinfTank{};
+        reinfTank.id = "tank_caof";
+        reinfTank.x = px64(15, 14).first;
+        reinfTank.y = px64(15, 14).second;
+        reinfTank.hp = 500;
+        reinfTank.ammo = 20;
+        reinfTank.owner = 0;
+        reinfTank.group = 31;
+        reinfTank.alive = true;
+        reinfTank.hasCrew = true;
+        (void)runnerA.spawnVehicle(reinfTank);
+        runnerA.advanceTicks(10u);
+
+        const auto midFull = runnerA.takeFullSnapshot();
+        check(midFull.units.soldiers.size() == 3u && midFull.units.vehicles.size() == 1u,
+              "Post-reinforcement FullSnapshot counts mismatch");
+        check(!midFull.tutorial.active[0], "Tick-0 OP(51) script should remain inactive after firing");
+        check(midFull.scheduledReinforcements.size() == 1u &&
+                  midFull.scheduledReinforcements[0].event.index == 1u,
+              "Pending scheduled OP(40) wave missing from FullSnapshot");
+
+        const auto serialized = ss2::MissionRunner::serializeFullSnapshot(midFull);
+        const auto decoded = ss2::MissionRunner::deserializeFullSnapshot(serialized);
+        check(decoded.has_value() && *decoded == midFull, "SS2FULL1 serialize/deserialize round-trip failed");
+
+        // Load post-reinforcement save into two BRAND NEW pre-reinforcement runners (Clear weather).
+        auto [mdB, uB] = buildRichMission(ss2::assets::WeatherKind::Clear);
+        ss2::MissionRunner runnerB(ss2::MissionRunner::ManualClock{}, std::move(mdB), std::move(uB));
+        auto [mdC, uC] = buildRichMission(ss2::assets::WeatherKind::Clear);
+        ss2::MissionRunner runnerC(ss2::MissionRunner::ManualClock{}, std::move(mdC), std::move(uC));
+        check(!runnerB.loadSnapshot(midFull.units),
+              "Legacy loadSnapshot without ExtraState should still reject grown counts");
+        check(runnerB.loadFullSnapshot(*decoded) && runnerC.loadFullSnapshot(*decoded),
+              "loadFullSnapshot into pre-reinforcement runner failed");
+        check(runnerB.simTick() == runnerA.simTick() && runnerB.takeFullSnapshot() == midFull,
+              "Loaded runnerB FullSnapshot diverged from runnerA");
+        check(runnerB.stateHash() == runnerC.stateHash(),
+              "Two runners loaded from identical SS2FULL1 diverged in stateHash");
+        check(runnerB.airSupportFor(0)[0].total == 2 && runnerB.airSupportFor(0)[0].ready == 3,
+              "Air plane total/ready mismatch after loadFullSnapshot");
+        check(runnerB.savedUnitPools().contains(2u) && !runnerB.reinforcementWave(6u).empty(),
+              "Pools/dynamic waves missing after loadFullSnapshot");
+        check(runnerB.countByPlayerMask(0, 4u) == runnerA.countByPlayerMask(0, 4u),
+              "Reserve count mismatch after loadFullSnapshot");
+
+        // Advance past scheduled wave 1 (tick 50) + timer (tick 75) on both loaded runners and confirm
+        // deterministic parity, OP(85) evacuation completion, AND no duplicate wave 0.
+        runnerB.advanceTicks(125u);
+        runnerC.advanceTicks(125u);
+        check(runnerB.stateHash() == runnerC.stateHash(),
+              "Post-load evolution diverged between two identically loaded runners");
+        check(runnerB.countByPlayerMask(0, 4u) >= 1u, "OP(85) evacuating unit did not reach reserve after load");
+        const auto evB = runnerB.poll();
+        int wave0Count = 0;
+        int wave1Count = 0;
+        for (const auto& ev : evB) {
+            if (ev.kind == ss2::MissionEvent::Reinforcement && ev.index == 0u) ++wave0Count;
+            if (ev.kind == ss2::MissionEvent::Reinforcement && ev.index == 1u) ++wave1Count;
+        }
+        check(wave0Count == 0 && wave1Count == 1,
+              "Expected no duplicate wave 0 and exactly 1 scheduled wave 1 after loadFullSnapshot");
+
+        // Now load the EARLIER pre-reinforcement save into runnerB and verify clean shrink-back!
+        check(runnerB.loadFullSnapshot(earlyFull), "Shrink-back loadFullSnapshot(earlyFull) failed");
+        const auto shrunkSnap = runnerB.takeFullSnapshot();
+        check(shrunkSnap == earlyFull && shrunkSnap.units.soldiers.size() == 2u &&
+                  shrunkSnap.units.vehicles.empty() && shrunkSnap.tutorial.active[1] &&
+                  shrunkSnap.unitsExtra.weather == ss2::assets::WeatherKind::Snow,
+              "Shrink-back loadFullSnapshot did not restore pre-reinforcement counts/VM state");
+    }
+
     std::cout << "CAOF complete 17-opcode + air-route + pool-carryover checks PASSED\n";
 }
 
@@ -465,6 +603,7 @@ void runRetailCaofCorpusCheck(const std::filesystem::path& gameDir) {
 
     std::set<std::uint32_t> unknownOps;
     std::size_t totalScripts = 0;
+    std::size_t evaluatedMissions = 0;
     for (const auto& mp : missionFiles) {
         const auto md = ss2::assets::readMissionData(mp);
         for (const auto& sc : md.scripts) {
@@ -476,11 +615,23 @@ void runRetailCaofCorpusCheck(const std::filesystem::path& gameDir) {
                 }
             }
         }
+        if (!md.scripts.empty()) {
+            ss2::MissionQueries zeroQ{};
+            try {
+                ss2::Tutorial vm(md, zeroQ);
+                for (unsigned t = 0; t < 64u; ++t) vm.step(zeroQ);
+                (void)vm.takeEvents();
+            } catch (const std::exception& ex) {
+                throw std::runtime_error("Retail CAOF VM eval failed in " + mp.filename().string() + ": " + ex.what());
+            }
+            ++evaluatedMissions;
+        }
     }
     if (!unknownOps.empty()) {
         throw std::runtime_error("Retail CAOF corpus contains unhandled opcode OP(" +
                                  std::to_string(*unknownOps.begin()) + ")");
     }
+    check(evaluatedMissions == 136u, "Expected 136 retail VM evaluations");
 
     // Smoke-step representative retail missions exercising OP(8/9/31/33/39/46/62/63/71/72/75/83/84/85/86/90/91).
     const auto catalog = ss2::assets::UnitCatalog::load(gameDir);
@@ -520,7 +671,8 @@ void runRetailCaofCorpusCheck(const std::filesystem::path& gameDir) {
         (void)runner.poll();
     }
     std::cout << "Retail CAOF 136-mission corpus check (" << missionFiles.size() << " files, "
-              << totalScripts << " triggers, 0 unhandled opcodes, 6 smoke sims) PASSED\n";
+              << totalScripts << " triggers, 0 unhandled opcodes, " << evaluatedMissions
+              << " VM evals, 6 smoke sims) PASSED\n";
 }
 
 }  // namespace ss2::vm_test

@@ -92,6 +92,29 @@ void Tutorial::step(const MissionQueries& queries) {
 
 std::vector<MissionEvent> Tutorial::takeEvents() { return std::exchange(events_, {}); }
 
+Tutorial::VmState Tutorial::takeState() const {
+    return VmState{tick_, countdown_, active_, timers_, timerPeriods_, variables_, groupAi_, events_,
+                   airRouteWaypoints_};
+}
+
+bool Tutorial::loadState(const VmState& state) {
+    if (state.active.size() != active_.size() || state.airRouteWaypoints.size() > 60u) return false;
+    for (const auto& g : state.groupAi) {
+        if (g.waypoints.size() > 16u) return false;
+        if (g.waypoints.empty() ? g.waypointIndex != 0u : g.waypointIndex >= g.waypoints.size()) return false;
+    }
+    tick_ = state.tick;
+    countdown_ = state.countdown;
+    active_ = state.active;
+    timers_ = state.timers;
+    timerPeriods_ = state.timerPeriods;
+    variables_ = state.variables;
+    groupAi_ = state.groupAi;
+    events_ = state.events;
+    airRouteWaypoints_ = state.airRouteWaypoints;
+    return true;
+}
+
 void Tutorial::scan(const MissionQueries& queries) {
     uint64_t dynamicWaveMask = 0;
     for (unsigned i = 0; i < active_.size(); ++i)

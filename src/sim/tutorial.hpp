@@ -18,6 +18,7 @@ struct MissionEvent {
     } kind;
     unsigned index{0};
     unsigned owner{0}, gate{0}, destZone{0}, delaySec{0};
+    bool operator==(const MissionEvent&) const = default;
 };
 
 struct MissionQueries {
@@ -39,16 +40,6 @@ struct MissionQueries {
 // Tutorial I mission trigger VM operating on mission ticks.
 class Tutorial {
 public:
-    explicit Tutorial(assets::TutorialData, unsigned initialZoneCount, unsigned initialEnemyGroup3 = 5);
-    Tutorial(assets::TutorialData, MissionQueries queries);
-    void step(unsigned playerUnitsInZone2, unsigned enemyGroup3Alive = 5);
-    void step(const MissionQueries& queries);
-    const assets::TutorialData& data() const { return data_; }
-    uint32_t tick() const { return tick_; }
-    std::vector<MissionEvent> takeEvents();
-    // 64-bit hash of the script VM state (mission_state_hash.cpp).
-    std::uint64_t stateHash() const;
-private:
     struct GroupAiState {
         uint32_t behavior{0};
         uint32_t zone1{0};
@@ -59,7 +50,30 @@ private:
         // OP(80) cycles the cursor (+0xf5) and copies the entry into zone1/zone2 (+8/+9).
         std::vector<std::pair<uint32_t, uint32_t>> waypoints{};
         uint32_t waypointIndex{0};
+        bool operator==(const GroupAiState&) const = default;
     };
+    struct VmState {
+        uint32_t tick{0};
+        int32_t countdown{-1};
+        std::vector<bool> active;
+        std::array<uint32_t, 100> timers{}, timerPeriods{}, variables{};
+        std::array<GroupAiState, 100> groupAi{};
+        std::vector<MissionEvent> events;
+        std::vector<std::pair<uint32_t, uint32_t>> airRouteWaypoints;
+        bool operator==(const VmState&) const = default;
+    };
+    explicit Tutorial(assets::TutorialData, unsigned initialZoneCount, unsigned initialEnemyGroup3 = 5);
+    Tutorial(assets::TutorialData, MissionQueries queries);
+    void step(unsigned playerUnitsInZone2, unsigned enemyGroup3Alive = 5);
+    void step(const MissionQueries& queries);
+    const assets::TutorialData& data() const { return data_; }
+    uint32_t tick() const { return tick_; }
+    std::vector<MissionEvent> takeEvents();
+    VmState takeState() const;
+    bool loadState(const VmState& state);
+    // 64-bit hash of the script VM state (mission_state_hash.cpp).
+    std::uint64_t stateHash() const;
+private:
     assets::TutorialData data_;
     uint32_t tick_{};
     int32_t countdown_{-1};

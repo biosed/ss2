@@ -136,8 +136,30 @@ public:
     bool callAirSupport(assets::AirMissionKind kind, int targetX, int targetY);
     std::vector<AirSortiePose> pollAirSorties();
     std::vector<AirStrikeEvent> pollAirStrikeEvents();
+    struct ScheduledReinforcement {
+        MissionEvent event;
+        std::uint32_t dueTick{0};
+        bool operator==(const ScheduledReinforcement&) const = default;
+    };
+    struct FullSnapshot {
+        TutorialUnits::Snapshot units;
+        TutorialUnits::ExtraState unitsExtra;
+        Tutorial::VmState tutorial;
+        std::array<bool, 64> spawnedReinforcementWaves{};
+        std::array<int, 64> reinforcementWaveOwner{};
+        std::vector<ScheduledReinforcement> scheduledReinforcements;
+        std::map<unsigned, std::vector<assets::ReinforcementUnit>> savedUnitPools;
+        std::map<unsigned, std::vector<assets::ReinforcementUnit>> dynamicWaves;
+        unsigned nextDynamicWaveId{64u};
+        std::optional<std::pair<std::uint32_t, std::uint32_t>> nextMissionSignal;
+        bool operator==(const FullSnapshot&) const = default;
+    };
     TutorialUnits::Snapshot takeSnapshot();
     bool loadSnapshot(const TutorialUnits::Snapshot& snap);
+    FullSnapshot takeFullSnapshot();
+    bool loadFullSnapshot(const FullSnapshot& snap);
+    static std::vector<std::uint8_t> serializeFullSnapshot(const FullSnapshot& snap);
+    static std::optional<FullSnapshot> deserializeFullSnapshot(std::span<const std::uint8_t> bytes);
     unsigned simTick() const { return simTick_.load(std::memory_order_relaxed); }
     void setSpeedPercent(int percent);
     int speedPercent() const { return speedPercent_.load(); }
@@ -190,10 +212,6 @@ public:
     // hashes evolve identically under the same commands.
     std::uint64_t stateHash() const;
 private:
-    struct ScheduledReinforcement {
-        MissionEvent event;
-        std::uint32_t dueTick{0};
-    };
     void collect();
     void flushScheduledReinforcements();
     void handleMpScriptEventLocked(const MissionEvent& e);

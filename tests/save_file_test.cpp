@@ -271,6 +271,107 @@ int main() try {
     check(ss2::formatSaveTimestamp(0).empty(), "epoch 0 yields empty timestamp");
     check(ss2::formatSaveTimestamp(1795250000).size() == 16u, "positive epoch yields YYYY-MM-DD HH:MM");
 
+    // 5. SS2SAVE2 FullSnapshot binary round-trip + malformed/overflow rejection.
+    {
+        ss2::MissionRunner::FullSnapshot full{};
+        full.units = snap;
+        full.unitsExtra.soldierIds = {"rifle", "medic", "rifle"};
+        full.unitsExtra.vehicleIds = {"sdkfz", "opel"};
+        full.unitsExtra.vehicleExtras = {{12, true}, {0, false}};
+        full.unitsExtra.randomState = 0x11223344u;
+        full.unitsExtra.combatRandomState = 0x55667788u;
+        full.unitsExtra.weather = ss2::assets::WeatherKind::Snow;
+        full.unitsExtra.lastHitTick = {120, -1, 400, -1};
+        full.unitsExtra.lastGroupHitTick[7] = 950;
+        full.unitsExtra.airPlanes[0][0] = 3;
+        full.unitsExtra.nextSortieId = 19u;
+        full.unitsExtra.reserveUnits.push_back({"panther", 0, 14, 92, 88, 30, 0});
+        full.unitsExtra.evacuatingSoldiers.push_back({1u, 64, 96});
+        full.unitsExtra.evacuatingVehicles.push_back({0u, 128, 160});
+        full.tutorial.tick = 1425u;
+        full.tutorial.countdown = 300;
+        full.tutorial.active = {false, true, false};
+        full.tutorial.timers[2] = 42u;
+        full.tutorial.timerPeriods[2] = 75u;
+        full.tutorial.variables[5] = 99u;
+        full.tutorial.groupAi[3].behavior = 11u;
+        full.tutorial.groupAi[3].zone1 = 4u;
+        full.tutorial.groupAi[3].zone2 = 5u;
+        full.tutorial.groupAi[3].waypoints = {{1u, 2u}, {3u, 4u}};
+        full.tutorial.groupAi[3].waypointIndex = 1u;
+        full.tutorial.events.push_back({ss2::MissionEvent::Reinforcement, 9u, 0u, 1u, 2u, 3u});
+        full.tutorial.airRouteWaypoints = {{4u, 2u}, {7u, 4u}};
+        full.spawnedReinforcementWaves[0] = true;
+        full.reinforcementWaveOwner[0] = 0;
+        full.scheduledReinforcements.push_back({{ss2::MissionEvent::Reinforcement, 1u, 0u, 0u, 2u, 2u}, 1475u});
+        full.savedUnitPools[2u] = {{"pz4", 77, 100, 90, 40, {{"crew1", 77, 100, 100, 20, true}}}};
+        full.dynamicWaves[64u] = {{"rifle", 12, 85, 70, 25, {}}};
+        full.nextDynamicWaveId = 65u;
+        full.nextMissionSignal = std::pair<std::uint32_t, std::uint32_t>{1u, 0u};
+
+        ss2::SaveFileMetadata meta{};
+        meta.hasMetadata = true;
+        meta.mission = "maps/single/ALONE AGAINST THE WORLD.SSM";
+        meta.missionTitle = "Alone Against The World";
+        meta.difficulty = 3;
+        meta.savedEpochSec = 1795252000;
+        meta.enemyInfKilled = 19;
+        meta.enemyScoreEarned = 4200;
+
+        const auto bytes2 = ss2::encodeSaveFile(meta, full);
+        check(bytes2.size() >= 8u &&
+                  std::string_view(reinterpret_cast<const char*>(bytes2.data()), 8u) == "SS2SAVE2",
+              "encodeSaveFile(FullSnapshot) emits SS2SAVE2 header");
+        const auto dec2 = ss2::decodeSaveFile(bytes2);
+        check(dec2.has_value() && dec2->fullSnapshot.has_value(), "decodeSaveFile decodes SS2SAVE2 payload");
+        check(*dec2->fullSnapshot == full, "SS2SAVE2 FullSnapshot round-trips losslessly");
+        check(dec2->meta.tick == 1425u && dec2->meta.difficulty == 3 &&
+                  dec2->meta.enemyInfKilled == 19u && dec2->meta.enemyScoreEarned == 4200,
+              "SS2SAVE2 metadata round-trips");
+
+        const auto rawFull = ss2::MissionRunner::serializeFullSnapshot(full);
+        check(ss2::MissionRunner::deserializeFullSnapshot(rawFull).has_value(), "SS2FULL1 decodes cleanly");
+        check(!ss2::MissionRunner::deserializeFullSnapshot(
+                  std::span<const std::uint8_t>(rawFull.data(), rawFull.size() - 1)).has_value(),
+              "SS2FULL1 rejects truncated payload");
+        auto badFullMagic = rawFull;
+        badFullMagic[7] = '9';
+        check(!ss2::MissionRunner::deserializeFullSnapshot(badFullMagic).has_value(), "SS2FULL1 rejects bad magic");
+        auto extraFullByte = rawFull;
+        extraFullByte.push_back(0x55u);
+        check(!ss2::MissionRunner::deserializeFullSnapshot(extraFullByte).has_value(),
+              "SS2FULL1 rejects trailing byte");
+
+        check(!ss2::decodeSaveFile(std::span<const std::uint8_t>(bytes2.data(), bytes2.size() - 1)).has_value(),
+              "SS2SAVE2 rejects truncated payload");
+        auto extraSaveByte = bytes2;
+        extraSaveByte.push_back(0u);
+        check(!ss2::decodeSaveFile(extraSaveByte).has_value(), "SS2SAVE2 rejects trailing byte");
+
+        auto badWeather = full;
+        badWeather.unitsExtra.weather = static_cast<ss2::assets::WeatherKind>(9u);
+        const auto badWeatherBytes = ss2::encodeSaveFile(meta, badWeather);
+        check(!ss2::decodeSaveFile(badWeatherBytes).has_value(), "SS2SAVE2 rejects invalid weather enum");
+
+        auto badWp = full;
+        badWp.tutorial.groupAi[0].waypointIndex = 1u;
+        const auto badWpBytes = ss2::encodeSaveFile(meta, badWp);
+        check(!ss2::decodeSaveFile(badWpBytes).has_value(), "SS2SAVE2 rejects out-of-range waypointIndex");
+
+        auto badIdLen = full;
+        badIdLen.unitsExtra.soldierIds.pop_back();
+        const auto badIdBytes = ss2::encodeSaveFile(meta, badIdLen);
+        check(!ss2::decodeSaveFile(badIdBytes).has_value(), "SS2SAVE2 rejects mismatched soldierIds size");
+
+        const auto nonce = std::chrono::steady_clock::now().time_since_epoch().count();
+        TempDirGuard guard{std::filesystem::temp_directory_path() / ("ss2_save2_disk_" + std::to_string(nonce))};
+        const auto path2 = guard.dir / "alone_slot1.ss2save";
+        check(ss2::writeSaveFile(path2, meta, full), "writeSaveFile(FullSnapshot) writes SS2SAVE2 file");
+        const auto disk2 = ss2::readSaveFile(path2);
+        check(disk2.has_value() && disk2->fullSnapshot.has_value() && *disk2->fullSnapshot == full,
+              "readSaveFile reloads SS2SAVE2 identically");
+    }
+
     std::cout << "save_file_test PASSED\n";
     return 0;
 } catch (const std::exception& e) {

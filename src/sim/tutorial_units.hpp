@@ -199,6 +199,38 @@ public:
         std::array<std::array<int, 5>, 4> airReady{};
         bool operator==(const Snapshot&) const = default;
     };
+    struct EvacuationOrder {
+        std::size_t index{0};
+        int targetX{0};
+        int targetY{0};
+        bool operator==(const EvacuationOrder&) const = default;
+    };
+    struct ExtraState {
+        struct VehicleExtra {
+            int suppressionTicks{0};
+            bool hatchOpen{false};
+            bool operator==(const VehicleExtra&) const = default;
+        };
+        static constexpr std::array<std::int32_t, 100> makeDefaultGroupHitTicks() noexcept {
+            std::array<std::int32_t, 100> a{};
+            a.fill(-1);
+            return a;
+        }
+        std::vector<std::string> soldierIds;
+        std::vector<std::string> vehicleIds;
+        std::vector<VehicleExtra> vehicleExtras;
+        std::uint32_t randomState{0x76321fu};
+        std::uint32_t combatRandomState{0x12345678u};
+        assets::WeatherKind weather{assets::WeatherKind::Clear};
+        std::array<std::int32_t, 4> lastHitTick{-1, -1, -1, -1};
+        std::array<std::int32_t, 100> lastGroupHitTick{makeDefaultGroupHitTicks()};
+        std::array<std::array<std::int32_t, 5>, 4> airPlanes{};
+        std::uint32_t nextSortieId{1u};
+        std::vector<ReserveUnit> reserveUnits;
+        std::vector<EvacuationOrder> evacuatingSoldiers;
+        std::vector<EvacuationOrder> evacuatingVehicles;
+        bool operator==(const ExtraState&) const = default;
+    };
 
     static constexpr int missionExpaToSim(int expaPct) noexcept {
         if (expaPct <= 0) return 0;
@@ -357,6 +389,9 @@ public:
 
     Snapshot takeSnapshot() const;
     bool loadSnapshot(const Snapshot& snap, std::vector<SoldierPose>* outSoldiers = nullptr);
+    ExtraState takeExtraState() const;
+    bool loadSnapshotWithExtra(const Snapshot& snap, const ExtraState* extra,
+                               std::vector<SoldierPose>* outSoldiers = nullptr);
     static std::vector<std::uint8_t> serializeSnapshot(const Snapshot& snap);
     static std::optional<Snapshot> deserializeSnapshot(std::span<const std::uint8_t> bytes);
 
@@ -735,11 +770,6 @@ private:
     std::vector<AirStrikeEvent> airEvents_;
     std::uint32_t nextSortieId_{1};
     std::vector<ReserveUnit> reserveUnits_;
-    struct EvacuationOrder {
-        std::size_t index{0};
-        int targetX{0};
-        int targetY{0};
-    };
     std::vector<std::string> soldierIds_;
     std::vector<EvacuationOrder> evacuatingSoldiers_;
     std::vector<EvacuationOrder> evacuatingVehicles_;

@@ -50,7 +50,7 @@ add_library(ss2_assets STATIC src/assets/sprite.cpp src/assets/mission.cpp src/a
 target_include_directories(ss2_assets PUBLIC src)
 target_link_libraries(ss2_assets PRIVATE ZLIB::ZLIB JPEG::JPEG PNG::PNG)
 find_package(Threads REQUIRED)
-add_library(ss2_sim STATIC src/sim/tutorial.cpp src/sim/command.cpp src/sim/lockstep.cpp src/sim/mission_runner.cpp src/sim/infantry_step.cpp
+add_library(ss2_sim STATIC src/sim/tutorial.cpp src/sim/command.cpp src/sim/lockstep.cpp src/sim/mission_runner.cpp src/sim/mission_snapshot.cpp src/sim/infantry_step.cpp
     src/sim/tutorial_units.cpp src/sim/tutorial_units_combat.cpp src/sim/tutorial_units_vehicles.cpp
     src/sim/tutorial_units_support.cpp src/sim/tutorial_units_air.cpp src/sim/tutorial_units_mines.cpp
     src/sim/tutorial_units_buildings.cpp src/sim/tutorial_units_snapshot.cpp
@@ -281,7 +281,7 @@ if(BUILD_TESTING)
       target_link_libraries(session_input_test PRIVATE ss2_session)
       target_compile_options(session_input_test PRIVATE ${SS2_WARNINGS} ${SS2_ENABLE_ASSERTIONS})
       add_test(NAME gold_session_input COMMAND session_input_test ${SS2_PRIVATE_GAME} ${validation_arg})
-      set_tests_properties(gold_session_input PROPERTIES TIMEOUT 45
+      set_tests_properties(gold_session_input PROPERTIES TIMEOUT 120
         FAIL_REGULAR_EXPRESSION "Validation Error|VUID-")
     endif()
     set_tests_properties(briefing_panel command_bar menu_panel hover_tooltip vulkan_map_region vulkan_sprite_pass tutorial_selection vulkan_present vulkan_resize vulkan_wsi_recovery gold_frontend_vulkan PROPERTIES TIMEOUT 30

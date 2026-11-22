@@ -298,6 +298,92 @@ int main(int argc, char** argv) try {
         loadedSession.renderer.present(loadedSession.empty);
     }
 
+    // Retail SS2SAVE2 test on ALONE AGAINST THE WORLD.SSM: save after OP(40) Wave 0 spawns (157->174 inf, 73->76 veh),
+    // reload into a fresh pre-reinforcement GameSession, verify counts/stateHash/fog match and Wave 0 does not duplicate.
+    {
+        const auto aloneMission = gameDir / "maps/single/ALONE AGAINST THE WORLD.SSM";
+        require(std::filesystem::is_regular_file(aloneMission), "Missing retail ALONE AGAINST THE WORLD.SSM");
+        const auto nonce = std::chrono::steady_clock::now().time_since_epoch().count();
+        const auto savePath2 = std::filesystem::temp_directory_path() /
+                               ("ss2_save2_alone_" + std::to_string(nonce) + ".ss2save");
+        struct Save2Cleanup {
+            std::filesystem::path p;
+            ~Save2Cleanup() {
+                std::error_code ec;
+                std::filesystem::remove(p, ec);
+            }
+        } cleanup2{savePath2};
+
+        std::uint32_t tick1 = 0;
+        ss2::MissionRunner::FullSnapshot full1{};
+        std::size_t savedSolCount = 0;
+        std::size_t savedVehCount = 0;
+        {
+            ss2::UserSettings s1Settings{};
+            ss2::GameSession s1(
+                win, validate ? &report : nullptr,
+                0, false, gameDir, aloneMission, {}, false, true,
+                s1Settings, false, false, nullptr, {}, nullptr, true);
+            require(s1.simulation && s1.scene && s1.vehicleScene && s1.selection,
+                    "ALONE GameSession failed to initialize");
+            while (s1.briefing.active()) s1.handleInputEvent(makeKeyDown(win, SDLK_RETURN));
+            for (int t = 0; t < 16 && (s1.scene->units().size() <= 157u || s1.vehicleScene->vehicles().size() <= 73u); ++t) {
+                s1.simulation->advanceTicks(1);
+                s1.stepSimulationEvents();
+                while (s1.briefing.active()) s1.handleInputEvent(makeKeyDown(win, SDLK_RETURN));
+            }
+            for (int t = 0; t < 8; ++t) {
+                s1.simulation->advanceTicks(1);
+                s1.stepSimulationEvents();
+                while (s1.briefing.active()) s1.handleInputEvent(makeKeyDown(win, SDLK_RETURN));
+            }
+            full1 = s1.simulation->takeFullSnapshot();
+            tick1 = s1.simulation->simTick();
+            savedSolCount = s1.scene->units().size();
+            savedVehCount = s1.vehicleScene->vehicles().size();
+            require(savedSolCount == 174u && savedVehCount == 76u &&
+                        full1.units.soldiers.size() == 174u && full1.units.vehicles.size() == 76u,
+                    "ALONE Wave 0 reinforcement counts unexpected before SS2SAVE2 write");
+
+            ss2::SaveFileMetadata meta2{};
+            meta2.hasMetadata = true;
+            meta2.mission = "maps/single/ALONE AGAINST THE WORLD.SSM";
+            meta2.missionTitle = "ALONE AGAINST THE WORLD";
+            meta2.difficulty = 2;
+            meta2.savedEpochSec = 1795253000;
+            require(ss2::writeSaveFile(savePath2, meta2, full1), "writeSaveFile(FullSnapshot) failed on ALONE");
+        }
+
+        ss2::UserSettings s2Settings{};
+        ss2::GameSession s2(
+            win, validate ? &report : nullptr,
+            0, false, gameDir, aloneMission, {}, false, true,
+            s2Settings, false, false, nullptr, {}, nullptr, true, savePath2);
+        require(s2.simulation && s2.scene && s2.vehicleScene && s2.selection,
+                "Loaded ALONE GameSession missing core components");
+        const auto loadedFull = s2.simulation->takeFullSnapshot();
+        require(s2.simulation->simTick() == tick1 &&
+                    loadedFull.units.soldiers.size() == full1.units.soldiers.size() &&
+                    loadedFull.units.vehicles.size() == full1.units.vehicles.size() &&
+                    loadedFull.tutorial == full1.tutorial &&
+                    loadedFull.spawnedReinforcementWaves == full1.spawnedReinforcementWaves &&
+                    loadedFull.scheduledReinforcements == full1.scheduledReinforcements,
+                "Loaded ALONE GameSession tick or FullSnapshot VM state diverged from SS2SAVE2");
+        require(s2.scene->units().size() == savedSolCount && s2.vehicleScene->vehicles().size() == savedVehCount,
+                "Loaded ALONE GameSession did not restore visual reinforcement counts");
+        require(!s2.briefing.active(), "Startup SS2SAVE2 load must not reopen opening mission briefing");
+
+        for (int t = 0; t < 80; ++t) {
+            s2.simulation->advanceTicks(1);
+            s2.stepSimulationEvents();
+            while (s2.briefing.active()) s2.handleInputEvent(makeKeyDown(win, SDLK_RETURN));
+        }
+        require(s2.scene->units().size() == savedSolCount && s2.vehicleScene->vehicles().size() == savedVehCount,
+                "Reloaded ALONE GameSession re-fired OP(40) Wave 0");
+        s2.updateHudAndBeams();
+        s2.renderer.present(s2.empty);
+    }
+
     require(report.errors.load() == 0, "Vulkan validation errors observed during GameSession input test");
     std::cout << "GameSession headless input-to-command + replay parity (" << recordedLog.size()
               << " commands, tick " << endTick << ", stateHash 0x" << std::hex << endHash << std::dec

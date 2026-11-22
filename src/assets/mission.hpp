@@ -40,6 +40,7 @@ struct ReinforcementUnit {
     std::string id;
     int group{0}, hp{100}, ammo{100}, expa{0};
     std::vector<PassengerPlacement> passengers{};
+    bool operator==(const ReinforcementUnit&) const = default;
 };
 
 enum class AirMissionKind : std::uint8_t {

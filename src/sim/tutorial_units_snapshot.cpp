@@ -141,9 +141,62 @@ TutorialUnits::Snapshot TutorialUnits::takeSnapshot() const {
     return snap;
 }
 
+TutorialUnits::ExtraState TutorialUnits::takeExtraState() const {
+    ExtraState ex{};
+    ex.soldierIds.reserve(soldiers_.size());
+    for (size_t i = 0; i < soldiers_.size(); ++i) {
+        ex.soldierIds.push_back(i < soldierIds_.size() ? soldierIds_[i] : std::string{});
+    }
+    ex.vehicleIds.reserve(vehicles_.size());
+    ex.vehicleExtras.reserve(vehicles_.size());
+    for (const auto& v : vehicles_) {
+        ex.vehicleIds.push_back(v.id);
+        ex.vehicleExtras.push_back({v.suppressionTicks, v.hatchOpen});
+    }
+    ex.randomState = randomState_;
+    ex.combatRandomState = combatRandomState_;
+    ex.weather = weather_;
+    for (std::size_t p = 0; p < lastHitTick_.size(); ++p) {
+        ex.lastHitTick[p] = lastHitTick_[p] ? static_cast<std::int32_t>(*lastHitTick_[p]) : -1;
+    }
+    for (std::size_t g = 0; g < lastGroupHitTick_.size(); ++g) {
+        ex.lastGroupHitTick[g] = lastGroupHitTick_[g] ? static_cast<std::int32_t>(*lastGroupHitTick_[g]) : -1;
+    }
+    for (std::size_t p = 0; p < 4u; ++p) {
+        for (std::size_t k = 0; k < 5u; ++k) {
+            ex.airPlanes[p][k] = airSupport_[p][k].total;
+        }
+    }
+    ex.nextSortieId = nextSortieId_;
+    ex.reserveUnits = reserveUnits_;
+    ex.evacuatingSoldiers = evacuatingSoldiers_;
+    ex.evacuatingVehicles = evacuatingVehicles_;
+    return ex;
+}
+
 bool TutorialUnits::loadSnapshot(const Snapshot& snap, std::vector<SoldierPose>* outSoldiers) {
-    if (snap.soldiers.size() > soldiers_.size() || snap.vehicles.size() > vehicles_.size()) {
-        return false;
+    return loadSnapshotWithExtra(snap, nullptr, outSoldiers);
+}
+
+bool TutorialUnits::loadSnapshotWithExtra(const Snapshot& snap, const ExtraState* extra,
+                                          std::vector<SoldierPose>* outSoldiers) {
+    if (!extra) {
+        if (snap.soldiers.size() > soldiers_.size() || snap.vehicles.size() > vehicles_.size()) {
+            return false;
+        }
+    } else {
+        if (extra->soldierIds.size() != snap.soldiers.size() ||
+            extra->vehicleIds.size() != snap.vehicles.size() ||
+            extra->vehicleExtras.size() != snap.vehicles.size() ||
+            static_cast<unsigned>(extra->weather) > 3u) {
+            return false;
+        }
+        for (const auto& eo : extra->evacuatingSoldiers) {
+            if (eo.index >= snap.soldiers.size()) return false;
+        }
+        for (const auto& eo : extra->evacuatingVehicles) {
+            if (eo.index >= snap.vehicles.size()) return false;
+        }
     }
     if (!snap.buildings.empty() && snap.buildings.size() != buildings_.size()) {
         return false;
@@ -173,6 +226,50 @@ bool TutorialUnits::loadSnapshot(const Snapshot& snap, std::vector<SoldierPose>*
         }
     }
 
+    if (extra) {
+        if (soldiers_.size() > snap.soldiers.size()) {
+            soldiers_.resize(snap.soldiers.size());
+            soldierIds_.resize(snap.soldiers.size());
+        } else if (soldiers_.size() < snap.soldiers.size()) {
+            for (size_t i = soldiers_.size(); i < snap.soldiers.size(); ++i) {
+                const auto& ss = snap.soldiers[i];
+                const int u = ss.cellX * 16 + 8;
+                const int v = ss.cellY * 16 + 8;
+                assets::Infantry inf{
+                    extra->soldierIds[i], originX_ + u - v, (u + v) / 2, 100, 100,
+                    ss.group, ss.owner, 0, 0, 0, 0, ss.direction, 0u, false, true, ss.expa
+                };
+                (void)appendSoldier(inf, {ss.cellX, ss.cellY}, ss.expa);
+            }
+        }
+        if (soldierIds_.size() > snap.soldiers.size()) soldierIds_.resize(snap.soldiers.size());
+        for (size_t i = 0; i < snap.soldiers.size(); ++i) {
+            if (i < soldierIds_.size()) soldierIds_[i] = extra->soldierIds[i];
+            else soldierIds_.push_back(extra->soldierIds[i]);
+        }
+        if (vehicles_.size() > snap.vehicles.size()) {
+            vehicles_.resize(snap.vehicles.size());
+        } else if (vehicles_.size() < snap.vehicles.size()) {
+            for (size_t i = vehicles_.size(); i < snap.vehicles.size(); ++i) {
+                const auto& vs = snap.vehicles[i];
+                assets::VehicleUnit vu{};
+                vu.id = extra->vehicleIds[i];
+                vu.x = vs.x;
+                vu.y = vs.y;
+                vu.hp = 100;
+                vu.ammo = 100;
+                vu.group = vs.group;
+                vu.owner = vs.owner;
+                vu.hullDir = vs.hullDir & 31u;
+                vu.turretDir = vs.turretDir & 31u;
+                vu.alive = vs.alive;
+                vu.visible = true;
+                vu.hasCrew = vs.hasCrew;
+                (void)appendVehicle(vu);
+            }
+        }
+    }
+
     grid_.clearOccupancy();
     projectiles_.clear();
     mineEvents_.clear();
@@ -181,14 +278,35 @@ bool TutorialUnits::loadSnapshot(const Snapshot& snap, std::vector<SoldierPose>*
     sorties_.clear();
     sortiePoses_.clear();
     airEvents_.clear();
-    lastHitTick_.fill(std::nullopt);
-    lastGroupHitTick_.fill(std::nullopt);
-    reserveUnits_.clear();
+    if (extra) {
+        randomState_ = extra->randomState;
+        combatRandomState_ = extra->combatRandomState;
+        weather_ = extra->weather;
+        nextSortieId_ = std::max<std::uint32_t>(1u, extra->nextSortieId);
+        for (std::size_t p = 0; p < lastHitTick_.size(); ++p) {
+            if (extra->lastHitTick[p] >= 0) lastHitTick_[p] = static_cast<unsigned>(extra->lastHitTick[p]);
+            else lastHitTick_[p].reset();
+        }
+        for (std::size_t g = 0; g < lastGroupHitTick_.size(); ++g) {
+            if (extra->lastGroupHitTick[g] >= 0) lastGroupHitTick_[g] = static_cast<unsigned>(extra->lastGroupHitTick[g]);
+            else lastGroupHitTick_[g].reset();
+        }
+        reserveUnits_ = extra->reserveUnits;
+        evacuatingSoldiers_ = extra->evacuatingSoldiers;
+        evacuatingVehicles_ = extra->evacuatingVehicles;
+    } else {
+        lastHitTick_.fill(std::nullopt);
+        lastGroupHitTick_.fill(std::nullopt);
+        reserveUnits_.clear();
+        evacuatingSoldiers_.clear();
+        evacuatingVehicles_.clear();
+    }
     tick_ = snap.tick;
     playerTeams_ = snap.playerTeams;
     for (std::size_t p = 0; p < 4u; ++p) {
         for (std::size_t k = 0; k < 5u; ++k) {
             airSupport_[p][k].ready = snap.airReady[p][k];
+            if (extra) airSupport_[p][k].total = extra->airPlanes[p][k];
         }
     }
     if (!snap.mines.empty() || mines_.empty()) {
@@ -351,6 +469,25 @@ bool TutorialUnits::loadSnapshot(const Snapshot& snap, std::vector<SoldierPose>*
         if (v.alive && v.hp > 0) {
             grid_.setOccupied(v.cell, true);
         }
+        if (extra) {
+            const auto& ve = extra->vehicleExtras[i];
+            v.suppressionTicks = (v.alive && v.hp > 0) ? std::clamp(ve.suppressionTicks, 0, 125) : 0;
+            v.wasSuppressed = v.alive && v.hp > 0 && v.suppressionTicks > 0;
+            v.hatchOpen = ve.hatchOpen;
+        }
+    }
+
+    if (extra) {
+        for (const auto& eo : evacuatingSoldiers_) {
+            if (eo.index < soldiers_.size() && soldiers_[eo.index].hp > 0 && !soldiers_[eo.index].embarked) {
+                (void)orderSoldierInternal(eo.index, eo.targetX, eo.targetY);
+            }
+        }
+        for (const auto& eo : evacuatingVehicles_) {
+            if (eo.index < vehicles_.size() && vehicles_[eo.index].alive && vehicles_[eo.index].hp > 0) {
+                moveVehicleInternal(vehicles_[eo.index], eo.targetX, eo.targetY);
+            }
+        }
     }
 
     for (size_t i = 0; i < snap.buildings.size(); ++i) {
@@ -369,13 +506,17 @@ bool TutorialUnits::loadSnapshot(const Snapshot& snap, std::vector<SoldierPose>*
 
     if (fog_) {
         if (!snap.fog.empty()) {
-            fog_->clearAll();
-            const int tileW = fog_->width();
-            const int tileH = fog_->height();
-            for (int ty = 0; ty < tileH; ++ty) {
-                for (int tx = 0; tx < tileW; ++tx) {
-                    const std::uint8_t bits = snap.fog[static_cast<size_t>(ty * tileW + tx)];
-                    if (bits != 0) fog_->castRay(tx, ty, 0, 0, bits);
+            if (extra) {
+                (void)fog_->setRaw(snap.fog);
+            } else {
+                fog_->clearAll();
+                const int tileW = fog_->width();
+                const int tileH = fog_->height();
+                for (int ty = 0; ty < tileH; ++ty) {
+                    for (int tx = 0; tx < tileW; ++tx) {
+                        const std::uint8_t bits = snap.fog[static_cast<size_t>(ty * tileW + tx)];
+                        if (bits != 0) fog_->castRay(tx, ty, 0, 0, bits);
+                    }
                 }
             }
         }

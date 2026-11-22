@@ -1284,6 +1284,58 @@ TutorialUnits::Snapshot MissionRunner::takeSnapshot() {
 bool MissionRunner::loadSnapshot(const TutorialUnits::Snapshot& snap) {
     return submit(cmd::LoadSnapshot{snap});
 }
+MissionRunner::FullSnapshot MissionRunner::takeFullSnapshot() {
+    std::lock_guard lock(mutex_);
+    return FullSnapshot{
+        units_.takeSnapshot(),
+        units_.takeExtraState(),
+        tutorial_.takeState(),
+        spawnedReinforcementWaves_,
+        reinforcementWaveOwner_,
+        scheduledReinforcements_,
+        savedUnitPools_,
+        dynamicWaves_,
+        nextDynamicWaveId_,
+        nextMissionSignal_
+    };
+}
+bool MissionRunner::loadFullSnapshot(const FullSnapshot& snap) {
+    std::lock_guard lock(mutex_);
+    if (snap.tutorial.active.size() != tutorial_.data().scripts.size() ||
+        snap.tutorial.airRouteWaypoints.size() > 60u) {
+        return false;
+    }
+    for (const auto& g : snap.tutorial.groupAi) {
+        if (g.waypoints.size() > 16u) return false;
+        if (g.waypoints.empty() ? g.waypointIndex != 0u : g.waypointIndex >= g.waypoints.size()) return false;
+    }
+    std::vector<SoldierPose> restoredPoses;
+    if (!units_.loadSnapshotWithExtra(snap.units, &snap.unitsExtra, &restoredPoses)) return false;
+    if (!tutorial_.loadState(snap.tutorial)) return false;
+    poses_ = std::move(restoredPoses);
+    vehiclePoses_.clear();
+    mineEvents_.clear();
+    buildingUpdates_.clear();
+    airSorties_.clear();
+    airEvents_.clear();
+    pending_.clear();
+    pendingCrewSpawns_.clear();
+    deferredMpScriptEvents_.clear();
+    modal_ = false;
+    spawnedReinforcementWaves_ = snap.spawnedReinforcementWaves;
+    reinforcementWaveOwner_ = snap.reinforcementWaveOwner;
+    scheduledReinforcements_ = snap.scheduledReinforcements;
+    savedUnitPools_ = snap.savedUnitPools;
+    dynamicWaves_ = snap.dynamicWaves;
+    nextDynamicWaveId_ = snap.nextDynamicWaveId;
+    nextMissionSignal_ = snap.nextMissionSignal;
+    collectVehiclePoses();
+    collectBuildingUpdates();
+    simTick_.store(units_.tick_, std::memory_order_relaxed);
+    if (auto f = units_.takeFogSnapshot()) fog_ = std::move(f);
+    changed_.notify_all();
+    return true;
+}
 cmd::LoadSnapshot::Result MissionRunner::applyLocked(const cmd::LoadSnapshot& c) {
     std::vector<SoldierPose> restoredPoses;
     if (!units_.loadSnapshot(c.snapshot, &restoredPoses)) return false;

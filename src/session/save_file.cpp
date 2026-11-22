@@ -11,6 +11,7 @@ namespace ss2 {
 namespace {
 
 constexpr std::array<std::uint8_t, 8> kSaveMagicV1{'S', 'S', '2', 'S', 'A', 'V', 'E', '1'};
+constexpr std::array<std::uint8_t, 8> kSaveMagicV2{'S', 'S', '2', 'S', 'A', 'V', 'E', '2'};
 constexpr std::uint32_t kMaxStringBytes = 4096u;
 
 void appendU32(std::vector<std::uint8_t>& out, std::uint32_t v) {
@@ -122,13 +123,12 @@ std::optional<std::string_view> parseTrailingSlotDigits(std::string_view stem) {
     return stem.substr(digitPos);
 }
 
-} // namespace
-
-std::vector<std::uint8_t> encodeSaveFile(const SaveFileMetadata& meta, const TutorialUnits::Snapshot& snap) {
-    const std::vector<std::uint8_t> payload = TutorialUnits::serializeSnapshot(snap);
+std::vector<std::uint8_t> encodeWithMagic(std::span<const std::uint8_t, 8> magic,
+                                        const SaveFileMetadata& meta,
+                                        std::span<const std::uint8_t> payload) {
     std::vector<std::uint8_t> out;
     out.reserve(64 + meta.mission.size() + meta.missionTitle.size() + payload.size());
-    out.insert(out.end(), kSaveMagicV1.begin(), kSaveMagicV1.end());
+    out.insert(out.end(), magic.begin(), magic.end());
     appendString(out, meta.mission);
     appendString(out, meta.missionTitle);
     appendI32(out, static_cast<std::int32_t>(std::clamp(meta.difficulty, 1, 3)));
@@ -147,38 +147,84 @@ std::vector<std::uint8_t> encodeSaveFile(const SaveFileMetadata& meta, const Tut
     return out;
 }
 
+bool decodeHeaderMetadata(std::span<const std::uint8_t> bytes, std::size_t magicSize,
+                          SaveFileMetadata& meta, std::span<const std::uint8_t>& outPayload) {
+    Reader r{bytes, magicSize};
+    std::int32_t diff = 2;
+    std::uint32_t payloadLen = 0;
+    if (!r.readString(meta.mission) ||
+        !r.readString(meta.missionTitle) ||
+        !r.readI32(diff) ||
+        !r.readI64(meta.savedEpochSec) ||
+        !r.readU32(meta.enemyInfKilled) ||
+        !r.readU32(meta.enemyVehDestroyed) ||
+        !r.readU32(meta.enemyTanksDestroyed) ||
+        !r.readU32(meta.enemyGunsDestroyed) ||
+        !r.readU32(meta.enemyPlanesShotDown) ||
+        !r.readU32(meta.buildingsDemolished) ||
+        !r.readU32(meta.airSortiesFlown) ||
+        !r.readI32(meta.enemyScoreEarned) ||
+        !r.readI32(meta.friendlyScoreLost) ||
+        !r.readU32(payloadLen)) {
+        return false;
+    }
+    if (payloadLen > bytes.size() - r.pos || r.pos + payloadLen != bytes.size()) {
+        return false;
+    }
+    meta.hasMetadata = true;
+    meta.difficulty = std::clamp(static_cast<int>(diff), 1, 3);
+    outPayload = bytes.subspan(r.pos, payloadLen);
+    return true;
+}
+
+bool writeEncodedBytes(const std::filesystem::path& path, const std::vector<std::uint8_t>& bytes) {
+    if (path.empty()) return false;
+    std::error_code ec;
+    const auto parent = path.parent_path();
+    if (!parent.empty()) {
+        std::filesystem::create_directories(parent, ec);
+        if (ec) return false;
+    }
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    if (!out) return false;
+    out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    out.flush();
+    return static_cast<bool>(out);
+}
+
+} // namespace
+
+std::vector<std::uint8_t> encodeSaveFile(const SaveFileMetadata& meta, const TutorialUnits::Snapshot& snap) {
+    const std::vector<std::uint8_t> payload = TutorialUnits::serializeSnapshot(snap);
+    return encodeWithMagic(kSaveMagicV1, meta, payload);
+}
+
+std::vector<std::uint8_t> encodeSaveFile(const SaveFileMetadata& meta, const MissionRunner::FullSnapshot& full) {
+    const std::vector<std::uint8_t> payload = MissionRunner::serializeFullSnapshot(full);
+    return encodeWithMagic(kSaveMagicV2, meta, payload);
+}
+
 std::optional<DecodedSaveFile> decodeSaveFile(std::span<const std::uint8_t> bytes) {
+    if (bytes.size() >= kSaveMagicV2.size() &&
+        std::equal(kSaveMagicV2.begin(), kSaveMagicV2.end(), bytes.begin())) {
+        SaveFileMetadata meta{};
+        std::span<const std::uint8_t> payload{};
+        if (!decodeHeaderMetadata(bytes, kSaveMagicV2.size(), meta, payload)) return std::nullopt;
+        auto full = MissionRunner::deserializeFullSnapshot(payload);
+        if (!full) return std::nullopt;
+        populateCounts(meta, full->units, static_cast<std::uint64_t>(bytes.size()));
+        auto snapCopy = full->units;
+        return DecodedSaveFile{std::move(meta), std::move(snapCopy), std::move(full)};
+    }
     if (bytes.size() >= kSaveMagicV1.size() &&
         std::equal(kSaveMagicV1.begin(), kSaveMagicV1.end(), bytes.begin())) {
-        Reader r{bytes, kSaveMagicV1.size()};
         SaveFileMetadata meta{};
-        std::int32_t diff = 2;
-        std::uint32_t payloadLen = 0;
-        if (!r.readString(meta.mission) ||
-            !r.readString(meta.missionTitle) ||
-            !r.readI32(diff) ||
-            !r.readI64(meta.savedEpochSec) ||
-            !r.readU32(meta.enemyInfKilled) ||
-            !r.readU32(meta.enemyVehDestroyed) ||
-            !r.readU32(meta.enemyTanksDestroyed) ||
-            !r.readU32(meta.enemyGunsDestroyed) ||
-            !r.readU32(meta.enemyPlanesShotDown) ||
-            !r.readU32(meta.buildingsDemolished) ||
-            !r.readU32(meta.airSortiesFlown) ||
-            !r.readI32(meta.enemyScoreEarned) ||
-            !r.readI32(meta.friendlyScoreLost) ||
-            !r.readU32(payloadLen)) {
-            return std::nullopt;
-        }
-        if (payloadLen > bytes.size() - r.pos || r.pos + payloadLen != bytes.size()) {
-            return std::nullopt;
-        }
-        auto snap = TutorialUnits::deserializeSnapshot(bytes.subspan(r.pos, payloadLen));
+        std::span<const std::uint8_t> payload{};
+        if (!decodeHeaderMetadata(bytes, kSaveMagicV1.size(), meta, payload)) return std::nullopt;
+        auto snap = TutorialUnits::deserializeSnapshot(payload);
         if (!snap) return std::nullopt;
-        meta.hasMetadata = true;
-        meta.difficulty = std::clamp(static_cast<int>(diff), 1, 3);
         populateCounts(meta, *snap, static_cast<std::uint64_t>(bytes.size()));
-        return DecodedSaveFile{std::move(meta), std::move(*snap)};
+        return DecodedSaveFile{std::move(meta), std::move(*snap), std::nullopt};
     }
 
     auto snap = TutorialUnits::deserializeSnapshot(bytes);
@@ -187,24 +233,17 @@ std::optional<DecodedSaveFile> decodeSaveFile(std::span<const std::uint8_t> byte
     meta.hasMetadata = false;
     meta.difficulty = 2;
     populateCounts(meta, *snap, static_cast<std::uint64_t>(bytes.size()));
-    return DecodedSaveFile{std::move(meta), std::move(*snap)};
+    return DecodedSaveFile{std::move(meta), std::move(*snap), std::nullopt};
 }
 
 bool writeSaveFile(const std::filesystem::path& path, const SaveFileMetadata& meta,
                    const TutorialUnits::Snapshot& snap) {
-    if (path.empty()) return false;
-    std::error_code ec;
-    const auto parent = path.parent_path();
-    if (!parent.empty()) {
-        std::filesystem::create_directories(parent, ec);
-        if (ec) return false;
-    }
-    const std::vector<std::uint8_t> bytes = encodeSaveFile(meta, snap);
-    std::ofstream out(path, std::ios::binary | std::ios::trunc);
-    if (!out) return false;
-    out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
-    out.flush();
-    return static_cast<bool>(out);
+    return writeEncodedBytes(path, encodeSaveFile(meta, snap));
+}
+
+bool writeSaveFile(const std::filesystem::path& path, const SaveFileMetadata& meta,
+                   const MissionRunner::FullSnapshot& full) {
+    return writeEncodedBytes(path, encodeSaveFile(meta, full));
 }
 
 std::optional<DecodedSaveFile> readSaveFile(const std::filesystem::path& path) {

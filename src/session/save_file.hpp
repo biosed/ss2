@@ -1,5 +1,6 @@
 #pragma once
 
+#include "sim/mission_runner.hpp"
 #include "sim/tutorial_units.hpp"
 
 #include <cstdint>
@@ -40,11 +41,14 @@ struct SaveFileMetadata {
 struct DecodedSaveFile {
     SaveFileMetadata meta;
     TutorialUnits::Snapshot snapshot;
+    std::optional<MissionRunner::FullSnapshot> fullSnapshot;
 };
 
 std::vector<std::uint8_t> encodeSaveFile(const SaveFileMetadata& meta, const TutorialUnits::Snapshot& snap);
+std::vector<std::uint8_t> encodeSaveFile(const SaveFileMetadata& meta, const MissionRunner::FullSnapshot& full);
 std::optional<DecodedSaveFile> decodeSaveFile(std::span<const std::uint8_t> bytes);
 bool writeSaveFile(const std::filesystem::path& path, const SaveFileMetadata& meta, const TutorialUnits::Snapshot& snap);
+bool writeSaveFile(const std::filesystem::path& path, const SaveFileMetadata& meta, const MissionRunner::FullSnapshot& full);
 std::optional<DecodedSaveFile> readSaveFile(const std::filesystem::path& path);
 
 std::string inferSaveSlotLabel(std::string_view fileStem);

@@ -8,6 +8,7 @@ struct PassengerPlacement {
     std::string id;
     int group{0}, hp{100}, ammo{100}, expa{0};
     bool isCrew{false};
+    bool operator==(const PassengerPlacement&) const = default;
 };
 struct Placement {
     std::string id;
