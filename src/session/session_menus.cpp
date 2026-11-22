@@ -11,8 +11,16 @@
 #include <stdexcept>
 
 namespace ss2 {
+namespace {
+void ensureRetailMenuSkin(Menu& menu, const std::filesystem::path& gameDir) {
+    if (!gameDir.empty() && !menu.hasRetailSkin()) {
+        menu.loadRetailAssets(gameDir);
+    }
+}
+} // namespace
 
 std::vector<MenuItem> GameSession::buildPauseItems() {
+    ensureRetailMenuSkin(menu, gameDir);
     std::vector<ss2::MenuItem> items;
     items.push_back({"resume", ss2::tr("Resume"), "", true});
     if (simulation) {
@@ -103,6 +111,7 @@ void GameSession::syncPostMissionMenuOverlay() {
 
 void GameSession::openAirSupportMenu() {
     if (!simulation) return;
+    ensureRetailMenuSkin(menu, gameDir);
     dismissPostMissionScreen();
     const auto slots = simulation->playerAirSupport();
     std::vector<ss2::MenuItem> items;
@@ -119,6 +128,7 @@ void GameSession::openAirSupportMenu() {
 
 void GameSession::openPauseMenu() {
     if (briefing.active()) return;
+    ensureRetailMenuSkin(menu, gameDir);
     dismissPostMissionScreen();
     attackMoveArmed = false;
     attackGroundArmed = false;
@@ -147,6 +157,7 @@ void GameSession::closeMenu() {
 
 void GameSession::openMissionsMenu() {
     if (gameDir.empty()) return;
+    ensureRetailMenuSkin(menu, gameDir);
     dismissPostMissionScreen();
     menuMissions = ss2::assets::listSinglePlayerMissions(gameDir);
     std::vector<ss2::MenuItem> items;
@@ -170,6 +181,7 @@ void GameSession::openMissionsMenu() {
 
 void GameSession::openCampaignsMenu() {
     if (gameDir.empty()) return;
+    ensureRetailMenuSkin(menu, gameDir);
     dismissPostMissionScreen();
     menuCampaigns = ss2::assets::listCampaigns(gameDir);
     std::vector<ss2::MenuItem> items;
@@ -194,6 +206,7 @@ void GameSession::openCampaignsMenu() {
 
 void GameSession::openCampaignMissionsMenu(std::size_t campaignIdx) {
     if (campaignIdx >= menuCampaigns.size()) return;
+    ensureRetailMenuSkin(menu, gameDir);
     dismissPostMissionScreen();
     const auto& c = menuCampaigns[campaignIdx];
     std::vector<ss2::MenuItem> items;
@@ -224,6 +237,7 @@ void GameSession::openCampaignMissionsMenu(std::size_t campaignIdx) {
 }
 
 void GameSession::openControlsMenu() {
+    ensureRetailMenuSkin(menu, gameDir);
     dismissPostMissionScreen();
     menu.open(ss2::tr("Controls"), {
         {"back", ss2::tr("Back to pause menu"), "", true},
@@ -379,6 +393,7 @@ void GameSession::openDebriefMenu(bool victory) {
     items.push_back({"missions", ss2::tr("Missions"), "", true});
     items.push_back({"resume", ss2::tr("Continue"), "", true});
     items.push_back({"quit", ss2::tr("Quit to desktop"), "", true});
+    ensureRetailMenuSkin(menu, gameDir);
     menu.open(ss2::tr(victory ? "Mission Accomplished!" : "Mission Failed."), std::move(items));
 
     GoldMedalFaction medalFaction = GoldMedalFaction::Allied;
@@ -476,6 +491,7 @@ void GameSession::openDebriefMenu(bool victory) {
 
 void GameSession::openLogMenu() {
     if (briefing.active()) return;
+    ensureRetailMenuSkin(menu, gameDir);
     dismissPostMissionScreen();
     std::vector<ss2::MenuItem> items;
     items.push_back({"resume", ss2::tr("Close"), "", true});
@@ -509,6 +525,7 @@ void GameSession::openLogMenu() {
 
 void GameSession::openForceOverviewMenu(bool fromPauseMenu) {
     if (!simulation || !scene || briefing.active()) return;
+    ensureRetailMenuSkin(menu, gameDir);
     dismissPostMissionScreen();
     forceRosterGroups.clear();
     std::vector<ss2::MenuItem> items;
@@ -1034,6 +1051,7 @@ void GameSession::openSaveLoadMenu() {
                                          : ss2::trf("Load Slot {0}", {std::to_string(s)});
         items.push_back({"load:" + std::to_string(s), lbl, tag, exists});
     }
+    ensureRetailMenuSkin(menu, gameDir);
     menu.open(ss2::tr("Save / Load"), std::move(items));
 }
 

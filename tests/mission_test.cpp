@@ -2527,6 +2527,39 @@ void testVehiclesAndShadows() {
             }
             check(anyVisible, std::string("decodeAniSequence decodes visible pixels for ") + stem);
         }
+
+        // Retail menu_common.sue\MENU_CUR.ANI + MENU_CUR.COL (0xa1 + 1024-byte premul .COL) and
+        // game_common.sue\AIRFIRE.ANI + AIRFIRE.COL must preserve both transparent and semi-transparent pixels.
+        const auto menuCommon = ss2::assets::resolveCaseInsensitivePath(gameDir, "menu_common.sue");
+        const auto mCurAni = ss2::assets::readSueEntry(menuCommon, "MENU_CUR.ANI");
+        const auto mCurCol = ss2::assets::readSueEntry(menuCommon, "MENU_CUR.COL");
+        const auto mCurSeq = ss2::assets::decodeAniSequence(mCurAni, mCurCol);
+        check(mCurSeq.frames.size() == 21u && mCurSeq.width == 14u && mCurSeq.height == 19u &&
+                  mCurSeq.hotX == 1 && mCurSeq.hotY == 3,
+              "MENU_CUR.ANI decodes 21 14x19 frames with hotspot (1, 3)");
+        bool curHasTrans = false, curHasSemi = false;
+        for (std::size_t p = 3u; p < mCurSeq.frames[0].rgba.size(); p += 4u) {
+            const auto a = mCurSeq.frames[0].rgba[p];
+            if (a == 0u) curHasTrans = true;
+            else if (a < 255u) curHasSemi = true;
+        }
+        check(curHasTrans && curHasSemi && mCurSeq.frames[0].rgba != mCurSeq.frames[10].rgba,
+              "MENU_CUR.ANI preserves transparent background, soft alpha fringe, and frame animation");
+
+        const auto airFireAni = ss2::assets::readSueEntry(gameCommon, "AIRFIRE.ANI");
+        const auto airFireCol = ss2::assets::readSueEntry(gameCommon, "AIRFIRE.COL");
+        const auto airFireSeq = ss2::assets::decodeAniSequence(airFireAni, airFireCol);
+        check(airFireSeq.frames.size() == 25u, "AIRFIRE.ANI decodes 25 frames");
+        bool airHasTrans = false, airHasSemi = false;
+        for (const auto& fr : airFireSeq.frames) {
+            for (std::size_t p = 3u; p < fr.rgba.size(); p += 4u) {
+                const auto a = fr.rgba[p];
+                if (a == 0u) airHasTrans = true;
+                else if (a < 255u) airHasSemi = true;
+            }
+        }
+        check(airHasTrans && airHasSemi,
+              "AIRFIRE.ANI (0xa1 + 1024B .COL) preserves transparent background and soft flame alpha");
     }
 }
 

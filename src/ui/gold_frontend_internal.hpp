@@ -5,6 +5,7 @@
 #include "assets/briefing_media.hpp"
 #include "assets/mission.hpp"
 #include "assets/sprite.hpp"
+#include "ui/cursor_bank.hpp"
 #include "ui/strings.hpp"
 
 #include <cairo.h>
@@ -172,6 +173,7 @@ struct GoldFrontEnd::Assets {
     gold_ui::Surface briefOverlay = gold_ui::makeNullSurface();
     SDL_AudioDeviceID briefAudioDev{0};
     SDL_AudioStream* briefAudioStream{nullptr};
+    MenuCursorAnimator menuCursor;
     bool loadedMenuSue{false};
 
     ~Assets() {

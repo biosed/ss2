@@ -110,6 +110,7 @@ public:
     std::string hoveredId() const { return hoveredId_; }
     std::string focusedId() const { return focusedId_; }
     bool hasMenuAssets() const;
+    bool hasMenuCursor() const;
     bool hasCreditsArt() const;
     std::size_t creditsLineCount() const;
     bool hasBriefingMedia() const;
@@ -348,6 +349,7 @@ public:
     bool active() const { return active_; }
 
     bool hasRetailAssets() const;
+    bool hasMenuCursor() const;
     bool hasFanfareAudio() const;
     bool fanfarePlaying() const;
     void stopFanfare();

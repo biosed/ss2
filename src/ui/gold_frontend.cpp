@@ -355,10 +355,18 @@ GoldFrontEnd::GoldFrontEnd(SDL_Window* window, const std::filesystem::path& game
     ensureFocusedValid();
 }
 
-GoldFrontEnd::~GoldFrontEnd() = default;
+GoldFrontEnd::~GoldFrontEnd() {
+    if (assets_) {
+        assets_->menuCursor.restore();
+    }
+}
 
 bool GoldFrontEnd::hasMenuAssets() const {
     return assets_ && assets_->loadedMenuSue && assets_->mainBg != nullptr;
+}
+
+bool GoldFrontEnd::hasMenuCursor() const {
+    return assets_ && assets_->menuCursor.loaded();
 }
 
 bool GoldFrontEnd::hasCreditsArt() const {
@@ -427,6 +435,10 @@ void GoldFrontEnd::loadAssets(std::optional<int> fixedBgIndex) {
     }
 
     assets_->loadedMenuSue = assets_->mainBg != nullptr || assets_->briefingBg != nullptr;
+    if (window_ != nullptr) {
+        assets_->menuCursor.load(gameDir_);
+        assets_->menuCursor.apply();
+    }
 }
 
 void GoldFrontEnd::loadCreditsText() {
@@ -1198,6 +1210,7 @@ void GoldFrontEnd::handleMouseWheel(float dy) {
 }
 
 void GoldFrontEnd::handleEvent(const SDL_Event& event) {
+    if (window_ && assets_) assets_->menuCursor.apply();
     if (event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED &&
         window_ && event.window.windowID == SDL_GetWindowID(window_)) {
         dirty_ = true;
@@ -1253,6 +1266,7 @@ void GoldFrontEnd::handleEvent(const SDL_Event& event) {
 }
 
 void GoldFrontEnd::advance(std::chrono::nanoseconds dt) {
+    if (window_ && assets_) assets_->menuCursor.apply();
     if (noticeRemaining_.count() > 0) {
         if (dt >= noticeRemaining_) {
             noticeRemaining_ = {};
@@ -1384,6 +1398,7 @@ void GoldFrontEnd::renderToBuffer(int pixelW, int pixelH, std::vector<std::uint8
 }
 
 void GoldFrontEnd::draw(VulkanWindow& renderer) {
+    if (window_ && assets_) assets_->menuCursor.apply();
     int pw = 0, ph = 0;
     if (window_ && SDL_GetWindowSizeInPixels(window_, &pw, &ph) && pw > 0 && ph > 0) {
         // Synchronized with physical pixel size even on frame N of a resize/DPI transition.

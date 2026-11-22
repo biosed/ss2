@@ -1,6 +1,8 @@
 // Menu: navigation, activation, scrolling, input capture and its place in a frame.
 #include "render/window.hpp"
 #include "ui/menu.hpp"
+#include <cstdlib>
+#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
@@ -192,6 +194,27 @@ int main(int argc, char** argv) {
         frame = renderer.captureFrame();
         centre = &frame.rgba[(std::size_t(frame.height / 2) * frame.width + frame.width / 2) * 4];
         check(centre[0] == 77 && centre[1] == 77, "the panel underneath reappears when the menu closes");
+
+        if (const char* priv = std::getenv("SS2_PRIVATE_GAME"); priv && *priv && std::filesystem::is_directory(priv)) {
+            ss2::Menu skinned(window.get());
+            check(!skinned.hasRetailSkin(), "fresh Menu starts unskinned");
+            skinned.loadRetailAssets(priv);
+            check(skinned.hasRetailSkin(), "Menu loads retail lng.sue\\msgb.dat steel skin");
+            skinned.open("Paused", {{"resume", "Resume", "", true}, {"quit", "Quit", "", true}});
+            const auto unskinnedW = [&] {
+                ss2::Menu plain(window.get());
+                plain.open("Paused", {{"resume", "Resume", "", true}, {"quit", "Quit", "", true}});
+                return plain.rgba();
+            }();
+            check(skinned.width() > 0u && skinned.height() > 0u && skinned.rgba() != unskinnedW,
+                  "retail msgb.dat skin renders distinct frame over fallback");
+            for (std::size_t i = 3; i < skinned.rgba().size(); i += 4) {
+                check(skinned.rgba()[i] == 255, "skinned menu panel stays opaque");
+            }
+            check(skinned.rowRect("quit").height > 0 && skinned.handle(key(SDLK_DOWN)).consumed &&
+                  skinned.highlighted() == "quit",
+                  "skinned menu preserves navigation and row geometry");
+        }
     } catch (const std::exception& e) {
         std::cerr << e.what() << '\n';
         status = 1;

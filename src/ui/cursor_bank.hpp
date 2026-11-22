@@ -13,6 +13,38 @@
 
 namespace ss2 {
 
+namespace cursor_detail {
+using CursorPtr = std::unique_ptr<SDL_Cursor, decltype(&SDL_DestroyCursor)>;
+
+inline std::vector<CursorPtr> buildCursorsFromSue(const std::filesystem::path& archivePath,
+                                                  std::string_view aniEntry,
+                                                  std::string_view colEntry) {
+    std::vector<CursorPtr> out;
+    if (archivePath.empty() || !SDL_WasInit(SDL_INIT_VIDEO)) return out;
+    try {
+        const auto ani = assets::readSueEntry(archivePath, aniEntry);
+        const auto col = assets::readSueEntry(archivePath, colEntry);
+        auto seq = assets::decodeAniSequence(ani, col);
+        if (seq.frames.empty() || seq.width == 0u || seq.height == 0u) return out;
+        const int hotX = std::clamp(seq.hotX, 0, int(seq.width) - 1);
+        const int hotY = std::clamp(seq.hotY, 0, int(seq.height) - 1);
+        out.reserve(seq.frames.size());
+        for (auto& frame : seq.frames) {
+            SDL_Surface* surf = SDL_CreateSurfaceFrom(
+                int(frame.width), int(frame.height), SDL_PIXELFORMAT_RGBA32,
+                frame.rgba.data(), int(frame.width) * 4);
+            if (!surf) continue;
+            SDL_Cursor* cur = SDL_CreateColorCursor(surf, hotX, hotY);
+            SDL_DestroySurface(surf);
+            if (cur) out.emplace_back(cur, SDL_DestroyCursor);
+        }
+    } catch (...) {
+        out.clear();
+    }
+    return out;
+}
+} // namespace cursor_detail
+
 enum class TacticalCursorKind : std::size_t {
     Field = 0,       // C1FIELD: default battlefield / HUD arrow
     OwnUnit,         // C2OWN: friendly player-owned unit hover
@@ -146,29 +178,9 @@ private:
 
     void loadSlot(TacticalCursorKind kind, Slot& slot) {
         if (!hasArchive_) return;
-        try {
-            const auto stem = std::string(stemForKind(kind));
-            const auto ani = assets::readSueEntry(archivePath_, stem + ".ANI");
-            const auto col = assets::readSueEntry(archivePath_, stem + ".COL");
-            auto seq = assets::decodeAniSequence(ani, col);
-            if (seq.frames.empty() || seq.width == 0u || seq.height == 0u) return;
-            const int hotX = std::clamp(seq.hotX, 0, int(seq.width) - 1);
-            const int hotY = std::clamp(seq.hotY, 0, int(seq.height) - 1);
-            slot.cursors.reserve(seq.frames.size());
-            for (auto& frame : seq.frames) {
-                SDL_Surface* surf = SDL_CreateSurfaceFrom(
-                    int(frame.width), int(frame.height), SDL_PIXELFORMAT_RGBA32,
-                    frame.rgba.data(), int(frame.width) * 4);
-                if (!surf) continue;
-                SDL_Cursor* cur = SDL_CreateColorCursor(surf, hotX, hotY);
-                SDL_DestroySurface(surf);
-                if (cur) {
-                    slot.cursors.emplace_back(cur, SDL_DestroyCursor);
-                }
-            }
-        } catch (...) {
-            slot.cursors.clear();
-        }
+        const auto stem = std::string(stemForKind(kind));
+        slot.cursors = cursor_detail::buildCursorsFromSue(
+            archivePath_, stem + ".ANI", stem + ".COL");
     }
 
     std::filesystem::path archivePath_;
@@ -220,5 +232,53 @@ inline void applyTacticalCursor(SDL_Window* window, TacticalCursorKind kind,
     }
     SDL_SetCursor(fb);
 }
+
+/// Animated 21-frame retail menu cursor (menu_common.sue\MENU_CUR.ANI/.COL, 50 ms cadence).
+class MenuCursorAnimator {
+public:
+    static constexpr std::uint64_t kFrameStepMs = 50u;
+
+    ~MenuCursorAnimator() {
+        restore();
+        cursors_.clear();
+    }
+
+    void load(const std::filesystem::path& gameDir) {
+        restore();
+        cursors_.clear();
+        if (gameDir.empty() || !SDL_WasInit(SDL_INIT_VIDEO)) return;
+        const auto menuSue = assets::resolveCaseInsensitivePath(gameDir, "menu_common.sue");
+        std::error_code ec;
+        if (!std::filesystem::is_regular_file(menuSue, ec)) return;
+        cursors_ = cursor_detail::buildCursorsFromSue(menuSue, "MENU_CUR.ANI", "MENU_CUR.COL");
+    }
+
+    bool loaded() const noexcept { return !cursors_.empty(); }
+    std::size_t frameCount() const noexcept { return cursors_.size(); }
+
+    void apply() {
+        if (cursors_.empty() || !SDL_WasInit(SDL_INIT_VIDEO)) return;
+        const std::size_t frameIdx =
+            static_cast<std::size_t>((SDL_GetTicks() / kFrameStepMs) % cursors_.size());
+        SDL_Cursor* cur = cursors_[frameIdx].get();
+        if (cur && cur != activeRaw_) {
+            SDL_SetCursor(cur);
+            activeRaw_ = cur;
+        }
+    }
+
+    void restore() {
+        if (activeRaw_ != nullptr) {
+            if (SDL_WasInit(SDL_INIT_VIDEO)) {
+                SDL_SetCursor(SDL_GetDefaultCursor());
+            }
+            activeRaw_ = nullptr;
+        }
+    }
+
+private:
+    std::vector<cursor_detail::CursorPtr> cursors_;
+    SDL_Cursor* activeRaw_{nullptr};
+};
 
 } // namespace ss2

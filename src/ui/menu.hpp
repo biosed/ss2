@@ -2,6 +2,7 @@
 
 #include <SDL3/SDL.h>
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <vector>
@@ -32,6 +33,10 @@ struct MenuResult {
 class Menu {
 public:
     explicit Menu(SDL_Window* parent);
+    ~Menu();
+
+    void loadRetailAssets(const std::filesystem::path& gameDir);
+    bool hasRetailSkin() const;
 
     void open(std::string title, std::vector<MenuItem> items);
     void setItems(std::vector<MenuItem> items);   // keeps the highlighted row when its id still exists
@@ -73,5 +78,7 @@ private:
     int left_ = 0, top_ = 0;
     std::vector<std::uint8_t> rgba_;
     std::uint64_t revision_ = 0, drawn_ = 0;
+    struct Skin;
+    std::unique_ptr<Skin> skin_;
 };
 }

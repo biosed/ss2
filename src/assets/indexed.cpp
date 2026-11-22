@@ -130,9 +130,9 @@ void drawIndexedFrame(MapImage& map, int originX, int originY, View sprite, View
 }
 
 void drawAlphaIndexedFrame(MapImage& map, int originX, int originY, View sprite, View palette1024) {
-    if (sprite.size() < 9u || sprite[8] != 0xa9u || palette1024.size() < 1024u ||
+    if (sprite.size() < 9u || (sprite[8] != 0xa9u && sprite[8] != 0xa1u) || palette1024.size() < 1024u ||
         !map.width || !map.height || (std::uint64_t(map.width) * map.height > map.rgba.size() / 4u)) {
-        throw std::runtime_error("Invalid 0xa9 alpha sprite or destination");
+        throw std::runtime_error("Invalid alpha-indexed sprite or destination");
     }
     const auto left = std::int64_t(originX) + std::int16_t(word(sprite, 0));
     const auto top = std::int64_t(originY) + std::int16_t(word(sprite, 2));
@@ -277,7 +277,7 @@ AniSequence decodeAniSequence(View ani, View palette) {
             const int h = std::int16_t(word(fr, 6u));
             if (w >= 1 && h >= 1 && w <= 2048 && h <= 2048) {
                 const std::uint8_t tag = fr[8];
-                if (tag == 0xa9u && palette.size() >= 1024u) {
+                if ((tag == 0xa9u || tag == 0xa1u) && palette.size() >= 1024u) {
                     drawAlphaIndexedFrame(img, hotX, hotY, fr, palette);
                 } else if ((tag == 0xa1u || tag == 0xa2u) && hasPal512) {
                     drawIndexedFrame(img, hotX, hotY, fr, pal512);

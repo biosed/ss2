@@ -146,6 +146,38 @@ int main() try {
     if (seq.frames[0].rgba[4] != 0 || seq.frames[0].rgba[7] != 128) return 1;
     if (seq.frames[0].rgba[11] != 0) return 1;
 
+    // 0xa1 compact frame paired with a 1024-byte premultiplied alpha .COL palette (MENU_CUR, AIRFIRE, etc.)
+    // must blend via drawAlphaIndexedFrame inside decodeAniSequence too.
+    const std::vector<std::uint8_t> a1AlphaFrame{
+        0x00, 0x00, 0x00, 0x00, 3, 0, 1, 0, 0xa1u,
+        4, 0, 0x03, 1, 2, 3 // row length 4, literal [1, 2, 3]
+    };
+    ss2::assets::MapImage a1AlphaBg{3, 1, {100, 120, 140, 255, 100, 120, 140, 255, 100, 120, 140, 255}};
+    ss2::assets::drawAlphaIndexedFrame(a1AlphaBg, 0, 0, a1AlphaFrame, pal1024);
+    if (a1AlphaBg.rgba[0] != 255 || a1AlphaBg.rgba[3] != 255) return 1;
+    if (a1AlphaBg.rgba[4] != 50 || a1AlphaBg.rgba[5] != 60 || a1AlphaBg.rgba[6] != 70) return 1;
+    if (a1AlphaBg.rgba[8] != 100 || a1AlphaBg.rgba[9] != 120 || a1AlphaBg.rgba[10] != 140) return 1;
+
+    std::vector<std::uint8_t> a1Ani;
+    const std::uint32_t a1Off0 = 8u + 2u * 4u;
+    const std::uint32_t a1Off1 = a1Off0 + std::uint32_t(a1AlphaFrame.size());
+    const auto pushU32To = [](std::vector<std::uint8_t>& dst, std::uint32_t v) {
+        dst.push_back(std::uint8_t(v & 0xffu));
+        dst.push_back(std::uint8_t((v >> 8u) & 0xffu));
+        dst.push_back(std::uint8_t((v >> 16u) & 0xffu));
+        dst.push_back(std::uint8_t((v >> 24u) & 0xffu));
+    };
+    pushU32To(a1Ani, 0xca000002u);
+    pushU32To(a1Ani, 1u);
+    pushU32To(a1Ani, a1Off0);
+    pushU32To(a1Ani, a1Off1);
+    a1Ani.insert(a1Ani.end(), a1AlphaFrame.begin(), a1AlphaFrame.end());
+    const auto a1Seq = ss2::assets::decodeAniSequence(a1Ani, pal1024);
+    if (a1Seq.frames.size() != 1u || a1Seq.frames[0].rgba[0] != 255 ||
+        a1Seq.frames[0].rgba[7] != 128 || a1Seq.frames[0].rgba[11] != 0) {
+        return 1;
+    }
+
     // Synthetic 4-stage house damage tiers, renderHouseStage shrink/no-ghosting, and SceneryDepth updates.
     using ss2::assets::buildingDamageStage;
     if (buildingDamageStage(100, 100, false) != 0 || buildingDamageStage(67, 100, false) != 0 ||

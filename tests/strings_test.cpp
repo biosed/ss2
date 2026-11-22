@@ -41,11 +41,17 @@ int main() {
 
         setLanguage(Language::french);
         check(tr("Objective") == "Objectif" && tr("Officer") == "Officier", "French lookup");
+        check(tr("Bridge") == "Pont" && tr("Heavily damaged") == "Gravement endommagé", "French bridge/damage lookup");
+        check(trf("Paratroopers dropped ({0} soldiers)!", {"12"}) == "Parachutistes largués (12 soldats) !",
+              "French paratrooper format lookup");
         check(tr("Not in the table") == "Not in the table", "unknown text falls back to English");
         check(trf("Move order accepted by {0} of {1} soldiers", {"3", "5"}) == "Ordre de déplacement accepté par 3 soldats sur 5",
               "French sentence with two numbers");
         setLanguage(Language::spanish);
         check(tr("Objective") == "Objetivo" && tr("Resume") == "Reanudar", "Spanish lookup");
+        check(tr("Bridge") == "Puente" && tr("Heavily damaged") == "Gravemente dañado", "Spanish bridge/damage lookup");
+        check(trf("Reverse move ordered ({0} vehicles).", {"4"}) == "Marcha atrás ordenada (4 vehículos).",
+              "Spanish reverse move format lookup");
         check(trf("Health {0} / {1}", {"62", "100"}) == "Salud 62 / 100", "Spanish sentence with two numbers");
         check(trf("Losses {0}", {"4"}) == "Bajas 4", "one placeholder");
 

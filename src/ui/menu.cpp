@@ -1,10 +1,14 @@
 #include "ui/menu.hpp"
+#include "assets/indexed.hpp"
+#include "assets/sprite.hpp"
 #include "ui/hidpi.hpp"
 #include "render/window.hpp"
 
 #include <pango/pangocairo.h>
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstring>
 #include <stdexcept>
 #include <utility>
 
@@ -33,12 +37,127 @@ void text(cairo_t* cr, PangoContext* fonts, const std::string& value, int size, 
     pango_cairo_show_layout(cr, layout.get());
 }
 const std::string empty;
+
+std::uint32_t readU32(std::span<const std::uint8_t> buf, std::size_t off) {
+    if (off > buf.size() || buf.size() - off < 4u) return 0u;
+    return std::uint32_t(buf[off]) | (std::uint32_t(buf[off + 1u]) << 8u) |
+           (std::uint32_t(buf[off + 2u]) << 16u) | (std::uint32_t(buf[off + 3u]) << 24u);
 }
+
+std::uint16_t readU16(std::span<const std::uint8_t> buf, std::size_t off) {
+    if (off > buf.size() || buf.size() - off < 2u) return 0u;
+    return static_cast<std::uint16_t>(buf[off] | (std::uint16_t(buf[off + 1u]) << 8u));
+}
+
+Surface mapImageToCairo(const assets::MapImage& img) {
+    if (img.width == 0u || img.height == 0u ||
+        img.rgba.size() < std::size_t(img.width) * img.height * 4u) {
+        return Surface(nullptr, cairo_surface_destroy);
+    }
+    Surface surf(cairo_image_surface_create(CAIRO_FORMAT_ARGB32, int(img.width), int(img.height)),
+                 cairo_surface_destroy);
+    if (cairo_surface_status(surf.get()) != CAIRO_STATUS_SUCCESS) {
+        return Surface(nullptr, cairo_surface_destroy);
+    }
+    auto* raw = cairo_image_surface_get_data(surf.get());
+    const int stride = cairo_image_surface_get_stride(surf.get());
+    if (!SDL_ConvertPixels(int(img.width), int(img.height), SDL_PIXELFORMAT_RGBA32,
+                           img.rgba.data(), int(img.width) * 4, SDL_PIXELFORMAT_ARGB8888,
+                           raw, stride)) {
+        return Surface(nullptr, cairo_surface_destroy);
+    }
+    cairo_surface_mark_dirty(surf.get());
+    return surf;
+}
+
+void drawSubRectNearest(cairo_t* cr, cairo_surface_t* src,
+                        double sx, double sy, double sw, double sh,
+                        double dx, double dy, double dw, double dh) {
+    if (!src || sw <= 0.0 || sh <= 0.0 || dw <= 0.0 || dh <= 0.0) return;
+    cairo_save(cr);
+    cairo_translate(cr, dx, dy);
+    cairo_scale(cr, dw / sw, dh / sh);
+    cairo_rectangle(cr, 0.0, 0.0, sw, sh);
+    cairo_clip(cr);
+    cairo_set_source_surface(cr, src, -sx, -sy);
+    cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_NEAREST);
+    cairo_paint(cr);
+    cairo_restore(cr);
+}
+} // namespace
+
+struct Menu::Skin {
+    Surface frame = Surface(nullptr, cairo_surface_destroy);
+    Surface interior = Surface(nullptr, cairo_surface_destroy);
+    int width{};
+    int height{};
+};
 
 Menu::Menu(SDL_Window* parent) : parent_(parent) {
     if (!parent_) throw std::invalid_argument("Menu needs a parent window");
     std::unique_ptr<PangoFontMap, decltype(&g_object_unref)> map(pango_cairo_font_map_new(), g_object_unref);
     fonts_.reset(pango_font_map_create_context(map.get()), g_object_unref);
+}
+
+Menu::~Menu() = default;
+
+bool Menu::hasRetailSkin() const {
+    return skin_ && skin_->frame != nullptr;
+}
+
+void Menu::loadRetailAssets(const std::filesystem::path& gameDir) {
+    if (gameDir.empty()) return;
+    try {
+        const auto lngSue = assets::resolveCaseInsensitivePath(gameDir, "lng.sue");
+        std::error_code ec;
+        if (!std::filesystem::is_regular_file(lngSue, ec)) return;
+        const auto msgb = assets::readSueEntry(lngSue, "msgb.dat");
+        if (msgb.size() < 20u) return;
+        const std::span<const std::uint8_t> view(msgb);
+        const std::uint32_t count = readU32(view, 0u);
+        if (count < 3u || count > 256u || 4u + (std::size_t(count) + 1u) * 4u > view.size()) return;
+        const std::size_t palOff = readU32(view, 4u);
+        const std::size_t palEnd = readU32(view, 8u);
+        const std::size_t frmOff = readU32(view, 12u);
+        const std::size_t frmEnd = readU32(view, 16u);
+        if (palEnd < palOff || palEnd - palOff < 512u || palEnd > view.size()) return;
+        if (frmEnd < frmOff || frmEnd - frmOff < 9u || frmEnd > view.size()) return;
+        const auto pal = view.subspan(palOff, palEnd - palOff);
+        const auto spr = view.subspan(frmOff, frmEnd - frmOff);
+        if (spr[8] != 0xa1u && spr[8] != 0xa2u) return;
+        const int ox = static_cast<std::int16_t>(readU16(spr, 0u));
+        const int oy = static_cast<std::int16_t>(readU16(spr, 2u));
+        const unsigned w = readU16(spr, 4u);
+        const unsigned h = readU16(spr, 6u);
+        if (w < 16u || h < 16u || w > 1024u || h > 1024u) return;
+
+        assets::MapImage img{w, h, std::vector<std::uint8_t>(std::size_t(w) * h * 4u, 0u)};
+        assets::drawIndexedFrame(img, -ox, -oy, spr, pal.first(512u));
+        auto frameSurf = mapImageToCairo(img);
+        if (!frameSurf) return;
+
+        Surface interiorSurf(nullptr, cairo_surface_destroy);
+        if (w > 16u && h > 16u) {
+            const unsigned iw = w - 8u;
+            const unsigned ih = h - 8u;
+            assets::MapImage tile{iw, ih, std::vector<std::uint8_t>(std::size_t(iw) * ih * 4u, 0u)};
+            for (unsigned r = 0u; r < ih; ++r) {
+                std::memcpy(tile.rgba.data() + std::size_t(r) * iw * 4u,
+                            img.rgba.data() + (std::size_t(r + 4u) * w + 4u) * 4u,
+                            std::size_t(iw) * 4u);
+            }
+            interiorSurf = mapImageToCairo(tile);
+        }
+
+        auto next = std::make_unique<Skin>();
+        next->frame = std::move(frameSurf);
+        next->interior = std::move(interiorSurf);
+        next->width = int(w);
+        next->height = int(h);
+        skin_ = std::move(next);
+        if (active_) render();
+    } catch (...) {
+    }
 }
 
 const std::string& Menu::highlighted() const {
@@ -141,33 +260,110 @@ void Menu::render() {
     Surface panel(cairo_image_surface_create(CAIRO_FORMAT_ARGB32, panelW, panelH), cairo_surface_destroy);
     Context graphics(cairo_create(panel.get()), cairo_destroy);
     auto* cr = graphics.get();
-    colour(cr, 27, 32, 30);
-    cairo_paint(cr);
-    colour(cr, 132, 127, 101);
-    cairo_set_line_width(cr, 1);
-    cairo_rectangle(cr, .5, .5, panelW - 1, panelH - 1);
-    cairo_stroke(cr);
-    colour(cr, 201, 190, 152);
-    text(cr, fonts_.get(), title_, titlePx, true, pad, pad, panelW - 2 * pad, Align::left);
-    colour(cr, 70, 76, 68);
-    cairo_rectangle(cr, pad, rowsTop_ - pad / 4.0, panelW - 2 * pad, 1);
-    cairo_fill(cr);
+    const bool skinned = hasRetailSkin();
+    if (skinned) {
+        colour(cr, 18, 22, 18);
+        cairo_paint(cr);
+        const int border = static_cast<int>(std::clamp<long>(
+            std::lround(4.0 * std::clamp(double(fontPx) / 16.0, 1.0, 2.0)),
+            4L, std::max(4L, std::min<long>(panelW, panelH) / 4L)));
+        const double b = double(border);
+        if (skin_->interior) {
+            cairo_save(cr);
+            cairo_rectangle(cr, b, b, std::max(1.0, panelW - 2.0 * b), std::max(1.0, panelH - 2.0 * b));
+            cairo_clip(cr);
+            cairo_pattern_t* pat = cairo_pattern_create_for_surface(skin_->interior.get());
+            cairo_pattern_set_extend(pat, CAIRO_EXTEND_REPEAT);
+            cairo_pattern_set_filter(pat, CAIRO_FILTER_NEAREST);
+            cairo_set_source(cr, pat);
+            cairo_paint_with_alpha(cr, 0.72);
+            cairo_pattern_destroy(pat);
+            cairo_set_source_rgba(cr, 12.0 / 255.0, 16.0 / 255.0, 12.0 / 255.0, 0.36);
+            cairo_paint(cr);
+            cairo_restore(cr);
+        }
+        const double sw = double(skin_->width);
+        const double sh = double(skin_->height);
+        constexpr double sB = 4.0;
+        const std::array<std::array<double, 8>, 8> strips{{
+            {0.0,     0.0,     sB,        sB,        0.0,        0.0,        b,             b},
+            {sw - sB, 0.0,     sB,        sB,        panelW - b, 0.0,        b,             b},
+            {0.0,     sh - sB, sB,        sB,        0.0,        panelH - b, b,             b},
+            {sw - sB, sh - sB, sB,        sB,        panelW - b, panelH - b, b,             b},
+            {sB,      0.0,     sw - 2*sB, sB,        b,          0.0,        panelW - 2*b,  b},
+            {sB,      sh - sB, sw - 2*sB, sB,        b,          panelH - b, panelW - 2*b,  b},
+            {0.0,     sB,      sB,        sh - 2*sB, 0.0,        b,          b,             panelH - 2*b},
+            {sw - sB, sB,      sB,        sh - 2*sB, panelW - b, b,          b,             panelH - 2*b},
+        }};
+        for (const auto& s : strips) {
+            drawSubRectNearest(cr, skin_->frame.get(), s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7]);
+        }
+        cairo_set_source_rgba(cr, 146.0 / 255.0, 132.0 / 255.0, 92.0 / 255.0, 0.55);
+        cairo_set_line_width(cr, 1.0);
+        cairo_rectangle(cr, b + 0.5, b + 0.5, std::max(1.0, panelW - 2.0 * b - 1.0),
+                        std::max(1.0, panelH - 2.0 * b - 1.0));
+        cairo_stroke(cr);
+
+        cairo_set_source_rgba(cr, 52.0 / 255.0, 48.0 / 255.0, 30.0 / 255.0, 0.40);
+        cairo_rectangle(cr, b + 2.0, b + 2.0, std::max(1.0, panelW - 2.0 * b - 4.0),
+                        std::max(1.0, rowsTop_ - b - pad / 4.0 - 2.0));
+        cairo_fill(cr);
+
+        cairo_set_source_rgba(cr, 0.0, 0.0, 0.0, 0.65);
+        text(cr, fonts_.get(), title_, titlePx, true, pad + 1.0, pad + 1.0, panelW - 2 * pad, Align::left);
+        colour(cr, 232, 214, 158);
+        text(cr, fonts_.get(), title_, titlePx, true, pad, pad, panelW - 2 * pad, Align::left);
+        colour(cr, 142, 128, 86);
+        cairo_rectangle(cr, pad, rowsTop_ - pad / 4.0, panelW - 2 * pad, 1);
+        cairo_fill(cr);
+    } else {
+        colour(cr, 27, 32, 30);
+        cairo_paint(cr);
+        colour(cr, 132, 127, 101);
+        cairo_set_line_width(cr, 1);
+        cairo_rectangle(cr, .5, .5, panelW - 1, panelH - 1);
+        cairo_stroke(cr);
+        colour(cr, 201, 190, 152);
+        text(cr, fonts_.get(), title_, titlePx, true, pad, pad, panelW - 2 * pad, Align::left);
+        colour(cr, 70, 76, 68);
+        cairo_rectangle(cr, pad, rowsTop_ - pad / 4.0, panelW - 2 * pad, 1);
+        cairo_fill(cr);
+    }
 
     for (int i = first_; i < first_ + visible_ && i < int(items_.size()); ++i) {
         const auto& item = items_[i];
         const int y = rowsTop_ + (i - first_) * rowHeight_;
         if (i == highlight_) {
-            colour(cr, i == armed_ ? 96 : 74, i == armed_ ? 104 : 86, i == armed_ ? 78 : 60);
-            cairo_rectangle(cr, pad / 2.0, y + 2, panelW - pad, rowHeight_ - 4);
-            cairo_fill(cr);
+            if (skinned) {
+                colour(cr, i == armed_ ? 98 : 68, i == armed_ ? 104 : 78, i == armed_ ? 68 : 52);
+                cairo_rectangle(cr, pad / 2.0, y + 2, panelW - pad, rowHeight_ - 4);
+                cairo_fill_preserve(cr);
+                cairo_set_source_rgba(cr, 182.0 / 255.0, 164.0 / 255.0, 108.0 / 255.0, 0.80);
+                cairo_set_line_width(cr, 1.0);
+                cairo_stroke(cr);
+                colour(cr, 220, 194, 116);
+                cairo_rectangle(cr, pad / 2.0 + 2.0, y + 4.0, 3.0, std::max(1.0, rowHeight_ - 8.0));
+                cairo_fill(cr);
+            } else {
+                colour(cr, i == armed_ ? 96 : 74, i == armed_ ? 104 : 86, i == armed_ ? 78 : 60);
+                cairo_rectangle(cr, pad / 2.0, y + 2, panelW - pad, rowHeight_ - 4);
+                cairo_fill(cr);
+            }
         }
         const int half = (panelW - 2 * pad) / 2;
         const bool hasValue = !item.value.empty();
-        if (item.selectable) colour(cr, 236, 236, 228); else colour(cr, 170, 176, 168);
+        if (skinned) {
+            if (i == highlight_) colour(cr, 246, 244, 232);
+            else if (item.selectable) colour(cr, 232, 230, 218);
+            else colour(cr, 168, 174, 160);
+        } else {
+            if (item.selectable) colour(cr, 236, 236, 228); else colour(cr, 170, 176, 168);
+        }
         text(cr, fonts_.get(), item.label, fontPx, item.selectable && i == highlight_, pad, y + (rowHeight_ - fontPx * 1.3) / 2,
              hasValue ? half : panelW - 2 * pad, Align::left);
         if (hasValue) {
-            colour(cr, 201, 190, 152);
+            if (skinned) colour(cr, i == highlight_ ? 236 : 206, i == highlight_ ? 214 : 192, i == highlight_ ? 148 : 146);
+            else colour(cr, 201, 190, 152);
             text(cr, fonts_.get(), item.value, fontPx, false, pad + half, y + (rowHeight_ - fontPx * 1.3) / 2, half, Align::right);
         }
     }

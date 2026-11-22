@@ -294,6 +294,7 @@ struct GoldPostMissionScreen::Assets {
             fanfareDev = 0;
         }
     }
+    MenuCursorAnimator menuCursor;
 };
 
 GoldPostMissionScreen::GoldPostMissionScreen(SDL_Window* window,
@@ -305,10 +306,17 @@ GoldPostMissionScreen::GoldPostMissionScreen(SDL_Window* window,
 
 GoldPostMissionScreen::~GoldPostMissionScreen() {
     stopFanfare();
+    if (assets_) {
+        assets_->menuCursor.restore();
+    }
 }
 
 bool GoldPostMissionScreen::hasRetailAssets() const {
     return assets_ && assets_->loadedRetail;
+}
+
+bool GoldPostMissionScreen::hasMenuCursor() const {
+    return assets_ && assets_->menuCursor.loaded();
 }
 
 bool GoldPostMissionScreen::hasFanfareAudio() const {
@@ -419,6 +427,9 @@ void GoldPostMissionScreen::loadAssets(std::optional<int> fixedBgIndex) {
     assets_->loadedRetail =
         (assets_->mainBg != nullptr || assets_->winRusBg.surface != nullptr) &&
         statPicsOk && mstatBtOk && starsOk;
+    if (window_ != nullptr) {
+        assets_->menuCursor.load(gameDir_);
+    }
 }
 
 void GoldPostMissionScreen::stopFanfare() {
@@ -485,12 +496,18 @@ void GoldPostMissionScreen::open(GoldPostMissionStats stats, bool playFanfare) {
     } else {
         stopFanfare();
     }
+    if (window_ && assets_) {
+        assets_->menuCursor.apply();
+    }
 }
 
 void GoldPostMissionScreen::close() {
     active_ = false;
     hoveredId_.clear();
     stopFanfare();
+    if (assets_) {
+        assets_->menuCursor.restore();
+    }
     dirty_ = true;
 }
 
@@ -692,6 +709,9 @@ void GoldPostMissionScreen::handleMouseUp() {}
 GoldPostMissionResult GoldPostMissionScreen::handleEvent(const SDL_Event& event) {
     GoldPostMissionResult res{};
     if (!active_) return res;
+    if (window_ && assets_) {
+        assets_->menuCursor.apply();
+    }
 
     if (event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED &&
         window_ && event.window.windowID == SDL_GetWindowID(window_)) {
@@ -1178,6 +1198,9 @@ void GoldPostMissionScreen::renderToBuffer(int pixelW, int pixelH, std::vector<s
 
 void GoldPostMissionScreen::draw(VulkanWindow& renderer) {
     if (!active_) return;
+    if (window_ && assets_) {
+        assets_->menuCursor.apply();
+    }
     int pw = 0, ph = 0;
     if (window_ && SDL_GetWindowSizeInPixels(window_, &pw, &ph) && pw > 0 && ph > 0) {
     } else {

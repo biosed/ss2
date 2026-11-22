@@ -858,7 +858,14 @@ void testVulkanWindowOverlay(bool validate, const std::filesystem::path& gameDir
 
     ss2::ValidationReport report;
     ss2::VulkanWindow renderer(win, validate ? &report : nullptr);
+    {
+        ss2::GoldFrontEnd headlessFe(nullptr, {});
+        check(!headlessFe.hasMenuCursor(), "headless GoldFrontEnd hasMenuCursor=false");
+        ss2::GoldPostMissionScreen headlessPm(nullptr, {});
+        check(!headlessPm.hasMenuCursor(), "headless GoldPostMissionScreen hasMenuCursor=false");
+    }
     ss2::GoldFrontEnd fe(win, gameDir, 0);
+    check(fe.hasMenuCursor(), "live retail GoldFrontEnd loads 21-frame MENU_CUR.ANI/.COL cursor");
     fe.setMissions(makeSyntheticMissions(3));
     fe.setCampaigns(makeSyntheticCampaigns());
     fe.setMultiplayerMissions(makeSyntheticMissions(3));
@@ -919,6 +926,7 @@ void testVulkanWindowOverlay(bool validate, const std::filesystem::path& gameDir
     winStats.hasNextCampaign = true;
     winStats.nextCampaignTitle = "2. Breakout";
     postStats.open(winStats, false);
+    check(postStats.hasMenuCursor(), "live retail GoldPostMissionScreen loads MENU_CUR.ANI/.COL cursor");
     postStats.draw(renderer);
     renderer.present(empty);
 
@@ -931,6 +939,7 @@ void testVulkanWindowOverlay(bool validate, const std::filesystem::path& gameDir
     winStats.starRating = 0;
     winStats.hasNextCampaign = false;
     postStats.open(winStats, false);
+    check(postStats.hasMenuCursor(), "live retail GoldPostMissionScreen loads MENU_CUR.ANI/.COL cursor");
     postStats.draw(renderer);
     renderer.present(empty);
 

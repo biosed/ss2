@@ -30,6 +30,8 @@ void drawShadowFrame(MapImage& map, int originX, int originY, std::span<const st
                      std::vector<std::uint8_t>* shadowMask = nullptr);
 void drawIndexedFrame(MapImage&, int originX, int originY, std::span<const std::uint8_t> sprite,
                       std::span<const std::uint8_t> palette, SpriteCoverage* coverage = nullptr);
+/// Decode a 0xa9 or compact 0xa1 premultiplied-alpha RLE sprite against a 1024-byte `.COL` alpha palette
+/// (4 bytes/entry: RGB565 premul word LE + bgWeight [0..255] + pad) onto an RGBA image.
 void drawAlphaIndexedFrame(MapImage& map, int originX, int originY, std::span<const std::uint8_t> sprite,
                            std::span<const std::uint8_t> palette1024);
 
