@@ -12,9 +12,9 @@ The validation-layer gap from the review has been closed. The application now ex
 | 2 | Choose a supported surface format and color space deliberately. Log the selected pair and actual swapchain extent. Exercise normal SDL resize event handling. | Repeated resizes report the expected drawable pixel extents and resume presentation. Exercise minimize/restore, zero drawable extent and out-of-date recovery. Record which cases were observed live or driven by a fixture. |
 | 3 | Run the platform tests on x86-64. Add a Debug ASan/UBSan CI run alongside the existing build. Tighten the malformed-argument test to require its intended diagnostic. | Record build, CTest, sanitizer and validation results. Record the hosted CI result once a repository and workflow run exist. Check direct standard-library includes and compiler warnings on GCC and Clang. |
 | 4 | Extend the generic clock tests using synthetic periods. Compare one long delta against many small deltas, exact tick boundaries, zero elapsed and fractional remainders over long runs. | Each partition of the same elapsed time yields the same step count and remainder. Keep stall behavior explicit. Defer any production policy that drops ticks or limits catch-up until the original's behavior is measured. |
-| 5 | Run the visible window on BC-250/Bazzite with RADV and a 120 Hz display mode. Capture at least ten seconds after warm-up. | Record SDL driver, compositor, GPU and driver version, active refresh, actual 3840×2160 extent, format/color space, present mode, and p50/p95/p99/max frame interval. Identify the timing source. Application present-call intervals and measured display presentation intervals answer different questions. Keep hardware acceptance pending until this run. |
+| 5 | Run the visible window on BC-250/Bazzite with RADV and a 120 Hz display mode. Capture at least ten seconds after warm-up. | Verified on 22 November 2026 (`AMD BC-250 (RADV GFX1013)`, Bazzite 45 / KDE Plasma Wayland `DP-1` `3840×2160@120.00 Hz`, Mesa `26.2.7`, `Swapchain 3840x2160 FIFO, 4 images, B8G8R8A8Srgb, SrgbNonlinear`): `0` validation errors (`59/59` RADV offscreen, `8/8` live Wayland WSI, `120`-frame 4K clear + Tutorial I smokes); steady-state `--timing` `vkQueuePresentKHR` return intervals `p50=8.33653 ms p95=8.5118 ms max=8.85753 ms` (`0/1200 > 12.5 ms`) clear-only and `p50=8.33388 ms p95=8.546 ms max=14.9139 ms` (`1/1202 > 12.5 ms`) Tutorial I. See [validation.md](validation.md). |
 
-The clear-only measurement establishes a presentation baseline. Assess the 8.33 ms frame budget again with representative terrain, sprites and simulation load.
+The clear-only measurement and 4K/120 Hz Tutorial I sprite/simulation measurement are recorded in [validation.md](validation.md).
 
 ## Original-game investigation — Codex owns this work
 
@@ -22,7 +22,7 @@ The clear-only measurement establishes a presentation baseline. Assess the 8.33 
 2. **Establish two independent reference tests.** Trace the hash-identified primary Gold 2.2 game DLL and observe tick advances, input order, pause, speed changes and long frames in the original. In parallel, read one SUE entry and decode one PCK sprite with synthetic fixtures and a private retail pixel comparison. Keep the purchased files and captures outside the repository. [Binary evidence and Ghidra workflow](reverse-engineering.md)
 3. **Run the smallest comparable scenario.** Use a recorded input sequence and a single observable state transition. Compare the native and original state at matched ticks across different render schedules, then compare the corresponding scene. Record the first divergent tick or pixel region before expanding to unit behavior, AI and campaigns.
 
-The first bounded SUE/PCK comparison passed on three retail sprite frames. The single-player dispatch clock, opening script sequence and accepted infantry steps now have reference evidence. [Simulation results](tutorial-simulation.md) [Asset results](asset-reference.md) Run the RADV hardware test when the BC-250 is available. The project has no configured Git remote or hosted CI result.
+The first bounded SUE/PCK comparison passed on three retail sprite frames. The single-player dispatch clock, opening script sequence and accepted infantry steps now have reference evidence, and the physical BC-250 / Bazzite / RADV 4K 120 Hz acceptance gate is recorded. [Simulation results](tutorial-simulation.md) [Asset results](asset-reference.md) [Validation record](validation.md) The project has no configured Git remote or hosted CI result.
 
 
 ## Current state, 22 November 2026
@@ -31,7 +31,6 @@ Tutorial I plays end to end on the native build: the normal-input playthrough re
 
 Next work, in order:
 
-1. Specialized `I-GROUPS` behaviors and retail AI flags (`ai_sold_art`, `ai_recon`, `ai_furg_transport`, `ai_katya_move`, `ai_train_move`, `aif_zonehaveown`, `aif_zonenoenemy`) plus remaining `n2Game_Dll.dll` combat/session parity items.
-2. Physical BC-250/RADV 4K/120 Hz hardware acceptance.
+1. Remaining retail `n2Game_Dll.dll` / `n2Cad800.dll` parity items (HUD/weather overlays, progressive building damage, supply crates, voice/SFX polish).
 
-Physical BC-250/RADV 4K/120 Hz performance remains open. The project still has no Git remote, so the CI workflow has never run. [Tutorial I results](tutorial-simulation.md)
+The physical BC-250 / RADV 4K 120 Hz gate passed on 22 November 2026 (`validation.md`). The project still has no Git remote, so the CI workflow has never run. [Tutorial I results](tutorial-simulation.md)
