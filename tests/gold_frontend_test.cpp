@@ -741,6 +741,112 @@ void testRetailGoldAssets(const std::filesystem::path& gameDir) {
     check(fe.state().screen() == ss2::FrontEnd::Screen::MainMenu, "returned from Multiplayer to MainMenu");
 }
 
+struct ProgressBarStats {
+    std::uint64_t totalRgb{};
+    std::uint64_t barRgb{};
+    std::uint64_t lampRgb{};
+    std::size_t changedBarPixels{};
+    std::size_t changedRightHalfBarPixels{};
+};
+
+ProgressBarStats measureLoadingFrame800x600(const std::vector<std::uint8_t>& rgba,
+                                            const std::vector<std::uint8_t>& baseline0) {
+    check(rgba.size() == 800u * 600u * 4u, "loading frame 800x600 RGBA size");
+    check(baseline0.size() == 800u * 600u * 4u, "loading baseline 800x600 RGBA size");
+    ProgressBarStats s{};
+    for (std::size_t i = 0; i < rgba.size(); i += 4u) {
+        s.totalRgb += std::uint64_t(rgba[i]) + rgba[i + 1] + rgba[i + 2];
+    }
+    // Progress channel in 800x600 stage space: x=[138, 654), y=[312, 316)
+    for (int y = 312; y < 316; ++y) {
+        for (int x = 138; x < 654; ++x) {
+            const std::size_t p = (std::size_t(y) * 800u + std::size_t(x)) * 4u;
+            s.barRgb += std::uint64_t(rgba[p]) + rgba[p + 1] + rgba[p + 2];
+            if (rgba[p] != baseline0[p] || rgba[p + 1] != baseline0[p + 1] || rgba[p + 2] != baseline0[p + 2]) {
+                ++s.changedBarPixels;
+                if (x >= 400) ++s.changedRightHalfBarPixels;
+            }
+        }
+    }
+    // Completion indicator lamp in 800x600 stage space: x=[661, 675), y=[310, 318)
+    for (int y = 310; y < 318; ++y) {
+        for (int x = 661; x < 675; ++x) {
+            const std::size_t p = (std::size_t(y) * 800u + std::size_t(x)) * 4u;
+            s.lampRgb += std::uint64_t(rgba[p]) + rgba[p + 1] + rgba[p + 2];
+        }
+    }
+    return s;
+}
+
+void testLoadingScreenFallback() {
+    ss2::GoldLoadingScreen loader(nullptr, {});
+    check(!loader.hasRetailAssets(), "asset-free GoldLoadingScreen hasRetailAssets=false");
+    check(loader.recordCount() == 0u, "asset-free GoldLoadingScreen recordCount=0");
+
+    std::vector<std::uint8_t> f0, f50, f100;
+    loader.renderToBuffer(800, 600, "Tutorial I", 0.0f, f0);
+    loader.renderToBuffer(800, 600, "Tutorial I", 0.5f, f50);
+    loader.renderToBuffer(800, 600, "Tutorial I", 1.0f, f100);
+
+    const auto s0 = measureLoadingFrame800x600(f0, f0);
+    const auto s50 = measureLoadingFrame800x600(f50, f0);
+    const auto s100 = measureLoadingFrame800x600(f100, f0);
+
+    check(s0.totalRgb > 0 && s50.totalRgb > 0 && s100.totalRgb > 0, "fallback loading frames non-empty");
+    check(s50.changedBarPixels > 800u && s100.changedBarPixels > s50.changedBarPixels,
+          "fallback progress bar pixels increase monotonically 0.0 -> 0.5 -> 1.0");
+    check(s50.changedRightHalfBarPixels == 0u && s100.changedRightHalfBarPixels > 800u,
+          "fallback right half of progress bar fills between 0.5 and 1.0");
+    check(s0.barRgb < s50.barRgb && s50.barRgb < s100.barRgb,
+          "fallback progress bar luminance increases monotonically");
+    check(s0.lampRgb == s50.lampRgb && s100.lampRgb > s50.lampRgb,
+          "fallback completion lamp lights at 1.0");
+}
+
+void testRetailLoadingScreen(const std::filesystem::path& gameDir) {
+    const auto lngSue = ss2::assets::resolveCaseInsensitivePath(gameDir, "lng.sue");
+    check(std::filesystem::exists(lngSue), "lng.sue exists for Gold Screen 5 loadscr.dat");
+    const auto rawLoadScr = ss2::assets::readSueEntry(lngSue, "loadscr.dat");
+    check(rawLoadScr.size() > 1000000u, "retail loadscr.dat unpacked (>1 MB)");
+
+    const char* capEnv = std::getenv("SS2_GOLD_FE_CAPTURE_DIR");
+    const std::filesystem::path capDir = capEnv ? std::filesystem::path(capEnv) : std::filesystem::path{};
+
+    for (int bg = 0; bg < 3; ++bg) {
+        ss2::GoldLoadingScreen loader(nullptr, gameDir, bg);
+        check(loader.hasRetailAssets(), "retail GoldLoadingScreen loaded loadscr.dat");
+        check(loader.backgroundIndex() == bg, "retail GoldLoadingScreen honored fixedBgIndex");
+        check(loader.recordCount() == 17u, "retail loadscr.dat has 17 records");
+
+        std::vector<std::uint8_t> f0, f50, f100;
+        loader.renderToBuffer(800, 600, "1. Starting Position", 0.0f, f0);
+        loader.renderToBuffer(800, 600, "1. Starting Position", 0.5f, f50);
+        loader.renderToBuffer(800, 600, "1. Starting Position", 1.0f, f100);
+
+        const auto s0 = measureLoadingFrame800x600(f0, f0);
+        const auto s50 = measureLoadingFrame800x600(f50, f0);
+        const auto s100 = measureLoadingFrame800x600(f100, f0);
+
+        check(s0.totalRgb > 0 && s50.totalRgb > 0 && s100.totalRgb > 0, "retail loading frames non-empty");
+        check(s50.changedBarPixels > 800u && s100.changedBarPixels > s50.changedBarPixels,
+              "retail progress bar pixels increase monotonically 0.0 -> 0.5 -> 1.0");
+        check(s50.changedRightHalfBarPixels == 0u && s100.changedRightHalfBarPixels > 800u,
+              "retail right half of progress bar fills between 0.5 and 1.0");
+        check(s0.barRgb < s50.barRgb && s50.barRgb < s100.barRgb,
+              "retail progress bar luminance increases monotonically");
+        check(s0.lampRgb == s50.lampRgb && s100.lampRgb > s50.lampRgb,
+              "retail completion lamp lights at 1.0");
+
+        if (!capDir.empty() && bg == 0) {
+            std::vector<std::uint8_t> hdFrame;
+            loader.renderToBuffer(1280, 720, "1. Starting Position", 0.5f, hdFrame);
+            writePng(capDir / "screen5_loading_50.png", 1280, 720, hdFrame);
+            loader.renderToBuffer(1280, 720, "1. Starting Position", 1.0f, hdFrame);
+            writePng(capDir / "screen5_loading_100.png", 1280, 720, hdFrame);
+        }
+    }
+}
+
 void testVulkanWindowOverlay(bool validate, const std::filesystem::path& gameDir) {
     if (!SDL_Init(SDL_INIT_VIDEO)) throw std::runtime_error(SDL_GetError());
     struct Guard { ~Guard() { SDL_Quit(); } } sdlGuard;
@@ -783,7 +889,15 @@ void testVulkanWindowOverlay(bool validate, const std::filesystem::path& gameDir
         fe.draw(renderer);
         renderer.present(empty);
     }
-    check(report.errors.load() == 0, "Zero Vulkan validation errors on GoldFrontEnd overlay");
+
+    ss2::GoldLoadingScreen loading(win, gameDir, 0);
+    loading.drawAndPresent(renderer, "1. Starting Position", 0.0f);
+    loading.drawAndPresent(renderer, "1. Starting Position", 0.5f);
+    loading.drawAndPresent(renderer, "1. Starting Position", 1.0f);
+    loading.clear(renderer);
+    renderer.present(empty);
+
+    check(report.errors.load() == 0, "Zero Vulkan validation errors on GoldFrontEnd and GoldLoadingScreen overlays");
 }
 
 }  // namespace
@@ -799,6 +913,7 @@ int main(int argc, char** argv) try {
 
     testCoordinateMapping();
     testFallbackInteraction();
+    testLoadingScreenFallback();
 
     std::filesystem::path gameDir;
     if (const char* env = std::getenv("SS2_PRIVATE_GAME"); env && *env) {
@@ -806,6 +921,7 @@ int main(int argc, char** argv) try {
     }
     if (!gameDir.empty() && std::filesystem::is_directory(gameDir)) {
         testRetailGoldAssets(gameDir);
+        testRetailLoadingScreen(gameDir);
     }
     if (useWindow) {
         testVulkanWindowOverlay(validate, gameDir);

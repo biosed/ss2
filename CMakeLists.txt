@@ -40,7 +40,8 @@ add_library(ss2_gold_frontend STATIC
     src/ui/gold_frontend.cpp
     src/ui/gold_frontend_campaigns.cpp
     src/ui/gold_frontend_multiplayer.cpp
-    src/ui/gold_frontend_dialogs.cpp)
+    src/ui/gold_frontend_dialogs.cpp
+    src/ui/gold_frontend_loading.cpp)
 target_link_libraries(ss2_gold_frontend PUBLIC ss2_briefing ss2_assets PRIVATE PkgConfig::PANGOCAIRO)
 target_compile_options(ss2_gold_frontend PRIVATE ${SS2_WARNINGS})
 target_link_libraries(ss2 PRIVATE ss2_gold_frontend)
@@ -76,7 +77,7 @@ add_library(ss2_session STATIC
     src/session/session_menus.cpp src/session/session_orders.cpp src/session/session_tick.cpp
     src/session/session_input.cpp src/session/session_hud.cpp src/session/session_view.cpp
     src/ui/tutorial_selection.cpp src/audio/sound_player.cpp)
-target_link_libraries(ss2_session PUBLIC ss2_window ss2_briefing ss2_sim ss2_net)
+target_link_libraries(ss2_session PUBLIC ss2_window ss2_briefing ss2_gold_frontend ss2_sim ss2_net)
 target_compile_options(ss2_session PRIVATE ${SS2_WARNINGS})
 target_link_libraries(ss2 PRIVATE ss2_session ss2_gold_frontend ss2_video)
 target_compile_options(ss2_assets PRIVATE ${SS2_WARNINGS})

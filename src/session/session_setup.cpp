@@ -1,4 +1,5 @@
 #include "session/game_session.hpp"
+#include "ui/gold_frontend.hpp"
 #include <algorithm>
 #include <charconv>
 #include <cmath>
@@ -123,6 +124,25 @@ void GameSession::initializeMission() {
         const auto title = "Sudden Strike II | " + mission.stem().string() + " | Mission overview";
         SDL_SetWindowTitle(window, title.c_str());
     } else if (!gameDir.empty()) {
+        const bool showLoadingScreen =
+            window && !limit && !timing && !replayFile && !overviewOnly && !manualClock && !gameDir.empty();
+        std::optional<GoldLoadingScreen> loadingScreen;
+        if (showLoadingScreen) {
+            loadingScreen.emplace(window, gameDir);
+        }
+        struct LoadingOverlayClearGuard {
+            VulkanWindow& renderer;
+            bool active;
+            ~LoadingOverlayClearGuard() {
+                if (active) renderer.clearOverlay(OverlaySlot::panel);
+            }
+        } loadingClearGuard{renderer, showLoadingScreen};
+        const auto reportLoadProgress = [&](float progress01) {
+            if (loadingScreen) {
+                loadingScreen->drawAndPresent(renderer, currentMissionTitle, progress01);
+            }
+        };
+
         unitCatalog = ss2::assets::UnitCatalog::load(gameDir);
         const auto missionPath = mission.empty()
             ? ss2::assets::resolveCaseInsensitivePath(gameDir, "maps/single/--- TUTORIAL I ---.SSM")
@@ -178,6 +198,7 @@ void GameSession::initializeMission() {
         fogGridW = data.width;
         fogGridH = data.height;
         mapScheme = data.scheme;
+        reportLoadProgress(0.10f);
         auto map = isTutorial1
             ? ss2::assets::loadTutorialTerrain(gameDir)
             : ss2::assets::loadMissionTerrain(gameDir, missionPath);
@@ -187,6 +208,7 @@ void GameSession::initializeMission() {
         const auto objects = isTutorial1
             ? ss2::assets::drawTutorialScenery(map, gameDir, &depth, 0, &missionBuildings, &missionBridges)
             : ss2::assets::drawMissionScenery(map, gameDir, missionPath, &depth, &missionBuildings, &missionBridges);
+        reportLoadProgress(0.45f);
         const auto placements = isTutorial1
             ? ss2::assets::readTutorialPlacements(gameDir)
             : ss2::assets::readMissionPlacements(missionPath);
@@ -305,6 +327,7 @@ void GameSession::initializeMission() {
         if (!gpuAtlasSlots.empty()) std::cout << "GPU 4x HD infantry atlases: " << gpuAtlasSlots.size() << " classes\n";
         else if (!infantryArt.empty()) std::cout << "Painted HD infantry: " << scene->paintedCount() << "/" << scene->units().size() << '\n';
         gpuPreloadLogged = true;
+        reportLoadProgress(0.75f);
         const auto& infantry = scene->units();
         if (!isTutorial1) {
             if (!data.description.empty()) {
@@ -643,6 +666,7 @@ void GameSession::initializeMission() {
                 }
             }
         }
+        reportLoadProgress(1.00f);
     }
 }
 

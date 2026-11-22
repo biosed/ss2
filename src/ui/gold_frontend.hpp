@@ -10,6 +10,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace ss2 {
@@ -250,6 +251,38 @@ private:
 
     int lastPixelW_{0};
     int lastPixelH_{0};
+    std::vector<std::uint8_t> rgba_;
+};
+
+// Authentic Sudden Strike II Gold 2.2 Screen 5 Mission Loading screen (lng.sue\loadscr.dat).
+// Decodes and caches the 640x480 wartime vignette background, 548x36 steel progress frame,
+// 516x4 metallic progress bar fill, and 14x8 completion indicator lamp once per mission load,
+// with an asset-free fallback when gameDir is empty or loadscr.dat is absent.
+class GoldLoadingScreen {
+public:
+    GoldLoadingScreen(SDL_Window* window, const std::filesystem::path& gameDir,
+                      std::optional<int> fixedBgIndex = std::nullopt);
+    ~GoldLoadingScreen();
+
+    GoldLoadingScreen(const GoldLoadingScreen&) = delete;
+    GoldLoadingScreen& operator=(const GoldLoadingScreen&) = delete;
+
+    bool hasRetailAssets() const;
+    int backgroundIndex() const;
+    std::size_t recordCount() const;
+
+    void renderToBuffer(int pixelW, int pixelH, std::string_view missionTitle,
+                        float progress01, std::vector<std::uint8_t>& outRgba);
+    void drawAndPresent(VulkanWindow& renderer, std::string_view missionTitle, float progress01);
+    void clear(VulkanWindow& renderer);
+
+private:
+    struct Assets;
+    void loadAssets(std::optional<int> fixedBgIndex);
+
+    SDL_Window* window_{};
+    std::filesystem::path gameDir_;
+    std::unique_ptr<Assets> assets_;
     std::vector<std::uint8_t> rgba_;
 };
 
