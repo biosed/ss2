@@ -42,6 +42,7 @@ public:
     void addShadow(const SpriteCoverage&);
     void clearRect(int left, int top, int width, int height);
     bool occludes(int x, int y, int footY, bool revealed = false, int checkerPhase = 0) const;
+    bool hasShadow(int x, int y) const;
     bool intersects(int left, int top, int width, int height) const;
 private:
     static constexpr int side = 32;

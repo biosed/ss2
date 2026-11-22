@@ -35,6 +35,57 @@ int main() try {
     frame[12] = 0x83;
     try { ss2::assets::drawIndexedFrame(map, 0, 0, frame, palette); return 1; }
     catch (const std::runtime_error&) {}
+
+    // Synthetic 0xa3 shadow frame: negative left clipping, skip run, omitted row tail, alpha==0 guard,
+    // and shadowMask deduplication (no double-darkening).
+    ss2::assets::MapImage shMap{6, 2, std::vector<std::uint8_t>(6u * 2u * 4u, 255u)};
+    for (std::size_t i = 0; i < shMap.rgba.size(); i += 4u) {
+        shMap.rgba[i + 0u] = 200u;
+        shMap.rgba[i + 1u] = 100u;
+        shMap.rgba[i + 2u] = 40u;
+        shMap.rgba[i + 3u] = 255u;
+    }
+    // Leave out-of-diamond corner pixel (5, 1) transparent.
+    shMap.rgba[(1u * 6u + 5u) * 4u + 0u] = 0u;
+    shMap.rgba[(1u * 6u + 5u) * 4u + 1u] = 0u;
+    shMap.rgba[(1u * 6u + 5u) * 4u + 2u] = 0u;
+    shMap.rgba[(1u * 6u + 5u) * 4u + 3u] = 0u;
+
+    const std::vector<std::uint8_t> shSprite{
+        0xff, 0xff, 0, 0, 7, 0, 2, 0, 0xa3, // left=-1, top=0, w=7, h=2
+        3, 0, 0x02, 0x81, 0x03,             // row 0: shadow 2 (-1,0), skip 1 (1), shadow 3 (2,3,4), omit x=6
+        2, 0, 0x85, 0x02                    // row 1: skip 5 (-1..3), shadow 2 (4,5)
+    };
+    std::vector<std::uint8_t> shMask(6u * 2u, 0u);
+    ss2::assets::drawShadowFrame(shMap, 0, 0, shSprite, &shMask);
+
+    const auto expectPx = [&](unsigned x, unsigned y, std::uint8_t r, std::uint8_t g, std::uint8_t b, std::uint8_t a) {
+        const std::size_t p = (std::size_t(y) * 6u + x) * 4u;
+        return shMap.rgba[p] == r && shMap.rgba[p + 1u] == g &&
+               shMap.rgba[p + 2u] == b && shMap.rgba[p + 3u] == a;
+    };
+    if (!expectPx(0, 0, 100, 66, 61, 255) || !expectPx(1, 0, 200, 100, 40, 255) ||
+        !expectPx(2, 0, 100, 66, 61, 255) || !expectPx(3, 0, 100, 66, 61, 255) ||
+        !expectPx(4, 0, 100, 66, 61, 255) || !expectPx(5, 0, 200, 100, 40, 255) ||
+        !expectPx(0, 1, 200, 100, 40, 255) || !expectPx(4, 1, 100, 66, 61, 255) ||
+        !expectPx(5, 1, 0, 0, 0, 0)) {
+        return 1;
+    }
+    if (shMask[0] != 1u || shMask[1] != 0u || shMask[10] != 1u || shMask[11] != 0u) return 1;
+
+    // Second pass with same mask must not double-darken.
+    ss2::assets::drawShadowFrame(shMap, 0, 0, shSprite, &shMask);
+    if (!expectPx(0, 0, 100, 66, 61, 255) || !expectPx(4, 1, 100, 66, 61, 255)) return 1;
+
+    // Invalid tag and overflowing run length must throw.
+    auto badTag = shSprite;
+    badTag[8] = 0xa2;
+    try { ss2::assets::drawShadowFrame(shMap, 0, 0, badTag); return 1; }
+    catch (const std::runtime_error&) {}
+    auto badRun = shSprite;
+    badRun.back() = 0x05;
+    try { ss2::assets::drawShadowFrame(shMap, 0, 0, badRun); return 1; }
+    catch (const std::runtime_error&) {}
     return 0;
 } catch (const std::exception& e) {
     std::cerr << e.what() << '\n';

@@ -36,6 +36,49 @@ SpriteCoverage readShadowCoverage(int originX, int originY, View sprite) {
     return result;
 }
 
+void drawShadowFrame(MapImage& map, int originX, int originY, View sprite, std::vector<std::uint8_t>* shadowMask) {
+    if (sprite.size() < 9 || sprite[8] != 0xa3) throw std::runtime_error("Invalid shadow sprite");
+    if (!map.width || !map.height || (std::uint64_t(map.width) * map.height > map.rgba.size() / 4))
+        throw std::runtime_error("Invalid shadow destination");
+    const int width = word(sprite, 4), height = word(sprite, 6);
+    if (width < 1 || height < 1 || width > 2048 || height > 2048)
+        throw std::runtime_error("Invalid shadow sprite dimensions");
+    if (shadowMask && shadowMask->size() != std::size_t(map.width) * map.height)
+        throw std::runtime_error("Invalid shadow mask size");
+    const auto left = std::int64_t(originX) + std::int16_t(word(sprite, 0));
+    const auto top = std::int64_t(originY) + std::int16_t(word(sprite, 2));
+    std::size_t pos = 9;
+    for (int y = 0; y < height; ++y) {
+        const auto size = word(sprite, pos);
+        pos += 2;
+        if (size > sprite.size() - pos) throw std::runtime_error("Truncated shadow row");
+        const auto dy = top + y;
+        const bool rowVisible = dy >= 0 && dy < std::int64_t(map.height);
+        int x = 0;
+        for (const auto op : sprite.subspan(pos, size)) {
+            const int count = op & 127;
+            if (count > width - x) throw std::runtime_error("Shadow run outside sprite");
+            if (!(op & 128) && rowVisible && count > 0) {
+                const auto dx0 = std::max<std::int64_t>(0, left + x);
+                const auto dx1 = std::min<std::int64_t>(map.width, left + x + count);
+                for (std::int64_t dx = dx0; dx < dx1; ++dx) {
+                    const std::size_t idx = std::size_t(dy) * map.width + std::size_t(dx);
+                    if (shadowMask && (*shadowMask)[idx]) continue;
+                    auto* pixel = map.rgba.data() + idx * 4u;
+                    if (pixel[3] == 0u) continue;
+                    if (shadowMask) (*shadowMask)[idx] = 1u;
+                    // Retail n2Cad800.dll 0xa3 formula: RGB565 ((c & 0xF7DE) >> 1) + 0x0085.
+                    pixel[0] = static_cast<std::uint8_t>(pixel[0] >> 1);
+                    pixel[1] = static_cast<std::uint8_t>((pixel[1] >> 1) + 16u);
+                    pixel[2] = static_cast<std::uint8_t>((pixel[2] >> 1) + 41u);
+                }
+            }
+            x += count;
+        }
+        pos += size;
+    }
+}
+
 void drawIndexedFrame(MapImage& map, int originX, int originY, View sprite, View palette, SpriteCoverage* coverage) {
     if (sprite.size() < 9 || palette.size() < 512 || !map.width || !map.height ||
         (std::uint64_t(map.width) * map.height > map.rgba.size() / 4))

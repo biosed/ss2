@@ -13,6 +13,8 @@ struct SpriteCoverage {
     }
 };
 SpriteCoverage readShadowCoverage(int originX, int originY, std::span<const std::uint8_t> sprite);
+void drawShadowFrame(MapImage& map, int originX, int originY, std::span<const std::uint8_t> sprite,
+                     std::vector<std::uint8_t>* shadowMask = nullptr);
 void drawIndexedFrame(MapImage&, int originX, int originY, std::span<const std::uint8_t> sprite,
                       std::span<const std::uint8_t> palette, SpriteCoverage* coverage = nullptr);
 }

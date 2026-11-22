@@ -101,6 +101,21 @@ bool isRenderableFrame(View frame) {
     return w > 1u || h > 1u;
 }
 
+bool isRenderableShadowFrame(View frame) {
+    if (frame.size() < 9u || frame[8] != 0xa3u) return false;
+    const std::uint32_t w = std::uint32_t(frame[4]) | (std::uint32_t(frame[5]) << 8);
+    const std::uint32_t h = std::uint32_t(frame[6]) | (std::uint32_t(frame[7]) << 8);
+    return w >= 1u && h >= 1u && w <= 2048u && h <= 2048u && (w > 1u || h > 1u);
+}
+
+std::pair<int, int> readHotOffset(View hot, unsigned hull) {
+    const int hotDx = i32(hot, std::size_t(hull) * 8u);
+    const int hotDy = i32(hot, std::size_t(hull) * 8u + 4u);
+    if (hotDx < -2048 || hotDx > 2048 || hotDy < -2048 || hotDy > 2048)
+        throw std::runtime_error("Vehicle turret offset exceeds sprite bounds");
+    return {hotDx, hotDy};
+}
+
 enum class Kind { Tank, Artillery, HeavyMg };
 
 struct Spec {
@@ -147,7 +162,18 @@ struct LayerList {
     std::size_t count{0};
 
     void push(View frame, int ox, int oy) {
-        if (isRenderableFrame(frame)) {
+        if (count < items.size() && isRenderableFrame(frame)) {
+            items[count++] = {frame, ox, oy};
+        }
+    }
+};
+
+struct ShadowLayerList {
+    std::array<FrameLayer, 2> items{};
+    std::size_t count{0};
+
+    void push(View frame, int ox, int oy) {
+        if (count < items.size() && isRenderableShadowFrame(frame)) {
             items[count++] = {frame, ox, oy};
         }
     }
@@ -161,7 +187,7 @@ std::optional<MissionVehicleAsset> tryLoadVehicleStemAsset(const std::filesystem
     const std::size_t first = u32(*pck, 0);
     if (first < 8u || (first % 4u) != 0u || first > pck->size()) return std::nullopt;
     const std::size_t frameCount = first / 4u - 1u;
-    if (frameCount < 32u) return std::nullopt;
+    if (frameCount != 7u && frameCount < 32u) return std::nullopt;
     auto hot = tryReadSue(archive, std::string(stem) + ".hot");
     return MissionVehicleAsset{std::move(*pck), std::move(*col),
                                hot ? std::move(*hot) : Bytes{}, frameCount};
@@ -173,15 +199,16 @@ LayerList collectVehicleLayers(View pck, View hot, std::size_t frameCount,
     const unsigned turret = turretDir & 31u;
     LayerList layers;
     switch (frameCount) {
+    case 7u:
+        layers.push(pckFrame(pck, 0u), x, y);
+        layers.push(pckFrame(pck, 1u), x, y);
+        break;
     case 288u: {
         const auto block6 = pckFrame(pck, 192u + turret);
         if (frameTag(block6) == 0xa2u) {
             layers.push(pckFrame(pck, hull), x, y);
             if (isRenderableFrame(block6) && hot.size() >= 32u * 8u) {
-                const int hotDx = i32(hot, std::size_t(hull) * 8u);
-                const int hotDy = i32(hot, std::size_t(hull) * 8u + 4u);
-                if (hotDx < -2048 || hotDx > 2048 || hotDy < -2048 || hotDy > 2048)
-                    throw std::runtime_error("Vehicle turret offset exceeds sprite bounds");
+                const auto [hotDx, hotDy] = readHotOffset(hot, hull);
                 layers.push(block6, x + hotDx, y + hotDy);
             }
         } else {
@@ -225,8 +252,17 @@ LayerList collectVehicleLayers(View pck, View hot, std::size_t frameCount,
 }
 
 LayerList collectWreckLayers(View pck, std::size_t frameCount, int x, int y, unsigned hullDir) {
-    const unsigned hull = hullDir & 31u;
     LayerList layers;
+    if (frameCount == 7u) {
+        layers.push(pckFrame(pck, 4u), x, y);
+        layers.push(pckFrame(pck, 5u), x, y);
+        if (layers.count == 0u) {
+            layers.push(pckFrame(pck, 0u), x, y);
+            layers.push(pckFrame(pck, 1u), x, y);
+        }
+        return layers;
+    }
+    const unsigned hull = hullDir & 31u;
     const auto tryBlock = [&](std::size_t base) -> bool {
         if (base + hull < frameCount) {
             const auto fr = pckFrame(pck, base + hull);
@@ -239,12 +275,82 @@ LayerList collectWreckLayers(View pck, std::size_t frameCount, int x, int y, uns
     };
     if (frameCount == 288u) {
         if (!tryBlock(96u) && !tryBlock(32u)) (void)tryBlock(0u);
-    } else if (frameCount == 160u || frameCount == 352u) {
+    } else if (frameCount == 128u || frameCount == 160u || frameCount == 352u) {
         if (!tryBlock(64u) && !tryBlock(32u)) (void)tryBlock(0u);
     } else {
         if (!tryBlock(32u)) (void)tryBlock(0u);
     }
     return layers;
+}
+
+ShadowLayerList collectVehicleShadowLayers(View pck, View hot, std::size_t frameCount,
+                                           int x, int y, unsigned hullDir, unsigned turretDir, bool alive) {
+    const unsigned hull = hullDir & 31u;
+    const unsigned turret = turretDir & 31u;
+    ShadowLayerList shadows;
+    switch (frameCount) {
+    case 7u:
+        shadows.push(pckFrame(pck, 6u), x, y);
+        break;
+    case 66u:
+        shadows.push(pckFrame(pck, alive ? 64u : 65u), x, y);
+        break;
+    case 128u:
+        shadows.push(pckFrame(pck, (alive ? 32u : 96u) + hull), x, y);
+        break;
+    case 160u:
+        shadows.push(pckFrame(pck, (alive ? 96u : 128u) + hull), x, y);
+        break;
+    case 192u:
+        shadows.push(pckFrame(pck, 160u + hull), x, y);
+        break;
+    case 256u:
+        if (frameTag(pckFrame(pck, 160u + hull)) == 0xa3u) {
+            shadows.push(pckFrame(pck, (alive ? 160u : 224u) + hull), x, y);
+        } else {
+            shadows.push(pckFrame(pck, (alive ? 192u : 224u) + hull), x, y);
+        }
+        break;
+    case 288u: {
+        const auto block6 = pckFrame(pck, 192u + turret);
+        if (frameTag(block6) == 0xa2u) {
+            shadows.push(pckFrame(pck, 160u + hull), x, y);
+            if (alive && isRenderableFrame(block6) && hot.size() >= 32u * 8u) {
+                const auto [hotDx, hotDy] = readHotOffset(hot, hull);
+                shadows.push(pckFrame(pck, 256u + turret), x + hotDx, y + hotDy);
+            }
+        } else {
+            shadows.push(pckFrame(pck, (alive ? 192u : 256u) + hull), x, y);
+        }
+        break;
+    }
+    case 352u:
+        if (frameTag(pckFrame(pck, 64u + hull)) == 0xa2u) {
+            if (alive) {
+                shadows.push(pckFrame(pck, 96u + hull), x, y);
+                shadows.push(pckFrame(pck, 224u + turret), x, y);
+            } else {
+                shadows.push(pckFrame(pck, 320u + hull), x, y);
+            }
+        } else {
+            shadows.push(pckFrame(pck, (alive ? 64u : 320u) + hull), x, y);
+        }
+        break;
+    case 448u:
+        if (alive) {
+            shadows.push(pckFrame(pck, 64u + hull), x, y);
+            shadows.push(pckFrame(pck, 256u + turret), x, y);
+        } else {
+            shadows.push(pckFrame(pck, 416u + hull), x, y);
+        }
+        break;
+    case 512u:
+        shadows.push(pckFrame(pck, (alive ? 192u : 448u) + hull), x, y);
+        break;
+    default:
+        break;
+    }
+    return shadows;
 }
 
 Bytes makeWreckPalette(View col) {
@@ -262,36 +368,43 @@ Bytes makeWreckPalette(View col) {
 }
 
 void updateVehicleBounds(VehicleUnit& unit, View pck, View hot, std::size_t frameCount) {
-    const auto layers = (unit.alive && unit.hp > 0)
+    const bool alive = unit.alive && unit.hp > 0;
+    const auto layers = alive
         ? collectVehicleLayers(pck, hot, frameCount, unit.x, unit.y, unit.hullDir, unit.turretDir)
         : collectWreckLayers(pck, frameCount, unit.x, unit.y, unit.hullDir);
+    const auto shadows = collectVehicleShadowLayers(
+        pck, hot, frameCount, unit.x, unit.y, unit.hullDir, unit.turretDir, alive);
     bool hasRect = false;
     int minLeft = 0;
     int minTop = 0;
     int maxRight = 0;
     int maxBottom = 0;
-    for (std::size_t i = 0; i < layers.count; ++i) {
-        const auto& layer = layers.items[i];
-        const int w = static_cast<int>(u16(layer.frame, 4));
-        const int h = static_cast<int>(u16(layer.frame, 6));
-        if (w < 1 || h < 1) continue;
-        const int fLeft = layer.ox + i16(layer.frame, 0);
-        const int fTop = layer.oy + i16(layer.frame, 2);
-        const int fRight = fLeft + w;
-        const int fBottom = fTop + h;
-        if (!hasRect) {
-            minLeft = fLeft;
-            minTop = fTop;
-            maxRight = fRight;
-            maxBottom = fBottom;
-            hasRect = true;
-        } else {
-            minLeft = std::min(minLeft, fLeft);
-            minTop = std::min(minTop, fTop);
-            maxRight = std::max(maxRight, fRight);
-            maxBottom = std::max(maxBottom, fBottom);
+    const auto accumulate = [&](const auto& list) {
+        for (std::size_t i = 0; i < list.count; ++i) {
+            const auto& layer = list.items[i];
+            const int w = static_cast<int>(u16(layer.frame, 4));
+            const int h = static_cast<int>(u16(layer.frame, 6));
+            if (w < 1 || h < 1) continue;
+            const int fLeft = layer.ox + i16(layer.frame, 0);
+            const int fTop = layer.oy + i16(layer.frame, 2);
+            const int fRight = fLeft + w;
+            const int fBottom = fTop + h;
+            if (!hasRect) {
+                minLeft = fLeft;
+                minTop = fTop;
+                maxRight = fRight;
+                maxBottom = fBottom;
+                hasRect = true;
+            } else {
+                minLeft = std::min(minLeft, fLeft);
+                minTop = std::min(minTop, fTop);
+                maxRight = std::max(maxRight, fRight);
+                maxBottom = std::max(maxBottom, fBottom);
+            }
         }
-    }
+    };
+    accumulate(layers);
+    accumulate(shadows);
     if (!hasRect) {
         unit.left = unit.x;
         unit.top = unit.y;
@@ -302,6 +415,51 @@ void updateVehicleBounds(VehicleUnit& unit, View pck, View hot, std::size_t fram
         unit.top = minTop;
         unit.width = maxRight - minLeft;
         unit.height = maxBottom - minTop;
+    }
+}
+
+void drawShadowWithDepth(MapImage& target, int patchX, int patchY, int ox, int oy,
+                         View frame, int sortY, const SceneryDepth* depth,
+                         std::vector<std::uint8_t>& shadowMask) {
+    const int patchOx = ox - patchX;
+    const int patchOy = oy - patchY;
+    const int w = static_cast<int>(u16(frame, 4));
+    const int h = static_cast<int>(u16(frame, 6));
+    if (w < 1 || h < 1 || w > 2048 || h > 2048) return;
+    const std::int64_t left64 = std::int64_t(patchOx) + i16(frame, 0);
+    const std::int64_t top64 = std::int64_t(patchOy) + i16(frame, 2);
+    if (left64 >= std::int64_t(target.width) || top64 >= std::int64_t(target.height) ||
+        left64 + w <= 0 || top64 + h <= 0) {
+        return;
+    }
+    const int left = static_cast<int>(left64);
+    const int top = static_cast<int>(top64);
+    const int x0 = std::max(0, left);
+    const int y0 = std::max(0, top);
+    const int x1 = std::min(static_cast<int>(target.width), left + w);
+    const int y1 = std::min(static_cast<int>(target.height), top + h);
+    if (x0 >= x1 || y0 >= y1) return;
+    if (!depth || !depth->intersects(patchX + x0, patchY + y0, x1 - x0, y1 - y0)) {
+        drawShadowFrame(target, patchOx, patchOy, frame, &shadowMask);
+        return;
+    }
+    const auto cov = readShadowCoverage(patchOx, patchOy, frame);
+    for (int py = y0; py < y1; ++py) {
+        for (int px = x0; px < x1; ++px) {
+            if (!cov.covers(px, py)) continue;
+            const std::size_t idx = std::size_t(py) * std::size_t(target.width) + std::size_t(px);
+            if (shadowMask[idx]) continue;
+            if (depth->occludes(patchX + px, patchY + py, sortY) ||
+                depth->hasShadow(patchX + px, patchY + py)) {
+                continue;
+            }
+            auto* pixel = target.rgba.data() + idx * 4u;
+            if (pixel[3] == 0u) continue;
+            shadowMask[idx] = 1u;
+            pixel[0] = static_cast<std::uint8_t>(pixel[0] >> 1);
+            pixel[1] = static_cast<std::uint8_t>((pixel[1] >> 1) + 16u);
+            pixel[2] = static_cast<std::uint8_t>((pixel[2] >> 1) + 41u);
+        }
     }
 }
 
@@ -488,6 +646,19 @@ void VehicleScene::drawRegion(MapImage& patch, int patchX, int patchY, const Sce
         return units_[a].y < units_[b].y;
     });
 
+    std::vector<std::uint8_t> shadowMask(std::size_t(patch.width) * std::size_t(patch.height), 0u);
+    for (const std::size_t idx : order) {
+        const auto& unit = units_[idx];
+        const auto& asset = assets_[unitAsset_[idx]];
+        const bool alive = unit.alive && unit.hp > 0;
+        const auto shadows = collectVehicleShadowLayers(
+            asset.pck, asset.hot, asset.frameCount, unit.x, unit.y, unit.hullDir, unit.turretDir, alive);
+        for (std::size_t i = 0; i < shadows.count; ++i) {
+            drawShadowWithDepth(patch, patchX, patchY, shadows.items[i].ox, shadows.items[i].oy,
+                                shadows.items[i].frame, unit.y, depth, shadowMask);
+        }
+    }
+
     for (const std::size_t idx : order) {
         const auto& unit = units_[idx];
         const auto& asset = assets_[unitAsset_[idx]];
@@ -592,16 +763,41 @@ std::vector<Placement> drawTutorialVehicles(MapImage& map, const std::filesystem
     std::stable_sort(placements.begin(), placements.end(),
                      [](const Vehicle& a, const Vehicle& b) { return a.y < b.y; });
 
+    if (!placements.empty()) {
+        if (!map.width || !map.height || (std::uint64_t(map.width) * map.height > map.rgba.size() / 4u))
+            throw std::runtime_error("Invalid vehicle render target");
+        std::vector<std::uint8_t> shadowMask(std::size_t(map.width) * std::size_t(map.height), 0u);
+        const auto tryShadow = [&](View pck, std::size_t index, int ox, int oy) {
+            const auto sh = pckFrame(pck, index);
+            if (isRenderableShadowFrame(sh)) drawShadowFrame(map, ox, oy, sh, &shadowMask);
+        };
+        for (const auto& p : placements) {
+            const auto& a = *p.asset;
+            switch (a.kind) {
+            case Kind::Tank: {
+                tryShadow(a.pck, 160u + p.dir, p.x, p.y);
+                const auto [hotDx, hotDy] = readHotOffset(a.hot, p.dir);
+                tryShadow(a.pck, 256u + p.dir, p.x + hotDx, p.y + hotDy);
+                break;
+            }
+            case Kind::Artillery:
+                tryShadow(a.pck, 96u + p.dir, p.x, p.y);
+                tryShadow(a.pck, 224u + p.dir, p.x, p.y);
+                break;
+            case Kind::HeavyMg:
+                tryShadow(a.pck, 64u, p.x, p.y);
+                break;
+            }
+        }
+    }
+
     for (const auto& p : placements) {
         const auto& a = *p.asset;
         switch (a.kind) {
         case Kind::Tank: {
             // Block 0: intact hull (0..31); Block 6: intact turret (192..223) offset by hot0[dir].
             drawIndexedFrame(map, p.x, p.y, pckFrame(a.pck, p.dir), a.col);
-            const int hotDx = i32(a.hot, std::size_t(p.dir) * 8u);
-            const int hotDy = i32(a.hot, std::size_t(p.dir) * 8u + 4u);
-            if (hotDx < -2048 || hotDx > 2048 || hotDy < -2048 || hotDy > 2048)
-                throw std::runtime_error("Vehicle turret offset exceeds sprite bounds");
+            const auto [hotDx, hotDy] = readHotOffset(a.hot, p.dir);
             drawIndexedFrame(map, p.x + hotDx, p.y + hotDy, pckFrame(a.pck, 192u + p.dir), a.col);
             break;
         }
@@ -623,7 +819,6 @@ std::vector<Placement> drawTutorialVehicles(MapImage& map, const std::filesystem
 std::size_t drawMissionVehicles(MapImage& map, const std::filesystem::path& gameDir,
                                 const std::filesystem::path& missionPath,
                                 const SceneryDepth* depth) {
-    (void)depth;
     const auto source = readMissionPlacements(missionPath);
     if (source.empty()) return 0;
 
@@ -651,16 +846,31 @@ std::size_t drawMissionVehicles(MapImage& map, const std::filesystem::path& game
         if (it->second)
             placements.push_back({&*it->second, unit.x, unit.y, unsigned(unit.direction)});
     }
+    if (placements.empty()) return 0;
+    if (!map.width || !map.height || (std::uint64_t(map.width) * map.height > map.rgba.size() / 4u))
+        throw std::runtime_error("Invalid vehicle render target");
 
     std::stable_sort(placements.begin(), placements.end(),
                      [](const MissionVehicle& a, const MissionVehicle& b) { return a.y < b.y; });
+
+    std::vector<std::uint8_t> shadowMask(std::size_t(map.width) * std::size_t(map.height), 0u);
+    for (const auto& p : placements) {
+        const auto& a = *p.asset;
+        const auto shadows = collectVehicleShadowLayers(
+            a.pck, a.hot, a.frameCount, p.x, p.y, p.dir, p.dir, true);
+        for (std::size_t i = 0; i < shadows.count; ++i) {
+            drawShadowWithDepth(map, 0, 0, shadows.items[i].ox, shadows.items[i].oy,
+                                shadows.items[i].frame, p.y, depth, shadowMask);
+        }
+    }
 
     std::size_t drawn = 0;
     for (const auto& p : placements) {
         const auto& a = *p.asset;
         const auto layers = collectVehicleLayers(a.pck, a.hot, a.frameCount, p.x, p.y, p.dir, p.dir);
         for (std::size_t i = 0; i < layers.count; ++i) {
-            drawIndexedFrame(map, layers.items[i].ox, layers.items[i].oy, layers.items[i].frame, a.col);
+            drawFrameWithDepth(map, 0, 0, layers.items[i].ox, layers.items[i].oy,
+                               layers.items[i].frame, a.col, p.y, depth);
         }
         ++drawn;
     }

@@ -5,6 +5,7 @@
 #include "assets/scenery.hpp"
 #include "assets/sound_bank.hpp"
 #include "assets/sprite.hpp"
+#include "assets/terrain.hpp"
 #include "assets/unit_catalog.hpp"
 #include "assets/vehicles.hpp"
 #include <jpeglib.h>
@@ -2260,6 +2261,155 @@ void testBriefingMedia() {
     }
 }
 
+void testVehiclesAndShadows() {
+    const char* env = std::getenv("SS2_PRIVATE_GAME");
+    if (!env || !*env) return;
+    const std::filesystem::path gameDir(env);
+    if (!std::filesystem::is_directory(gameDir)) return;
+
+    const auto makeFlat = [](unsigned w, unsigned h) {
+        ss2::assets::MapImage img{w, h, std::vector<std::uint8_t>(std::size_t(w) * h * 4u, 255u)};
+        for (std::size_t i = 0; i < img.rgba.size(); i += 4u) {
+            img.rgba[i + 0u] = 140u;
+            img.rgba[i + 1u] = 130u;
+            img.rgba[i + 2u] = 80u;
+            img.rgba[i + 3u] = 255u;
+        }
+        return img;
+    };
+    // (140>>1, (130>>1)+16, (80>>1)+41) == (70, 81, 81)
+    const auto countBodyAndShadow = [](const ss2::assets::MapImage& img) {
+        std::size_t body = 0, shadow = 0;
+        for (std::size_t i = 0; i < img.rgba.size(); i += 4u) {
+            const auto r = img.rgba[i + 0u], g = img.rgba[i + 1u], b = img.rgba[i + 2u];
+            if (r == 140u && g == 130u && b == 80u) continue;
+            if (r == 70u && g == 81u && b == 81u) ++shadow;
+            else ++body;
+        }
+        return std::pair{body, shadow};
+    };
+
+    // 1. FrameCount == 7 trains & warships + fc == 128 turret railcar (intact, wreck, portrait, shadow).
+    {
+        const std::vector<std::string> ids{"locomotive", "tm3.12", "m1.t-34", "ship_e", "ship_j", "tm1.180t"};
+        for (std::size_t idx = 0; idx < ids.size(); ++idx) {
+            const std::string& id = ids[idx];
+            const ss2::assets::Placement pl{id, 512, 384, 4, 100, 50, 1, 0};
+            ss2::assets::VehicleScene scene(gameDir, std::span<const ss2::assets::Placement>(&pl, 1u));
+            check(scene.vehicles().size() == 1u, "7-frame/128-frame unit spawned: " + id);
+            const auto& u = scene.vehicles().front();
+            if (id == "ship_e" || id == "ship_j") {
+                check(u.width > 400 && u.height > 200, "Warship bounds non-empty: " + id);
+            } else {
+                check(u.width > 50 && u.height > 30, "Train/railcar bounds non-empty: " + id);
+            }
+
+            auto intactImg = makeFlat(1024u, 768u);
+            scene.drawAll(intactImg);
+            const auto [bodyPx, shadowPx] = countBodyAndShadow(intactImg);
+            check(bodyPx > 100u && shadowPx > 100u,
+                  "Intact 7-frame/128-frame unit draws both body and 0xa3 shadow: " + id);
+
+            if (id == "locomotive" || id == "ship_e" || id == "tm1.180t") {
+                (void)scene.update(0, 512, 384, 4u, 4u, 0);
+                auto wreckImg = makeFlat(1024u, 768u);
+                scene.drawAll(wreckImg);
+                const auto [wBody, wShadow] = countBodyAndShadow(wreckImg);
+                check(wBody > 100u && wShadow > 100u && wreckImg.rgba != intactImg.rgba,
+                      "Wreck state renders altered wreck body and 0xa3 shadow: " + id);
+            }
+
+            if (id == "locomotive" || id == "ship_e") {
+                const auto portrait = scene.renderUnitPortrait(id, 48u);
+                check(portrait.has_value() && portrait->width == 48u && portrait->height == 48u,
+                      "7-frame portrait builds 48x48 image: " + id);
+                std::uint8_t minR = 255u, maxR = 0u;
+                for (std::size_t p = 0; p < portrait->rgba.size(); p += 4u) {
+                    minR = std::min(minR, portrait->rgba[p]);
+                    maxR = std::max(maxR, portrait->rgba[p]);
+                }
+                check(maxR - minR > 12u, "7-frame portrait has non-uniform sprite detail: " + id);
+            }
+        }
+    }
+
+    // 2. All major vehicle frameCount shapes (66, 160, 192, 256, 288, 352, 448, 512) cast 0xa3 shadows,
+    //    respect SceneryDepth::hasShadow deduplication, and move cleanly via DirtyRect.
+    {
+        for (const char* vid : {"ds39", "kurogan", "zundapp.ks750", "2598.so-da", "panther", "zis-3", "type.88", "us.landing"}) {
+            const ss2::assets::Placement pl{vid, 128, 128, 6, 100, 50, 1, 0};
+            ss2::assets::VehicleScene vs(gameDir, std::span<const ss2::assets::Placement>(&pl, 1u));
+            auto img = makeFlat(256u, 256u);
+            vs.drawAll(img);
+            const auto [bPx, sPx] = countBodyAndShadow(img);
+            check(bPx > 10u && sPx > 10u, std::string("Vehicle casts 0xa3 ground shadow: ") + vid);
+        }
+
+        const ss2::assets::Placement tankPl{"panther", 128, 128, 6, 100, 50, 1, 0};
+        ss2::assets::VehicleScene tankScene(gameDir, std::span<const ss2::assets::Placement>(&tankPl, 1u));
+        ss2::assets::SceneryDepth depth(256, 256);
+        depth.addShadow({100, 100, 56, 56, std::vector<std::uint8_t>(56u * 56u, 1u)});
+        auto maskedImg = makeFlat(256u, 256u);
+        tankScene.drawAll(maskedImg, &depth);
+        for (int y = 100; y < 156; ++y) {
+            for (int x = 100; x < 156; ++x) {
+                const std::size_t p = (std::size_t(y) * 256u + std::size_t(x)) * 4u;
+                check(!(maskedImg.rgba[p] == 70u && maskedImg.rgba[p + 1u] == 81u && maskedImg.rgba[p + 2u] == 81u),
+                      "Vehicle shadow skips SceneryDepth::hasShadow pixels");
+            }
+        }
+
+        auto patched = makeFlat(256u, 256u);
+        tankScene.drawAll(patched);
+        const auto dirty = tankScene.update(0u, 188, 158, 8u, 10u);
+        check(dirty.valid(), "Moving panther returns valid DirtyRect including shadow");
+        const int x0 = std::clamp(dirty.left, 0, 256);
+        const int y0 = std::clamp(dirty.top, 0, 256);
+        const int x1 = std::clamp(dirty.right, x0, 256);
+        const int y1 = std::clamp(dirty.bottom, y0, 256);
+        auto patch = makeFlat(static_cast<unsigned>(x1 - x0), static_cast<unsigned>(y1 - y0));
+        tankScene.drawRegion(patch, x0, y0);
+        for (int row = y0; row < y1; ++row) {
+            std::copy_n(patch.rgba.data() + std::size_t(row - y0) * patch.width * 4u,
+                        std::size_t(patch.width) * 4u,
+                        patched.rgba.data() + (std::size_t(row) * 256u + std::size_t(x0)) * 4u);
+        }
+        auto fullRedraw = makeFlat(256u, 256u);
+        tankScene.drawAll(fullRedraw);
+        check(patched.rgba == fullRedraw.rgba,
+              "DirtyRect region redraw clears old shadow and matches full drawAll");
+    }
+
+    // 3. Retail Tutorial I scenery draws 0xa3 shadows onto ground pixels matching n2Cad800 formula.
+    {
+        const auto rawTut = ss2::assets::loadTutorialTerrain(gameDir, 0u);
+        auto sceneTut = rawTut;
+        ss2::assets::SceneryDepth tutDepth(static_cast<int>(rawTut.width), static_cast<int>(rawTut.height));
+        std::vector<ss2::assets::BuildingPlacement> tutBlds;
+        std::vector<ss2::assets::BridgePlacement> tutBridges;
+        (void)ss2::assets::drawTutorialScenery(sceneTut, gameDir, &tutDepth, 0u, &tutBlds, &tutBridges);
+        check(!tutBlds.empty() && !tutBridges.empty(), "Tutorial I scenery loads houses and bridges");
+        std::size_t exactShadowPixels = 0;
+        for (unsigned y = 0; y < rawTut.height; ++y) {
+            for (unsigned x = 0; x < rawTut.width; ++x) {
+                const int ix = static_cast<int>(x), iy = static_cast<int>(y);
+                if (!tutDepth.hasShadow(ix, iy) || tutDepth.occludes(ix, iy, 0)) continue;
+                const std::size_t i = (std::size_t(y) * rawTut.width + x) * 4u;
+                if (rawTut.rgba[i + 3u] != 255u) continue;
+                const std::uint8_t er = static_cast<std::uint8_t>(rawTut.rgba[i + 0u] >> 1);
+                const std::uint8_t eg = static_cast<std::uint8_t>((rawTut.rgba[i + 1u] >> 1) + 16u);
+                const std::uint8_t eb = static_cast<std::uint8_t>((rawTut.rgba[i + 2u] >> 1) + 41u);
+                if (sceneTut.rgba[i + 0u] == er && sceneTut.rgba[i + 1u] == eg &&
+                    sceneTut.rgba[i + 2u] == eb && sceneTut.rgba[i + 3u] == 255u) {
+                    ++exactShadowPixels;
+                }
+            }
+        }
+        check(exactShadowPixels > 10000u,
+              "Tutorial I scenery paints >10000 exact 0xa3 tree/stand ground shadow pixels");
+    }
+}
+
 } // namespace
 
 int main() {
@@ -2269,6 +2419,7 @@ int main() {
         testSueAndPaths();
         testUnitCatalogPhase4A();
         testBriefingMedia();
+        testVehiclesAndShadows();
         testOptionalRetailSweep();
     } catch (const std::exception& e) {
         std::cerr << "mission_test failed: " << e.what() << '\n';

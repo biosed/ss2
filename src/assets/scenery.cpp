@@ -85,8 +85,27 @@ AtlasMap loadSceneryAtlases(const std::filesystem::path& gameDir, unsigned schem
     return atlases;
 }
 
+bool isRenderableShadow(View sprite) {
+    if (sprite.size() < 9u || sprite[8] != 0xa3u) return false;
+    const unsigned w = word16(sprite, 4);
+    const unsigned h = word16(sprite, 6);
+    return w >= 1u && h >= 1u && w <= 2048u && h <= 2048u && (w > 1u || h > 1u);
+}
+
+View extractRecord(const Object& obj) {
+    const auto& a = *obj.atlas;
+    const View data(a.res);
+    const unsigned count = word32(data, 0);
+    if (obj.index >= count || (std::uint64_t(count) + 2) * 4 > data.size())
+        throw std::runtime_error("Invalid scenery atlas index");
+    const auto start = word32(data, 4 + 4 * obj.index), end = word32(data, 8 + 4 * obj.index);
+    if (end > data.size() || end < start)
+        throw std::runtime_error("Invalid scenery record range");
+    return data.subspan(start, end - start);
+}
+
 void drawHouse(MapImage& map, int x, int y, View record, SceneryDepth* depth,
-               BuildingPlacement* outBuilding = nullptr) {
+               std::vector<std::uint8_t>* shadowMask, BuildingPlacement* outBuilding = nullptr) {
     if (record.size() < 736) throw std::runtime_error("Truncated house scenery record");
     const auto palette = record.first(512);
     const unsigned ports = word32(record, 725);
@@ -111,9 +130,12 @@ void drawHouse(MapImage& map, int x, int y, View record, SceneryDepth* depth,
     if (outBuilding && (!blocks[12].empty() || !blocks[13].empty() || !blocks[14].empty())) {
         bool haveRuinBounds = false;
         int rL = 0, rT = 0, rR = 0, rB = 0;
-        for (int idx : {0, 1, 2, 12, 13, 14}) {
+        for (int idx : {0, 1, 2, 3, 12, 13, 14, 15}) {
             const View blk = blocks[static_cast<std::size_t>(idx)];
-            if (blk.size() < 9 || (blk[8] != 0xa1 && blk[8] != 0xa2)) continue;
+            if (blk.size() < 9) continue;
+            const bool isBody = (blk[8] == 0xa1u || blk[8] == 0xa2u);
+            const bool isShadow = (idx == 3 || idx == 15) && isRenderableShadow(blk);
+            if (!isBody && !isShadow) continue;
             const int bx = x + static_cast<int>(static_cast<std::int16_t>(word16(blk, 0)));
             const int by = y + static_cast<int>(static_cast<std::int16_t>(word16(blk, 2)));
             const int bw = static_cast<int>(static_cast<std::int16_t>(word16(blk, 4)));
@@ -146,6 +168,9 @@ void drawHouse(MapImage& map, int x, int y, View record, SceneryDepth* depth,
                     std::copy_n(srcBegin, std::size_t(rw) * 4u,
                                 ruinedPatch.rgba.data() + std::size_t(row) * rw * 4u);
                 }
+                if (isRenderableShadow(blocks[15])) {
+                    drawShadowFrame(ruinedPatch, x - rL, y - rT, blocks[15]);
+                }
                 for (int idx : {14, 12, 13}) {
                     const View blk = blocks[static_cast<std::size_t>(idx)];
                     if (blk.size() >= 9 && (blk[8] == 0xa1 || blk[8] == 0xa2)) {
@@ -156,6 +181,10 @@ void drawHouse(MapImage& map, int x, int y, View record, SceneryDepth* depth,
         }
     }
 
+    if (isRenderableShadow(blocks[3])) {
+        drawShadowFrame(map, x, y, blocks[3], shadowMask);
+        if (depth) depth->addShadow(readShadowCoverage(x, y, blocks[3]));
+    }
     if (!blocks[2].empty()) drawIndexedFrame(map, x, y, blocks[2], palette);
     bool haveBounds = false;
     int minL = 0, minT = 0, maxR = 0, maxB = 0;
@@ -211,12 +240,14 @@ void drawDepthBody(MapImage& map, const Object& object, View record, SceneryDept
     if (shadow) depth->addShadow(readShadowCoverage(object.x,object.y,record.subspan(shadow)));
 }
 
-void drawBridge(MapImage& map, const Object& obj, View record, BridgePlacement* outBridge = nullptr) {
+void drawBridge(MapImage& map, const Object& obj, View record, std::vector<std::uint8_t>* shadowMask,
+                BridgePlacement* outBridge = nullptr) {
     if (record.size() < 2004) throw std::runtime_error("Truncated bridge scenery record");
     const auto palette = record.first(512);
     std::array<std::size_t, 5> bodyAbs{};
+    std::array<std::size_t, 5> shadowAbs{};
     std::vector<std::size_t> cuts;
-    cuts.reserve(11);
+    cuts.reserve(12);
     for (int k = 0; k < 10; ++k) {
         const std::size_t rel = word32(record, 1960u + static_cast<std::size_t>(k) * 4u);
         if (rel == 0u) continue;
@@ -224,6 +255,7 @@ void drawBridge(MapImage& map, const Object& obj, View record, BridgePlacement* 
         if (absOff >= record.size()) continue;
         cuts.push_back(absOff);
         if ((k & 1) == 0) bodyAbs[static_cast<std::size_t>(k / 2)] = absOff;
+        else shadowAbs[static_cast<std::size_t>(k / 2)] = absOff;
     }
     if (bodyAbs[0] == 0u && 2004u < record.size()) {
         bodyAbs[0] = 2004u;
@@ -233,30 +265,35 @@ void drawBridge(MapImage& map, const Object& obj, View record, BridgePlacement* 
     std::sort(cuts.begin(), cuts.end());
     cuts.erase(std::unique(cuts.begin(), cuts.end()), cuts.end());
 
-    std::array<View, 5> stageViews{};
-    for (int s = 0; s < 5; ++s) {
-        const std::size_t absOff = bodyAbs[static_cast<std::size_t>(s)];
-        if (absOff == 0u || absOff >= record.size()) continue;
-        const auto it = std::upper_bound(cuts.begin(), cuts.end(), absOff);
-        const std::size_t endOff = (it != cuts.end()) ? *it : record.size();
-        if (endOff > absOff) {
-            stageViews[static_cast<std::size_t>(s)] = record.subspan(absOff, endOff - absOff);
+    const auto sliceStages = [&](const std::array<std::size_t, 5>& offs) {
+        std::array<View, 5> views{};
+        for (int s = 0; s < 5; ++s) {
+            const std::size_t absOff = offs[static_cast<std::size_t>(s)];
+            if (absOff == 0u || absOff >= record.size()) continue;
+            const auto it = std::upper_bound(cuts.begin(), cuts.end(), absOff);
+            const std::size_t endOff = (it != cuts.end()) ? *it : record.size();
+            if (endOff > absOff) {
+                views[static_cast<std::size_t>(s)] = record.subspan(absOff, endOff - absOff);
+            }
         }
-    }
+        return views;
+    };
+    const auto stageViews = sliceStages(bodyAbs);
+    const auto stageShadowViews = sliceStages(shadowAbs);
 
     int patchLeft = 0, patchTop = 0;
     MapImage basePatch;
     if (outBridge) {
         bool haveUnion = false;
         int uL = 0, uT = 0, uR = 0, uB = 0;
-        for (int s = 0; s < 5; ++s) {
-            const View blk = stageViews[static_cast<std::size_t>(s)];
-            if (blk.size() < 9u || (blk[8] != 0xa1u && blk[8] != 0xa2u)) continue;
+        const auto includeView = [&](View blk, bool shadow) {
+            if (shadow ? !isRenderableShadow(blk) : (blk.size() < 9u || (blk[8] != 0xa1u && blk[8] != 0xa2u)))
+                return;
             const int bx = obj.x + static_cast<int>(static_cast<std::int16_t>(word16(blk, 0)));
             const int by = obj.y + static_cast<int>(static_cast<std::int16_t>(word16(blk, 2)));
             const int bw = static_cast<int>(static_cast<std::int16_t>(word16(blk, 4)));
             const int bh = static_cast<int>(static_cast<std::int16_t>(word16(blk, 6)));
-            if (bw <= 0 || bh <= 0) continue;
+            if (bw <= 0 || bh <= 0) return;
             if (!haveUnion) {
                 uL = bx; uT = by; uR = bx + bw; uB = by + bh;
                 haveUnion = true;
@@ -266,7 +303,11 @@ void drawBridge(MapImage& map, const Object& obj, View record, BridgePlacement* 
                 uR = std::max(uR, bx + bw);
                 uB = std::max(uB, by + bh);
             }
+        };
+        for (int s = 0; s < 5; ++s) {
+            includeView(stageViews[static_cast<std::size_t>(s)], false);
         }
+        includeView(stageShadowViews[0], true);
         if (haveUnion) {
             uL = std::clamp(uL, 0, static_cast<int>(map.width));
             uT = std::clamp(uT, 0, static_cast<int>(map.height));
@@ -288,6 +329,9 @@ void drawBridge(MapImage& map, const Object& obj, View record, BridgePlacement* 
         }
     }
 
+    if (isRenderableShadow(stageShadowViews[0])) {
+        drawShadowFrame(map, obj.x, obj.y, stageShadowViews[0], shadowMask);
+    }
     SpriteCoverage coverage{};
     const View intact = stageViews[0].empty() ? record.subspan(2004) : stageViews[0];
     drawIndexedFrame(map, obj.x, obj.y, intact, palette, outBridge ? &coverage : nullptr);
@@ -343,24 +387,24 @@ void drawBridge(MapImage& map, const Object& obj, View record, BridgePlacement* 
 std::size_t renderSceneryObjects(MapImage& map, std::vector<Object>& objects, SceneryDepth* depth,
                                  std::vector<BuildingPlacement>* buildings = nullptr,
                                  std::vector<BridgePlacement>* bridges = nullptr) {
+    if (objects.empty()) return 0;
+    if (!map.width || !map.height || (std::uint64_t(map.width) * map.height > map.rgba.size() / 4u))
+        throw std::runtime_error("Invalid scenery render target");
     std::stable_sort(objects.begin(), objects.end(), [](const Object& a, const Object& b) {
         return a.onGround != b.onGround ? a.onGround : a.y < b.y;
     });
+    std::vector<std::uint8_t> shadowMask(std::size_t(map.width) * std::size_t(map.height), 0u);
     std::size_t drawn = 0;
+
+    // Pass 1: flat on-ground decals (roads, terrain overlays, craters).
     for (const auto& obj : objects) {
+        if (!obj.onGround) break;
         const auto& a = *obj.atlas;
-        const View data(a.res);
-        const unsigned count = word32(data, 0);
-        if (obj.index >= count || (std::uint64_t(count) + 2) * 4 > data.size())
-            throw std::runtime_error("Invalid scenery atlas index");
-        const auto start = word32(data, 4 + 4 * obj.index), end = word32(data, 8 + 4 * obj.index);
-        if (end > data.size() || end < start)
-            throw std::runtime_error("Invalid scenery record range");
-        const auto record = data.subspan(start, end - start);
+        const auto record = extractRecord(obj);
         if (a.layout == Layout::House) {
             if (record.empty()) continue;
             BuildingPlacement bp{};
-            drawHouse(map, obj.x, obj.y, record, depth, buildings ? &bp : nullptr);
+            drawHouse(map, obj.x, obj.y, record, depth, &shadowMask, buildings ? &bp : nullptr);
             if (buildings) buildings->push_back(std::move(bp));
             ++drawn;
             continue;
@@ -368,7 +412,57 @@ std::size_t renderSceneryObjects(MapImage& map, std::vector<Object>& objects, Sc
         if (a.layout == Layout::Bridge) {
             if (record.empty()) continue;
             BridgePlacement br{};
-            drawBridge(map, obj, record, bridges ? &br : nullptr);
+            drawBridge(map, obj, record, &shadowMask, bridges ? &br : nullptr);
+            if (bridges) bridges->push_back(std::move(br));
+            ++drawn;
+            continue;
+        }
+        if (a.layout == Layout::Stand || a.layout == Layout::Tree) {
+            drawDepthBody(map, obj, record, depth);
+            ++drawn;
+            continue;
+        }
+        if (a.frameOffset > record.size())
+            throw std::runtime_error("Invalid scenery frame offset");
+        const auto palette = a.layout == Layout::EmbeddedPalette ? record.first(512) : View(a.palette);
+        drawIndexedFrame(map, obj.x, obj.y, record.subspan(a.frameOffset), palette);
+        ++drawn;
+    }
+
+    // Pass 1.5: tree and stand ground shadows before elevated bodies.
+    for (const auto& obj : objects) {
+        if (obj.onGround) continue;
+        const auto layout = obj.atlas->layout;
+        if (layout != Layout::Stand && layout != Layout::Tree) continue;
+        const auto record = extractRecord(obj);
+        const std::size_t table = (layout == Layout::Stand) ? 205u : 5u;
+        const auto shadow = word32(record, table + 8u);
+        if (shadow >= record.size()) throw std::runtime_error("Invalid scenery shadow offset");
+        if (shadow != 0u) {
+            const auto sh = record.subspan(shadow);
+            if (isRenderableShadow(sh)) {
+                drawShadowFrame(map, obj.x, obj.y, sh, &shadowMask);
+            }
+        }
+    }
+
+    // Pass 2: elevated scenery objects in Y order.
+    for (const auto& obj : objects) {
+        if (obj.onGround) continue;
+        const auto& a = *obj.atlas;
+        const auto record = extractRecord(obj);
+        if (a.layout == Layout::House) {
+            if (record.empty()) continue;
+            BuildingPlacement bp{};
+            drawHouse(map, obj.x, obj.y, record, depth, &shadowMask, buildings ? &bp : nullptr);
+            if (buildings) buildings->push_back(std::move(bp));
+            ++drawn;
+            continue;
+        }
+        if (a.layout == Layout::Bridge) {
+            if (record.empty()) continue;
+            BridgePlacement br{};
+            drawBridge(map, obj, record, &shadowMask, bridges ? &br : nullptr);
             if (bridges) bridges->push_back(std::move(br));
             ++drawn;
             continue;
@@ -437,6 +531,10 @@ bool SceneryDepth::occludes(int x, int y, int footY, bool revealed, int checkerP
     // 16-bit stencil words. An unshadowed left edge survives an equal-depth comparison.
     const int soldier = 2*(footY+1);
     return current > soldier || (current == soldier && depth(x-1,y) >= soldier);
+}
+
+bool SceneryDepth::hasShadow(int x, int y) const {
+    return (depth(x, y) & 1u) != 0u;
 }
 
 bool SceneryDepth::intersects(int left, int top, int width, int height) const {
