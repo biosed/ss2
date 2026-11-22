@@ -65,6 +65,9 @@ private:
     bool hasArchive_{false};
     bool hasDesc_{false};
     std::vector<std::uint8_t> palette_;
+    std::array<std::array<int, 3>, 16> soldClr_{};
+    bool soldClrLoaded_{false};
+    std::array<std::vector<std::uint8_t>, 16> camoPalettes_{};
     std::set<std::string> paintedTypes_;
     std::set<std::string> skippedTypes_;
     std::map<std::string, InfantryPoses> poses_;
@@ -89,6 +92,8 @@ private:
     void paint(MapImage&, int x, int y) const;
 };
 
+std::vector<std::uint8_t> buildSoldClrPalette(std::span<const std::uint8_t> baseSoldPl,
+                                              int scaleR, int scaleG, int scaleB);
 std::vector<Infantry> loadMissionInfantry(const std::filesystem::path& gameDir,
                                           const std::filesystem::path& missionPath);
 }

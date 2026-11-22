@@ -2408,6 +2408,51 @@ void testVehiclesAndShadows() {
         check(exactShadowPixels > 10000u,
               "Tutorial I scenery paints >10000 exact 0xa3 tree/stand ground shadow pixels");
     }
+
+    // 4. Retail MISC\MISC SoldClr infantry uniform tinting across shared .RS2 sprites & portraits.
+    {
+        const ss2::assets::MapImage bg{96, 96, std::vector<std::uint8_t>(96u * 96u * 4u, 40u)};
+        const auto renderOne = [&](const char* uid) {
+            const ss2::assets::Placement pl{uid, 48, 48, 3, 100, 50, 1, 0};
+            ss2::assets::InfantryScene sc(bg, gameDir, std::span<const ss2::assets::Placement>(&pl, 1u));
+            check(sc.units().size() == 1u, std::string("Infantry spawned for SoldClr check: ") + uid);
+            return std::pair{sc.compose(), sc.renderUnitPortrait(uid, 48u)};
+        };
+
+        const auto [dhmgImg, dhmgPort] = renderOne("dhmg");
+        const auto [ahmgImg, ahmgPort] = renderOne("ahmg");
+        check(dhmgImg.rgba != bg.rgba && ahmgImg.rgba != bg.rgba && dhmgImg.rgba != ahmgImg.rgba,
+              "A-3.RS2 dhmg (German) vs ahmg (American) uniforms differ via SoldClr");
+
+        const auto [aoffImg, aoffPort] = renderOne("aofficer");
+        const auto [eoffImg, eoffPort] = renderOne("eofficer");
+        check(aoffImg.rgba != eoffImg.rgba && aoffPort && eoffPort && aoffPort->rgba != eoffPort->rgba,
+              "AOFICE.RS2 aofficer (American) vs eofficer (British) world & portrait uniforms differ");
+
+        const auto [dgenImg, dgenPort] = renderOne("dgeneral");
+        const auto [rgenImg, rgenPort] = renderOne("rgeneral");
+        check(dgenImg.rgba != rgenImg.rgba && dgenPort && rgenPort && dgenPort->rgba != rgenPort->rgba,
+              "GENERAL.RS2 dgeneral (German) vs rgeneral (Russian) uniforms differ");
+
+        // RUSALTAN.RS2 shared across 4 nations: Russian, American, British, French (SoldClr 7).
+        const auto [rtk, _1] = renderOne("rtankist");
+        const auto [atk, _2] = renderOne("atankist");
+        const auto [etk, _3] = renderOne("etankist");
+        const auto [ftk, _4] = renderOne("ftankist");
+        check(rtk.rgba != atk.rgba && rtk.rgba != etk.rgba && rtk.rgba != ftk.rgba &&
+                  atk.rgba != etk.rgba && atk.rgba != ftk.rgba && etk.rgba != ftk.rgba,
+              "RUSALTAN.RS2 renders 4 distinct national tank-crew uniforms");
+
+        // DATG.RS2 shared across German, Japanese, and French (SoldClr 7); plus cmedic white smock (SoldClr 2).
+        const auto [gatsImg, _5] = renderOne("gats");
+        const auto [jatsImg, _6] = renderOne("jats");
+        const auto [fatgImg, _7] = renderOne("fatg");
+        const auto [medImg, medPort] = renderOne("cmedic");
+        check(gatsImg.rgba != jatsImg.rgba && gatsImg.rgba != fatgImg.rgba && jatsImg.rgba != fatgImg.rgba,
+              "DATG.RS2 renders 3 distinct German/Japanese/French AT-rifle uniforms");
+        check(medImg.rgba != bg.rgba && medPort.has_value(),
+              "ALRUSMED.RS2 cmedic renders SoldClr 2 medic uniform and portrait");
+    }
 }
 
 } // namespace

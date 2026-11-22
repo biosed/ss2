@@ -2,7 +2,9 @@
 #include "assets/indexed.hpp"
 #include "assets/infantry_scale.hpp"
 #include "assets/hd_pack.hpp"
+#include <charconv>
 #include <cmath>
+#include <cstdlib>
 #include "assets/sprite.hpp"
 #include <algorithm>
 #include <map>
@@ -32,8 +34,71 @@ std::optional<Bytes> tryReadSue(const std::filesystem::path& archive, std::strin
     }
 }
 
-std::optional<std::string> resolveUnitStem(const std::filesystem::path& descArchive, bool hasDesc,
-                                           std::string_view unitId) {
+std::string_view nextToken(std::string_view& line) {
+    while (!line.empty() && (line.front() == ' ' || line.front() == '\t' || line.front() == '\r'))
+        line.remove_prefix(1);
+    const auto end = line.find_first_of(" \t\r\n");
+    const auto tok = (end == std::string_view::npos) ? line : line.substr(0, end);
+    line = (end == std::string_view::npos) ? std::string_view{} : line.substr(end);
+    return tok;
+}
+
+bool parseSignedInt(std::string_view tok, int& out) {
+    if (tok.empty()) return false;
+    const auto [ptr, ec] = std::from_chars(tok.data(), tok.data() + tok.size(), out);
+    return ec == std::errc{} && ptr == tok.data() + tok.size();
+}
+
+// Retail n2Game_Dll.dll 0x100665d8..0x10066719 / 0x100675d0..0x100676f5 camouflage slot mapping:
+// 0=german, 1=japanese, 2=british, 3=american, 4=russian, 5..15 = numeric SoldClr 1..11.
+int parseCamouflageSlot(std::string_view tok) {
+    if (tok.empty()) return -1;
+    if (equalsIgnoreCaseAscii(tok, "german")) return 0;
+    if (equalsIgnoreCaseAscii(tok, "japanese")) return 1;
+    if (equalsIgnoreCaseAscii(tok, "british")) return 2;
+    if (equalsIgnoreCaseAscii(tok, "american")) return 3;
+    if (equalsIgnoreCaseAscii(tok, "russian")) return 4;
+    int num = 0;
+    if (parseSignedInt(tok, num) && num >= 1 && num <= 11) return 4 + num;
+    return -1;
+}
+
+std::array<std::array<int, 3>, 16> loadSoldClrTable(const std::filesystem::path& descArchive, bool hasDesc) {
+    std::array<std::array<int, 3>, 16> table{};
+    for (auto& entry : table) entry = {-1, -1, -1};
+    if (!hasDesc) return table;
+    const auto bytes = tryReadSue(descArchive, "MISC\\MISC");
+    if (!bytes) return table;
+    std::string_view text(reinterpret_cast<const char*>(bytes->data()), bytes->size());
+    while (!text.empty()) {
+        const auto eol = text.find_first_of("\r\n");
+        std::string_view line = (eol == std::string_view::npos) ? text : text.substr(0, eol);
+        text = (eol == std::string_view::npos) ? std::string_view{} : text.substr(eol + 1);
+        const auto key = nextToken(line);
+        if (!equalsIgnoreCaseAscii(key, "SoldClr")) continue;
+        const auto slotTok = nextToken(line);
+        int r = -1, g = -1, b = -1;
+        if (!parseSignedInt(nextToken(line), r) ||
+            !parseSignedInt(nextToken(line), g) ||
+            !parseSignedInt(nextToken(line), b)) {
+            continue;
+        }
+        const int slot = parseCamouflageSlot(slotTok);
+        if (slot >= 0 && slot < 16) {
+            table[static_cast<std::size_t>(slot)] = {r, g, b};
+        }
+    }
+    return table;
+}
+
+struct UnitVisualMeta {
+    std::string stem;
+    int camoSlot{-1};
+};
+
+std::optional<UnitVisualMeta> resolveUnitVisualMeta(const std::filesystem::path& descArchive, bool hasDesc,
+                                                    std::string_view unitId) {
+    UnitVisualMeta meta{std::string(unitId), -1};
     if (hasDesc) {
         if (const auto bytes = tryReadSue(descArchive, "UNITS\\" + std::string(unitId))) {
             std::string_view text(reinterpret_cast<const char*>(bytes->data()), bytes->size());
@@ -41,30 +106,33 @@ std::optional<std::string> resolveUnitStem(const std::filesystem::path& descArch
                 const auto eol = text.find_first_of("\r\n");
                 std::string_view line = (eol == std::string_view::npos) ? text : text.substr(0, eol);
                 text = (eol == std::string_view::npos) ? std::string_view{} : text.substr(eol + 1);
-                while (!line.empty() && (line.front() == ' ' || line.front() == '\t'))
-                    line.remove_prefix(1);
-                if (line.size() > 4 && equalsIgnoreCaseAscii(line.substr(0, 4), "file") &&
-                    (line[4] == ' ' || line[4] == '\t')) {
-                    line.remove_prefix(5);
-                    while (!line.empty() && (line.front() == ' ' || line.front() == '\t'))
-                        line.remove_prefix(1);
-                    const auto end = line.find_first_of(" \t\r\n");
-                    const auto stem = (end == std::string_view::npos) ? line : line.substr(0, end);
+                const auto key = nextToken(line);
+                if (equalsIgnoreCaseAscii(key, "file")) {
+                    const auto stem = nextToken(line);
                     if (stem.empty() || equalsIgnoreCaseAscii(stem, "nofile")) return std::nullopt;
-                    return std::string(stem);
+                    meta.stem = std::string(stem);
+                } else if (equalsIgnoreCaseAscii(key, "camouflage")) {
+                    meta.camoSlot = parseCamouflageSlot(nextToken(line));
                 }
             }
         }
     }
-    return std::string(unitId);
+    return meta;
 }
 
-std::optional<Bytes> tryLoadInfantryRs2(const std::filesystem::path& descArchive, bool hasDesc,
-                                        const std::filesystem::path& gameArchive,
-                                        std::string_view unitId) {
-    const auto stem = resolveUnitStem(descArchive, hasDesc, unitId);
-    if (!stem) return std::nullopt;
-    return tryReadSue(gameArchive, *stem + ".RS2");
+struct LoadedInfantryRs2 {
+    Bytes rs2;
+    int camoSlot{-1};
+};
+
+std::optional<LoadedInfantryRs2> tryLoadInfantryRs2(const std::filesystem::path& descArchive, bool hasDesc,
+                                                    const std::filesystem::path& gameArchive,
+                                                    std::string_view unitId) {
+    const auto meta = resolveUnitVisualMeta(descArchive, hasDesc, unitId);
+    if (!meta) return std::nullopt;
+    auto rs2 = tryReadSue(gameArchive, meta->stem + ".RS2");
+    if (!rs2) return std::nullopt;
+    return LoadedInfantryRs2{std::move(*rs2), meta->camoSlot};
 }
 
 InfantryPoses decodeRs2Poses(View rest, View palette, bool originalSize, int resolution,
@@ -136,6 +204,32 @@ void restoreFootprint(MapImage& hd, const MapImage& ground, int x, int y, int w,
 
 }
 
+std::vector<std::uint8_t> buildSoldClrPalette(std::span<const std::uint8_t> baseSoldPl,
+                                              int scaleR, int scaleG, int scaleB) {
+    if (baseSoldPl.size() < 512u) throw std::runtime_error("Invalid SOLD.PL palette size");
+    std::vector<std::uint8_t> out(baseSoldPl.begin(), baseSoldPl.begin() + 512);
+    // Retail n2Game_Dll.dll 0x1007bc3d: scaleR == -1 copies SOLD.PL verbatim (e.g. German).
+    if (scaleR < 0) return out;
+    // Retail n2Game_Dll.dll 0x1007ba80..0x1007bbde: tint achromatic uniform entries, preserve skin/wood/fire.
+    for (std::size_t i = 0; i < 256u; ++i) {
+        const unsigned w = unsigned(baseSoldPl[2u * i]) | (unsigned(baseSoldPl[2u * i + 1u]) << 8);
+        const int r = static_cast<int>((w >> 8) & 0xF8u);
+        const int g = static_cast<int>((w >> 3) & 0xFCu);
+        const int b = static_cast<int>((w & 0x1Fu) << 3);
+        const int maxDiff = std::max({std::abs(r - b), std::abs(b - g), std::abs(r - g)});
+        const int avg = (r + g + b) / 3;
+        if (maxDiff > avg / 5) continue;
+        const int nr = std::clamp((avg * scaleR) / 250, 0, 255);
+        const int ng = std::clamp((avg * scaleG) / 250, 0, 255);
+        const int nb = std::clamp((avg * scaleB) / 250, 0, 255);
+        const auto nw = static_cast<std::uint16_t>(
+            ((nr & 0xF8) << 8) | ((ng & 0xFC) << 3) | ((nb >> 3) & 0x1F));
+        out[2u * i] = static_cast<std::uint8_t>(nw & 0xFFu);
+        out[2u * i + 1u] = static_cast<std::uint8_t>((nw >> 8) & 0xFFu);
+    }
+    return out;
+}
+
 InfantryScene::InfantryScene(MapImage background, const std::filesystem::path& gameDir, std::span<const Placement> source,
                              bool originalSize, MapImage bakedHd, const std::filesystem::path& atlases, bool cleanGround,
                              SceneryDepth depth, const std::map<std::string, unsigned>* gpuSlots, unsigned fogW, unsigned fogH)
@@ -195,14 +289,27 @@ bool InfantryScene::ensureClassLoaded(const std::string& id, std::array<int, 4>*
                 }
                 throw std::runtime_error("Cannot open SUE archive");
             }
-            const auto file = tryLoadInfantryRs2(descArchive_, hasDesc_, archive_, id);
-            if (!file) {
+            const auto loaded = tryLoadInfantryRs2(descArchive_, hasDesc_, archive_, id);
+            if (!loaded) {
                 skippedTypes_.insert(id);
                 return false;
             }
             if (palette_.empty()) palette_ = readSueEntry(archive_, "SOLD.PL");
+            if (!soldClrLoaded_) {
+                soldClr_ = loadSoldClrTable(descArchive_, hasDesc_);
+                soldClrLoaded_ = true;
+            }
+            View activePalette(palette_);
+            if (loaded->camoSlot >= 0 && loaded->camoSlot < 16) {
+                auto& cached = camoPalettes_[static_cast<std::size_t>(loaded->camoSlot)];
+                if (cached.empty()) {
+                    const auto [sr, sg, sb] = soldClr_[static_cast<std::size_t>(loaded->camoSlot)];
+                    cached = buildSoldClrPalette(palette_, sr, sg, sb);
+                }
+                activePalette = View(cached);
+            }
             std::array<int, 4> fb{};
-            poses_.emplace(id, decodeRs2Poses(*file, palette_, originalSize_, resolution_, &fb));
+            poses_.emplace(id, decodeRs2Poses(loaded->rs2, activePalette, originalSize_, resolution_, &fb));
             if (firstBounds) *firstBounds = fb;
         }
     }
@@ -502,15 +609,26 @@ std::vector<Infantry> loadMissionInfantry(const std::filesystem::path& gameDir,
     const bool hasDesc = std::filesystem::is_regular_file(descArchive, ec);
 
     std::vector<std::uint8_t> palette;
+    const auto soldClr = loadSoldClrTable(descArchive, hasDesc);
+    std::array<std::vector<std::uint8_t>, 16> camoPalettes{};
     std::map<std::string, std::optional<InfantryPoses>> cache;
     std::vector<Infantry> units;
     for (const auto& unit : placements) {
         auto it = cache.find(unit.id);
         if (it == cache.end()) {
             std::optional<InfantryPoses> decoded;
-            if (const auto file = tryLoadInfantryRs2(descArchive, hasDesc, archive, unit.id)) {
+            if (const auto loaded = tryLoadInfantryRs2(descArchive, hasDesc, archive, unit.id)) {
                 if (palette.empty()) palette = readSueEntry(archive, "SOLD.PL");
-                decoded = decodeRs2Poses(*file, palette, false, 1);
+                View activePalette(palette);
+                if (loaded->camoSlot >= 0 && loaded->camoSlot < 16) {
+                    auto& cached = camoPalettes[static_cast<std::size_t>(loaded->camoSlot)];
+                    if (cached.empty()) {
+                        const auto [sr, sg, sb] = soldClr[static_cast<std::size_t>(loaded->camoSlot)];
+                        cached = buildSoldClrPalette(palette, sr, sg, sb);
+                    }
+                    activePalette = View(cached);
+                }
+                decoded = decodeRs2Poses(loaded->rs2, activePalette, false, 1);
             }
             it = cache.emplace(unit.id, std::move(decoded)).first;
         }

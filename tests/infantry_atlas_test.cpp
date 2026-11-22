@@ -79,6 +79,42 @@ int main() try {
             throw std::runtime_error("Fog compose differs from updateFog patch");
     }
 
+    // Synthetic SoldClr uniform tinting check (n2Game_Dll.dll 0x1007ba80..0x1007bbde).
+    {
+        std::vector<std::uint8_t> basePl(512, 0);
+        const auto put565 = [&](std::size_t idx, std::uint16_t w) {
+            basePl[2 * idx] = static_cast<std::uint8_t>(w & 0xFFu);
+            basePl[2 * idx + 1] = static_cast<std::uint8_t>((w >> 8) & 0xFFu);
+        };
+        const auto get565 = [](const std::vector<std::uint8_t>& pl, std::size_t idx) -> std::uint16_t {
+            return static_cast<std::uint16_t>(pl[2 * idx] | (unsigned(pl[2 * idx + 1]) << 8));
+        };
+        put565(1, 0xCC29u); // saturated flesh (200, 132, 72) -> preserved
+        put565(2, 0x9CD3u); // neutral grey uniform (152, 152, 152) -> tinted
+        put565(3, 0xCE59u); // bright grey (200, 200, 200) -> saturates to white under 350
+
+        if (ss2::assets::buildSoldClrPalette(basePl, -1, -1, -1) != basePl)
+            throw std::runtime_error("German (-1,-1,-1) SoldClr must copy SOLD.PL verbatim");
+
+        const auto rusPl = ss2::assets::buildSoldClrPalette(basePl, 240, 288, 180);
+        if (get565(rusPl, 1) != 0xCC29u)
+            throw std::runtime_error("SoldClr altered saturated flesh entry");
+        if (get565(rusPl, 2) != 0x956Du)
+            throw std::runtime_error("Russian SoldClr uniform tint mismatch");
+
+        const auto medicPl = ss2::assets::buildSoldClrPalette(basePl, 350, 350, 350);
+        if (get565(medicPl, 1) != 0xCC29u || get565(medicPl, 3) != 0xFFFFu)
+            throw std::runtime_error("Medic SoldClr saturation clamp mismatch");
+
+        bool threw = false;
+        try {
+            (void)ss2::assets::buildSoldClrPalette(std::span<const std::uint8_t>(basePl).first(256), 250, 250, 250);
+        } catch (const std::runtime_error&) {
+            threw = true;
+        }
+        if (!threw) throw std::runtime_error("Accepted short SOLD.PL buffer");
+    }
+
     sheet[((55*png.width+33)*4)+3] = 0;
     write();
     try { ss2::assets::loadInfantryAtlas(path); }
