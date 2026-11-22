@@ -710,10 +710,14 @@ void TutorialUnits::stepSupplyAndRepair(std::vector<SoldierPose>& changed) {
                     }
                 }
             }
+            const auto canReceiveFromThisSupplier = [&](int recipientOwner) {
+                if (recipientOwner == v.owner) return true;
+                return v.isCrate && v.owner == 3 && (multiplayerSymmetry_ || recipientOwner != 3);
+            };
             for (size_t j = 0; j < vehicles_.size() && (repairsLeft > 0 || resuppliesLeft > 0); ++j) {
                 if (j == i) continue;
                 auto& other = vehicles_[j];
-                if (!other.alive || other.hp <= 0 || other.owner != v.owner) continue;
+                if (!other.alive || other.hp <= 0 || !canReceiveFromThisSupplier(other.owner)) continue;
                 if (det::detHypot(other.fx - v.fx, other.fy - v.fy) > kSupportRadius) continue;
                 bool didRepair = false;
                 bool didResupply = false;
@@ -852,7 +856,7 @@ void TutorialUnits::stepSupplyAndRepair(std::vector<SoldierPose>& changed) {
             if (canResupplyAmmo) {
                 for (size_t sIdx = 0; sIdx < soldiers_.size() && infLeft > 0; ++sIdx) {
                     auto& s = soldiers_[sIdx];
-                    if (s.owner != v.owner || s.hp <= 0 || s.embarked || s.garrisonBuilding) continue;
+                    if (!canReceiveFromThisSupplier(s.owner) || s.hp <= 0 || s.embarked || s.garrisonBuilding) continue;
                     const auto [su, sv] = soldierWorld(s);
                     const int sx = originX_ + su - sv;
                     const int sy = (su + sv) / 2;
@@ -895,7 +899,16 @@ void TutorialUnits::stepSupplyAndRepair(std::vector<SoldierPose>& changed) {
                 v.expa = std::min(0x8000, v.expa + std::max(1, static_cast<int>(det::detRoundToInt(xpUnits * 64.0))));
                 truckStockChanged = true;
             }
-            if (didInfResupply) {
+            if (v.isCrate && v.hasFiniteSupply && (didAnyService || truckStockChanged) &&
+                v.ammo <= 0 && v.ammo2 <= 0) {
+                v.alive = false;
+                v.hp = 0;
+                v.spottedMask = 0;
+                if (!soldierAtCell(v.cell) && !vehicleAtCell(v.cell)) {
+                    grid_.setOccupied(v.cell, false);
+                }
+                emitVehiclePose(i);
+            } else if (didInfResupply) {
                 emitVehiclePose(i, false, 0, 0, false, {}, false, false, false, true);
             } else if (truckStockChanged) {
                 emitVehiclePose(i);

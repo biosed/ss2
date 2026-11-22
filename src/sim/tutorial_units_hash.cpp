@@ -63,7 +63,7 @@ static_assert(sizeof(FogGrid) == 1600, "update FogGrid::hashState");
 static_assert(sizeof(TutorialUnits::ReserveUnit) == 56, "update hashValue(ReserveUnit)");
 static_assert(sizeof(assets::AirSupportSlot) == 40, "update hashValue(AirSupportSlot)");
 static_assert(sizeof(assets::ParatrooperEntry) == 40, "update hashValue(ParatrooperEntry)");
-static_assert(sizeof(TutorialUnits) == 3992, "update TutorialUnits::stateHash for the new member");
+static_assert(sizeof(TutorialUnits) == 4040, "update TutorialUnits::stateHash for the new member");
 #endif
 
 std::uint64_t TutorialUnits::stateHash() const {
@@ -74,6 +74,7 @@ std::uint64_t TutorialUnits::stateHash() const {
     static_assert(sizeof(Bridge) == 64, "update the Bridge hash below for the new field");
     static_assert(sizeof(Projectile) == 32, "update the Projectile hash below for the new field");
     static_assert(sizeof(ActiveSortie) == 144, "update the ActiveSortie hash below for the new field");
+    static_assert(sizeof(ActiveParachute) == 80, "update the ActiveParachute hash below for the new field");
 #endif
     StateHasher h;
 
@@ -163,9 +164,15 @@ std::uint64_t TutorialUnits::stateHash() const {
         h.all(s.sightTiles, s.scoreValue, s.isLeafletBomber, s.altitude, s.isRocketAttacker, s.strafeHitType);
         h.add(s.reconTick);
     });
-    // Excluded: sortiePoses_ and airEvents_ are presentation buffers drained by takeAirSorties()
-    // and takeAirStrikeEvents().
+    // Excluded: sortiePoses_, parachutePoses_, and airEvents_ are presentation buffers drained by
+    // takeAirSorties(), takeParachutes(), and takeAirStrikeEvents().
     h.all(nextSortieId_, reserveUnits_, cookOffDepth_, weather_);
+    if (!parachutes_.empty()) {
+        h.each(parachutes_, [&h](const ActiveParachute& p) {
+            h.all(p.id, p.unitId, p.owner, p.group, p.x, p.y, p.altitude256, p.fallSpeed256,
+                  p.collapseTicks, p.hp, p.maxHp, p.isSupplyCrate, p.emittedBoxDust);
+        });
+    }
     // Excluded: soldierIds_ holds immutable spawn-time unit-type IDs (like catalog_).
     // Only hash evacuating orders, bridge repairs, or damaged bridges when active so unaffected scenarios keep identical hashes.
     if (!evacuatingSoldiers_.empty() || !evacuatingVehicles_.empty()) {

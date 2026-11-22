@@ -743,57 +743,81 @@ size_t TutorialUnits::appendVehicle(const assets::VehicleUnit& unit) {
                                           : std::max(0.4, v.speedPx * 0.5))
             : 0.0;
     } else {
-        v.hp = v.alive ? unit.hp : std::max(0, unit.hp);
-        v.maxHp = std::max(1, v.hp);
-        v.crewHp = v.hasCrew ? v.maxCrewHp : 0;
-        v.ammo = std::max(0, unit.ammo);
-        v.maxAmmo = v.ammo;
-        v.isKamikaze = lowId.find("kamikaze") != std::string::npos ||
-                       lowId.find("sdkfz.303") != std::string::npos ||
-                       lowId.find("goliath") != std::string::npos;
-        v.armed = v.isKamikaze || !isUnarmedVehicleId(unit.id);
-        v.hasPrimary = v.armed;
-        if (v.isKamikaze) {
-            v.range = 64.0;
-            v.damage = 1875;
-            v.cooldown = 1;
-            v.hitType = assets::HitType::Explosive;
-        }
-        if (!v.armed) {
+        if (lowId == "ammo.box") {
+            v.maxHp = 100;
+            v.hp = v.alive ? std::clamp(unit.hp > 0 ? unit.hp : 100, 1, 100) : 0;
+            v.hasCrew = false;
+            v.crewHp = 0;
+            v.ammo = (unit.ammo == 100) ? 1000 : std::max(0, unit.ammo);
+            v.maxAmmo = std::max(v.ammo, 1000);
+            v.armed = false;
+            v.hasPrimary = false;
             v.range = 0.0;
             v.cooldown = 0;
             v.damage = 0;
+            v.speedPx = 0.0;
+            v.speedPxMax = 0.0;
+            v.canMoveBackward = false;
+            v.backSpeedPx = 0.0;
+            v.canCrushInfantry = false;
+            v.isSupply = true;
+            v.isCrate = true;
+            v.hasFiniteSupply = true;
+            v.cookOffDamage = 90;
+            v.cookOffRadius = 44.0;
+        } else {
+            v.hp = v.alive ? unit.hp : std::max(0, unit.hp);
+            v.maxHp = std::max(1, v.hp);
+            v.crewHp = v.hasCrew ? v.maxCrewHp : 0;
+            v.ammo = std::max(0, unit.ammo);
+            v.maxAmmo = v.ammo;
+            v.isKamikaze = lowId.find("kamikaze") != std::string::npos ||
+                           lowId.find("sdkfz.303") != std::string::npos ||
+                           lowId.find("goliath") != std::string::npos;
+            v.armed = v.isKamikaze || !isUnarmedVehicleId(unit.id);
+            v.hasPrimary = v.armed;
+            if (v.isKamikaze) {
+                v.range = 64.0;
+                v.damage = 1875;
+                v.cooldown = 1;
+                v.hitType = assets::HitType::Explosive;
+            }
+            if (!v.armed) {
+                v.range = 0.0;
+                v.cooldown = 0;
+                v.damage = 0;
+            }
+            v.isRocketArtillery = lowId.find("katy") != std::string::npos ||
+                                  lowId.find("nebel") != std::string::npos ||
+                                  lowId.find("bm-31") != std::string::npos ||
+                                  lowId.find("bm-13") != std::string::npos ||
+                                  lowId.find("calliope") != std::string::npos;
+            v.isCasemate = v.isRocketArtillery ||
+                           lowId.find("stug") != std::string::npos ||
+                           lowId.find("jagd") != std::string::npos ||
+                           lowId.find("hetzer") != std::string::npos ||
+                           lowId.find("ferdinand") != std::string::npos ||
+                           lowId.find("hummel") != std::string::npos ||
+                           lowId.find("su-85") != std::string::npos ||
+                           lowId.find("su-100") != std::string::npos ||
+                           lowId.find("isu-") != std::string::npos;
+            if (lowId.find("truck") != std::string::npos || lowId.find("opel") != std::string::npos ||
+                lowId.find("maultier") != std::string::npos || lowId.find("halftrack") != std::string::npos ||
+                lowId.find("m16") != std::string::npos || lowId.find("sdkfz") != std::string::npos) {
+                v.passengerCapacity = 8;
+            } else if (lowId.find("jeep") != std::string::npos || lowId.find("kubel") != std::string::npos ||
+                       lowId.find("wyllis") != std::string::npos) {
+                v.passengerCapacity = 3;
+            }
+            v.isSupply = lowId.find("sdkfz.11") != std::string::npos || lowId.find("morris.c8") != std::string::npos ||
+                         lowId.find("supply") != std::string::npos ||
+                         lowId == "m4" || lowId == "m5" || lowId == "ss";
+            v.isAmbulance = lowId.size() >= 4 && lowId.ends_with(".med");
+            v.canCrushInfantry = !v.isKamikaze && (v.maxHp >= 250) && (v.speedPx > 0.0);
+            v.speedPxMax = v.speedPx;
+            v.canMoveBackward = v.speedPx > 0.0;
+            v.backSpeedPx = v.canMoveBackward ? std::max(0.4, v.speedPx * 0.5) : 0.0;
         }
-        v.isRocketArtillery = lowId.find("katy") != std::string::npos ||
-                              lowId.find("nebel") != std::string::npos ||
-                              lowId.find("bm-31") != std::string::npos ||
-                              lowId.find("bm-13") != std::string::npos ||
-                              lowId.find("calliope") != std::string::npos;
-        v.isCasemate = v.isRocketArtillery ||
-                       lowId.find("stug") != std::string::npos ||
-                       lowId.find("jagd") != std::string::npos ||
-                       lowId.find("hetzer") != std::string::npos ||
-                       lowId.find("ferdinand") != std::string::npos ||
-                       lowId.find("hummel") != std::string::npos ||
-                       lowId.find("su-85") != std::string::npos ||
-                       lowId.find("su-100") != std::string::npos ||
-                       lowId.find("isu-") != std::string::npos;
-        if (lowId.find("truck") != std::string::npos || lowId.find("opel") != std::string::npos ||
-            lowId.find("maultier") != std::string::npos || lowId.find("halftrack") != std::string::npos ||
-            lowId.find("m16") != std::string::npos || lowId.find("sdkfz") != std::string::npos) {
-            v.passengerCapacity = 8;
-        } else if (lowId.find("jeep") != std::string::npos || lowId.find("kubel") != std::string::npos ||
-                   lowId.find("wyllis") != std::string::npos) {
-            v.passengerCapacity = 3;
-        }
-        v.isSupply = lowId.find("sdkfz.11") != std::string::npos || lowId.find("morris.c8") != std::string::npos ||
-                     lowId.find("ammo.box") != std::string::npos || lowId.find("supply") != std::string::npos ||
-                     lowId == "m4" || lowId == "m5" || lowId == "ss";
-        v.isAmbulance = lowId.size() >= 4 && lowId.ends_with(".med");
-        v.canCrushInfantry = !v.isKamikaze && (v.maxHp >= 250) && (v.speedPx > 0.0);
-        v.speedPxMax = v.speedPx;
-        v.canMoveBackward = v.speedPx > 0.0;
-        v.backSpeedPx = v.canMoveBackward ? std::max(0.4, v.speedPx * 0.5) : 0.0;
     }
     {
         const auto* spec = catalog_ ? catalog_->find(unit.id) : nullptr;

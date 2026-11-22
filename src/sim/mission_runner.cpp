@@ -748,6 +748,21 @@ void MissionRunner::collectAirSorties() {
     }
 }
 
+void MissionRunner::collectParachutes() {
+    for (const auto& pose : units_.takeParachutes()) {
+        const auto old = std::ranges::find(parachutes_, pose.id, &ParachutePose::id);
+        if (old == parachutes_.end()) {
+            parachutes_.push_back(pose);
+            continue;
+        }
+        const bool wasAlive = old->alive;
+        const bool wasActive = old->active;
+        *old = pose;
+        old->alive = wasAlive && pose.alive;
+        old->active = wasActive && pose.active;
+    }
+}
+
 void MissionRunner::run(std::stop_token stop, unsigned delayMs) {
     using namespace std::chrono;
     using Clock = steady_clock;
@@ -917,6 +932,7 @@ void MissionRunner::stepTickLocked() {
     collectBuildingUpdates();
     collectBridgeUpdates();
     collectAirSorties();
+    collectParachutes();
     auto newAir = units_.takeAirStrikeEvents();
     if (!newAir.empty()) {
         airEvents_.insert(airEvents_.end(), newAir.begin(), newAir.end());
@@ -964,6 +980,26 @@ bool MissionRunner::replay(std::span<const cmd::RecordedCommand> log, std::uint3
         std::visit([this](const auto& c) { (void)submitLocked(c); }, rc.command);
     }
     return advanceToTickLocked(untilTick);
+}
+
+bool MissionRunner::replayStep(std::span<const cmd::RecordedCommand> log, std::size_t& cursor, std::uint32_t endTick) {
+    std::lock_guard lock(mutex_);
+    TutorialUnits::ScopedCommandActor actorGuard(units_, 0);
+    if (cursor < log.size() && log[cursor].tick < units_.tick_) return false;
+    while (cursor < log.size() && log[cursor].tick == units_.tick_) {
+        std::visit([this](const auto& c) { (void)submitLocked(c); }, log[cursor].command);
+        ++cursor;
+    }
+    if (units_.tick_ >= endTick) {
+        return cursor == log.size();
+    }
+    if (modal_ || paused_) return false;
+    stepTickLocked();
+    while (cursor < log.size() && log[cursor].tick == units_.tick_) {
+        std::visit([this](const auto& c) { (void)submitLocked(c); }, log[cursor].command);
+        ++cursor;
+    }
+    return true;
 }
 
 std::vector<MissionEvent> MissionRunner::poll() {
@@ -1452,6 +1488,10 @@ std::vector<AirSortiePose> MissionRunner::pollAirSorties() {
     std::lock_guard lock(mutex_);
     return std::exchange(airSorties_, {});
 }
+std::vector<ParachutePose> MissionRunner::pollParachutes() {
+    std::lock_guard lock(mutex_);
+    return std::exchange(parachutes_, {});
+}
 std::vector<AirStrikeEvent> MissionRunner::pollAirStrikeEvents() {
     std::lock_guard lock(mutex_);
     return std::exchange(airEvents_, {});
@@ -1497,6 +1537,7 @@ bool MissionRunner::loadFullSnapshot(const FullSnapshot& snap) {
     buildingUpdates_.clear();
     bridgeUpdates_.clear();
     airSorties_.clear();
+    parachutes_.clear();
     airEvents_.clear();
     pending_.clear();
     pendingCrewSpawns_.clear();
@@ -1526,6 +1567,7 @@ cmd::LoadSnapshot::Result MissionRunner::applyLocked(const cmd::LoadSnapshot& c)
     buildingUpdates_.clear();
     bridgeUpdates_.clear();
     airSorties_.clear();
+    parachutes_.clear();
     airEvents_.clear();
     scheduledReinforcements_.clear();
     pending_.clear();

@@ -672,6 +672,55 @@ void testStateHashSensitivityAndTrace(const World& world) {
 
     std::cout << "StateHash sensitivity, divergence and periodic trace PASSED\n";
 }
+
+void testInteractiveReplayTransport(const World& world) {
+    constexpr std::uint32_t endTick = 90;
+    auto recorder = world.manualRunner();
+    recorder->startRecording();
+    for (const auto& [tick, command] : script()) {
+        while (recorder->simTick() < tick) recorder->advanceTicks(1);
+        recorder->apply(command);
+    }
+    recorder->advanceTicks(endTick - recorder->simTick());
+    const auto log = recorder->takeRecording();
+    const auto expectedHash = recorder->stateHash();
+    const auto expectedSnap = recorder->takeSnapshot();
+
+    auto live = world.manualRunner();
+    cmd::ReplayTransport tr{};
+    require(tr.speedPercent() == 100 && tr.speedLabel() == "1x", "default ReplayTransport speed must be 1x");
+    tr.stepFaster();
+    tr.stepFaster();
+    require(tr.speedPercent() == 400 && tr.speedLabel() == "4x", "two stepFaster calls must reach 4x");
+    tr.stepSlower();
+    tr.stepSlower();
+    tr.stepSlower();
+    require(tr.speedPercent() == 50 && tr.speedLabel() == "0.5x", "stepSlower must clamp down to 0.5x");
+
+    tr.togglePause();
+    require(tr.paused && tr.consumeTicks(1.0) == 0u, "paused ReplayTransport must consume 0 ticks");
+    require(tr.formatBanner(0, endTick).find("PAUSED") != std::string::npos, "paused banner must report PAUSED");
+    tr.togglePause();
+    tr.speedIndex = 2; // 2x
+
+    while (live->simTick() < endTick) {
+        // Exercise viewer-seat cycling mid-replay: must NOT alter simulation stateHash().
+        tr.cycleViewerSeat(2);
+        if (tr.viewerSeat >= 0) live->setViewerOwner(tr.viewerSeat);
+        const unsigned budget = std::max(1u, tr.consumeTicks(0.020));
+        for (unsigned k = 0; k < budget && live->simTick() < endTick; ++k) {
+            require(live->replayStep(log, tr.cursor, endTick), "replayStep failed before endTick");
+        }
+    }
+    require(tr.cursor == log.size(), "replayStep must consume all commands by endTick");
+    tr.finished = true;
+    tr.hashVerified = (live->stateHash() == expectedHash);
+    require(tr.hashVerified && live->takeSnapshot() == expectedSnap,
+            "interactive replayStep with viewerSeat/speed changes diverged from batch replay");
+    require(tr.formatBanner(live->simTick(), endTick).find("END OK") != std::string::npos,
+            "finished ReplayTransport banner must report END OK");
+    std::cout << "Interactive ReplayTransport & replayStep parity PASSED\n";
+}
 }
 
 int main(int argc, char** argv) try {
@@ -679,6 +728,7 @@ int main(int argc, char** argv) try {
     const World world;
     testDeterminism(world);
     testStateHashSensitivityAndTrace(world);
+    testInteractiveReplayTransport(world);
     testLiveReplay(world);
     if (argc == 2) {
         testGoldTutorial(argv[1]);

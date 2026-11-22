@@ -604,6 +604,36 @@ std::shared_ptr<const UnitCatalog> UnitCatalog::load(const std::filesystem::path
             }
         } catch (const std::exception&) {}
         try {
+            const auto paraBytes = readSueEntry(descPath, "UNITS\\para");
+            const std::string_view paraText(reinterpret_cast<const char*>(paraBytes.data()), paraBytes.size());
+            bool parsedPara = false;
+            std::size_t pos = 0;
+            while (pos < paraText.size()) {
+                std::size_t eol = paraText.find('\n', pos);
+                if (eol == std::string_view::npos) eol = paraText.size();
+                const auto toks = splitTokens(paraText.substr(pos, eol - pos));
+                pos = eol + 1;
+                if (toks.size() < 2) continue;
+                const std::string k = asciiLower(toks[0]);
+                int iv = 0;
+                double dv = 0.0;
+                if (k == "fallspeed" && parseDouble(toks[1], dv) && dv > 0.0) {
+                    catalog->paraSpec_.fallSpeed = dv;
+                    parsedPara = true;
+                } else if (k == "paraanicenter" && parseInt(toks[1], iv) && iv >= 0) {
+                    catalog->paraSpec_.paraAniCenter = iv;
+                    parsedPara = true;
+                } else if (k == "paraframedelay" && parseInt(toks[1], iv) && iv > 0) {
+                    catalog->paraSpec_.paraFrameDelay = iv;
+                    parsedPara = true;
+                } else if (k == "sight" && parseInt(toks[1], iv) && iv > 0) {
+                    catalog->paraSpec_.sight = iv;
+                    parsedPara = true;
+                }
+            }
+            if (parsedPara) catalog->paraSpec_.loaded = true;
+        } catch (const std::exception&) {}
+        try {
             const auto mineBytes = readSueEntry(descPath, "MISC\\MINES");
             const std::string_view mineText(reinterpret_cast<const char*>(mineBytes.data()), mineBytes.size());
             bool parsedMine = false;
@@ -759,6 +789,9 @@ PlaneSpec UnitCatalog::parsePlaneText(std::string_view planeId, std::string_view
             (void)parseInt(toks[1], spec.sight);
         } else if (key == "flyspeed") {
             (void)parseDouble(toks[1], spec.flySpeed);
+        } else if (key == "dropflyspeed") {
+            double dfs = 0.0;
+            if (parseDouble(toks[1], dfs) && dfs > 0.0) spec.dropFlySpeed = dfs;
         } else if (key == "bombdamage") {
             (void)parseInt(toks[1], spec.bombDamage);
         } else if (key == "bombsnumber") {

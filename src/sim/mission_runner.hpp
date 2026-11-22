@@ -138,6 +138,7 @@ public:
     std::array<assets::AirSupportSlot, 5> playerAirSupport();
     bool callAirSupport(assets::AirMissionKind kind, int targetX, int targetY);
     std::vector<AirSortiePose> pollAirSorties();
+    std::vector<ParachutePose> pollParachutes();
     std::vector<AirStrikeEvent> pollAirStrikeEvents();
     struct ScheduledReinforcement {
         MissionEvent event;
@@ -210,6 +211,10 @@ public:
     // Returns false if the log cannot be followed: a command lies in the past,
     // or the clock is held by a dialog or pause that the log never releases.
     bool replay(std::span<const cmd::RecordedCommand> log, std::uint32_t untilTick);
+    // Advances a live/interactive replay by at most 1 simulation tick, applying
+    // all recorded commands scheduled at the pre-step and post-step ticks so the
+    // resulting trajectory and stateHash() match replay(log, endTick) bit-for-bit.
+    bool replayStep(std::span<const cmd::RecordedCommand> log, std::size_t& cursor, std::uint32_t endTick);
     // 64-bit hash of the whole simulation: units, script VM and the runner's
     // own sim-affecting state (mission_state_hash.cpp). Two runners with equal
     // hashes evolve identically under the same commands.
@@ -225,6 +230,7 @@ private:
     void collectBuildingUpdates();
     void collectBridgeUpdates();
     void collectAirSorties();
+    void collectParachutes();
     unsigned countPendingReinforcementsByGroup(
         const std::array<std::vector<assets::ReinforcementUnit>, 64>& waves, unsigned group) const;
     unsigned countPendingReinforcementsByGroupTeam(
@@ -341,6 +347,7 @@ private:
     std::vector<BuildingSnapshot> buildingUpdates_;
     std::vector<BridgeSnapshot> bridgeUpdates_;
     std::vector<AirSortiePose> airSorties_;
+    std::vector<ParachutePose> parachutes_;
     std::vector<AirStrikeEvent> airEvents_;
     std::optional<std::vector<std::uint8_t>> fog_;
     bool modal_{}, paused_{};

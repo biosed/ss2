@@ -1,12 +1,14 @@
 #include "sim/mission_runner.hpp"
 #include <algorithm>
 #include <array>
+#include <cmath>
 
 namespace ss2 {
 namespace {
 constexpr std::array<std::uint8_t, 8> kFullMagicV1{'S', 'S', '2', 'F', 'U', 'L', 'L', '1'};
 constexpr std::array<std::uint8_t, 8> kFullMagicV2{'S', 'S', '2', 'F', 'U', 'L', 'L', '2'};
 constexpr std::array<std::uint8_t, 8> kFullMagicV3{'S', 'S', '2', 'F', 'U', 'L', 'L', '3'};
+constexpr std::array<std::uint8_t, 8> kFullMagicV4{'S', 'S', '2', 'F', 'U', 'L', 'L', '4'};
 constexpr std::uint32_t kMaxStringBytes = 4096u;
 
 void appendU8(std::vector<std::uint8_t>& out, std::uint8_t v) {
@@ -173,7 +175,7 @@ std::vector<std::uint8_t> MissionRunner::serializeFullSnapshot(const FullSnapsho
     const std::vector<std::uint8_t> unitBytes = TutorialUnits::serializeSnapshot(snap.units);
     std::vector<std::uint8_t> out;
     out.reserve(unitBytes.size() + 4096u);
-    out.insert(out.end(), kFullMagicV3.begin(), kFullMagicV3.end());
+    out.insert(out.end(), kFullMagicV4.begin(), kFullMagicV4.end());
 
     // 1. Core TutorialUnits snapshot.
     appendU32(out, static_cast<std::uint32_t>(unitBytes.size()));
@@ -290,13 +292,69 @@ std::vector<std::uint8_t> MissionRunner::serializeFullSnapshot(const FullSnapsho
         appendU32(out, g.aiFlags);
         appendU32(out, g.lastReserveTick);
     }
+
+    // 7. SS2FULL4 extension: airborne & collapsing parachute canopies + in-flight aircraft sorties.
+    const auto appendF64 = [&](double d) {
+        std::uint64_t bits = 0;
+        static_assert(sizeof(double) == sizeof(std::uint64_t));
+        std::copy_n(reinterpret_cast<const std::uint8_t*>(&d), sizeof(double),
+                    reinterpret_cast<std::uint8_t*>(&bits));
+        appendU64(out, bits);
+    };
+    appendU32(out, static_cast<std::uint32_t>(ex.parachutes.size()));
+    for (const auto& p : ex.parachutes) {
+        appendU32(out, p.id);
+        appendString(out, p.unitId);
+        appendI32(out, p.owner);
+        appendI32(out, p.group);
+        appendI32(out, p.x);
+        appendI32(out, p.y);
+        appendI32(out, p.altitude256);
+        appendI32(out, p.fallSpeed256);
+        appendI32(out, p.collapseTicks);
+        appendI32(out, p.hp);
+        appendI32(out, p.maxHp);
+        appendU8(out, p.isSupplyCrate ? 1u : 0u);
+        appendU8(out, p.emittedBoxDust ? 1u : 0u);
+    }
+    appendU32(out, static_cast<std::uint32_t>(ex.sorties.size()));
+    for (const auto& st : ex.sorties) {
+        appendU32(out, st.id);
+        appendU8(out, static_cast<std::uint8_t>(st.kind));
+        appendString(out, st.planeId);
+        appendI32(out, st.owner);
+        appendF64(st.fx);
+        appendF64(st.fy);
+        appendF64(st.vx);
+        appendF64(st.vy);
+        appendI32(out, st.targetX);
+        appendI32(out, st.targetY);
+        appendU32(out, st.dir32);
+        appendI32(out, st.hp);
+        appendI32(out, st.maxHp);
+        appendI32(out, st.payloadsLeft);
+        appendI32(out, st.totalPayloads);
+        appendI32(out, st.bombDamage);
+        appendI32(out, st.strafeDamage);
+        appendI32(out, st.airToAirDamage);
+        appendI32(out, st.sightTiles);
+        appendI32(out, st.scoreValue);
+        appendU8(out, st.isLeafletBomber ? 1u : 0u);
+        appendI32(out, st.altitude);
+        appendU8(out, st.isRocketAttacker ? 1u : 0u);
+        appendU8(out, static_cast<std::uint8_t>(st.strafeHitType));
+        appendU32(out, st.reconTick);
+    }
     return out;
 }
 
 std::optional<MissionRunner::FullSnapshot> MissionRunner::deserializeFullSnapshot(std::span<const std::uint8_t> bytes) {
     int version = 0;
-    if (bytes.size() >= kFullMagicV3.size() &&
-        std::equal(kFullMagicV3.begin(), kFullMagicV3.end(), bytes.begin())) {
+    if (bytes.size() >= kFullMagicV4.size() &&
+        std::equal(kFullMagicV4.begin(), kFullMagicV4.end(), bytes.begin())) {
+        version = 4;
+    } else if (bytes.size() >= kFullMagicV3.size() &&
+               std::equal(kFullMagicV3.begin(), kFullMagicV3.end(), bytes.begin())) {
         version = 3;
     } else if (bytes.size() >= kFullMagicV2.size() &&
                std::equal(kFullMagicV2.begin(), kFullMagicV2.end(), bytes.begin())) {
@@ -488,6 +546,49 @@ std::optional<MissionRunner::FullSnapshot> MissionRunner::deserializeFullSnapsho
     if (version >= 3) {
         for (auto& g : vm.groupAi) {
             if (!r.readU32(g.aiFlags) || !r.readU32(g.lastReserveTick)) return std::nullopt;
+        }
+    }
+    if (version >= 4) {
+        const auto readF64 = [&](double& d) -> bool {
+            std::uint64_t bits = 0;
+            if (!r.readU64(bits)) return false;
+            std::copy_n(reinterpret_cast<const std::uint8_t*>(&bits), sizeof(double),
+                        reinterpret_cast<std::uint8_t*>(&d));
+            return std::isfinite(d);
+        };
+        if (!r.readU32(cnt) || cnt > 256u || cnt > r.remaining() / 46u) return std::nullopt;
+        ex.parachutes.resize(cnt);
+        for (auto& p : ex.parachutes) {
+            if (!r.readU32(p.id) || !r.readString(p.unitId) || !r.readI32(p.owner) || !r.readI32(p.group) ||
+                !r.readI32(p.x) || !r.readI32(p.y) || !r.readI32(p.altitude256) || !r.readI32(p.fallSpeed256) ||
+                !r.readI32(p.collapseTicks) || !r.readI32(p.hp) || !r.readI32(p.maxHp) ||
+                !r.readBool(p.isSupplyCrate) || !r.readBool(p.emittedBoxDust) ||
+                p.owner < 0 || p.owner >= 4 || p.altitude256 < 0 || p.fallSpeed256 <= 0 ||
+                p.collapseTicks < 0 || p.maxHp <= 0 || p.hp < 0 || p.hp > p.maxHp) {
+                return std::nullopt;
+            }
+        }
+        if (!r.readU32(cnt) || cnt > 128u || cnt > r.remaining() / 100u) return std::nullopt;
+        ex.sorties.resize(cnt);
+        for (auto& st : ex.sorties) {
+            std::uint8_t kindByte = 0;
+            std::uint8_t hitByte = 0;
+            if (!r.readU32(st.id) || !r.readU8(kindByte) || kindByte >= 5u || !r.readString(st.planeId) ||
+                !r.readI32(st.owner) || !readF64(st.fx) || !readF64(st.fy) || !readF64(st.vx) || !readF64(st.vy) ||
+                !r.readI32(st.targetX) || !r.readI32(st.targetY) || !r.readU32(st.dir32) ||
+                !r.readI32(st.hp) || !r.readI32(st.maxHp) || !r.readI32(st.payloadsLeft) ||
+                !r.readI32(st.totalPayloads) || !r.readI32(st.bombDamage) || !r.readI32(st.strafeDamage) ||
+                !r.readI32(st.airToAirDamage) || !r.readI32(st.sightTiles) || !r.readI32(st.scoreValue) ||
+                !r.readBool(st.isLeafletBomber) || !r.readI32(st.altitude) || !r.readBool(st.isRocketAttacker) ||
+                !r.readU8(hitByte) || hitByte >= static_cast<std::uint8_t>(assets::HitType::Count) ||
+                !r.readU32(st.reconTick) ||
+                st.owner < 0 || st.owner >= 4 || st.maxHp <= 0 || st.hp <= 0 || st.hp > st.maxHp ||
+                st.payloadsLeft < 0 || st.totalPayloads < st.payloadsLeft) {
+                return std::nullopt;
+            }
+            st.kind = static_cast<assets::AirMissionKind>(kindByte);
+            st.strafeHitType = static_cast<assets::HitType>(hitByte);
+            st.dir32 &= 31u;
         }
     }
 

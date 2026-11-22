@@ -290,6 +290,10 @@ int main() try {
         full.unitsExtra.evacuatingSoldiers.push_back({1u, 64, 96});
         full.unitsExtra.evacuatingVehicles.push_back({0u, 128, 160});
         full.unitsExtra.bridges = {{3500, 0, false}, {400, 3, false}, {0, 4, true}};
+        full.unitsExtra.parachutes = {
+            {21u, "dsmguner", 0, 7, 512, 640, 140 * 256, 307, 0, 40, 40, false, false},
+            {22u, "ammo.box", 0, 0, 548, 652, 0, 307, 6, 50, 50, true, true},
+        };
         full.tutorial.tick = 1425u;
         full.tutorial.countdown = 300;
         full.tutorial.active = {false, true, false};
@@ -335,24 +339,45 @@ int main() try {
 
         const auto rawFull = ss2::MissionRunner::serializeFullSnapshot(full);
         check(rawFull.size() >= 8u &&
-                  std::string_view(reinterpret_cast<const char*>(rawFull.data()), 8u) == "SS2FULL3",
-              "serializeFullSnapshot emits SS2FULL3 header");
-        check(ss2::MissionRunner::deserializeFullSnapshot(rawFull).has_value(), "SS2FULL3 decodes cleanly");
+                  std::string_view(reinterpret_cast<const char*>(rawFull.data()), 8u) == "SS2FULL4",
+              "serializeFullSnapshot emits SS2FULL4 header");
+        check(ss2::MissionRunner::deserializeFullSnapshot(rawFull).has_value(), "SS2FULL4 decodes cleanly");
         check(!ss2::MissionRunner::deserializeFullSnapshot(
                   std::span<const std::uint8_t>(rawFull.data(), rawFull.size() - 1)).has_value(),
-              "SS2FULL3 rejects truncated payload");
+              "SS2FULL4 rejects truncated payload");
         auto badFullMagic = rawFull;
         badFullMagic[7] = '9';
-        check(!ss2::MissionRunner::deserializeFullSnapshot(badFullMagic).has_value(), "SS2FULL3 rejects bad magic");
+        check(!ss2::MissionRunner::deserializeFullSnapshot(badFullMagic).has_value(), "SS2FULL4 rejects bad magic");
         auto extraFullByte = rawFull;
         extraFullByte.push_back(0x55u);
         check(!ss2::MissionRunner::deserializeFullSnapshot(extraFullByte).has_value(),
-              "SS2FULL3 rejects trailing byte");
+              "SS2FULL4 rejects trailing byte");
 
-        // Backward compatibility: SS2FULL2 (without section 6 group aiFlags/lastReserveTick) and SS2FULL1 still decode cleanly.
+        auto badPara = full;
+        badPara.unitsExtra.parachutes[0].hp = 99; // > maxHp (40)
+        check(!ss2::decodeSaveFile(ss2::encodeSaveFile(meta, badPara)).has_value(),
+              "SS2SAVE2 rejects parachute hp > maxHp");
+
+        // Backward compatibility: SS2FULL3, SS2FULL2, and SS2FULL1 still decode cleanly.
+        std::size_t v4ParaTrailerBytes = 4u + 4u; // parachutes count + sorties count
+        for (const auto& p : full.unitsExtra.parachutes) {
+            v4ParaTrailerBytes += 4u + (4u + p.unitId.size()) + 9u * 4u + 2u;
+        }
+        for (const auto& st : full.unitsExtra.sorties) {
+            v4ParaTrailerBytes += 4u + 1u + (4u + st.planeId.size()) + 4u + 4u * 8u + 12u * 4u + 4u + 4u;
+        }
+        std::vector<std::uint8_t> rawFullV3(
+            rawFull.begin(), rawFull.end() - static_cast<std::ptrdiff_t>(v4ParaTrailerBytes));
+        rawFullV3[7] = '3';
+        const auto decFullV3 = ss2::MissionRunner::deserializeFullSnapshot(rawFullV3);
+        check(decFullV3.has_value() && decFullV3->unitsExtra.parachutes.empty() &&
+                  decFullV3->tutorial.groupAi[3].aiFlags == 0x400001u &&
+                  decFullV3->tutorial.groupAi[3].lastReserveTick == 950u,
+              "SS2FULL3 backward compatibility decodes cleanly");
+
         constexpr std::size_t v3GroupAiTrailerBytes = 100u * 8u;
         std::vector<std::uint8_t> rawFullV2(
-            rawFull.begin(), rawFull.end() - static_cast<std::ptrdiff_t>(v3GroupAiTrailerBytes));
+            rawFullV3.begin(), rawFullV3.end() - static_cast<std::ptrdiff_t>(v3GroupAiTrailerBytes));
         rawFullV2[7] = '2';
         const auto decFullV2 = ss2::MissionRunner::deserializeFullSnapshot(rawFullV2);
         check(decFullV2.has_value() && decFullV2->unitsExtra.bridges == full.unitsExtra.bridges &&

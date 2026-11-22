@@ -363,6 +363,7 @@ struct PlaneSpec {
     std::string bombId;
     bool hasFallSmoke{false};
     int altitude{280};
+    double dropFlySpeed{0.0};
     int groundAmmo{0};
     std::string groundShotId;
     HitType groundHitType{HitType::None};
@@ -433,6 +434,14 @@ struct WeatherSpec {
     bool loaded{false};
 };
 
+struct ParaSpec {
+    double fallSpeed{1.2};
+    int paraAniCenter{9};
+    int paraFrameDelay{3};
+    int sight{19};
+    bool loaded{false};
+};
+
 /// Lazy, thread-safe parser and cache for Gold 2.2 unit & weapon descriptors (`desc_common.sue`, `lang.sue`).
 class UnitCatalog {
 public:
@@ -452,6 +461,7 @@ public:
     const BuildingDefense& buildingDefense() const { return buildingDefense_; }
     const MineSpec& mineSpec() const { return mineSpec_; }
     const WeatherSpec& weather() const noexcept { return weather_; }
+    const ParaSpec& paraSpec() const noexcept { return paraSpec_; }
     int tankArmorProtection(HitType ht) const {
         if (ht == HitType::Pierce || ht == HitType::Transpierce) return tankArmorProtectionPierce_;
         if (ht == HitType::Explosive || ht == HitType::Mine) return tankArmorProtectionExplosive_;
@@ -478,6 +488,7 @@ private:
     BuildingDefense buildingDefense_{BuildingDefense::retailDefault()};
     MineSpec mineSpec_{};
     WeatherSpec weather_{};
+    ParaSpec paraSpec_{};
     int tankArmorProtectionPierce_{3};
     int tankArmorProtectionExplosive_{3};
     int underAttackIntervalSec_{15};

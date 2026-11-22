@@ -1532,9 +1532,149 @@ void runCaofCompleteOpcodes() {
                       std::abs(snapArrived.units.vehicles[1].y - p1y) <= 16,
                   "ai_plane_move relocated damaged plane (< 70% maxHp) contrary to 0x10053d1c");
         }
+
+        // 8. Retail CPara::Step (0x1002e1a0..0x1002e3b6) parachute descent, mid-air SS2FULL4 save/reload,
+        //    persistent neutral ammo.box supply crates, sympathetic cook-off, & deep-water splashdown drowning.
+        {
+            ss2::assets::PlaneSpec ju52{};
+            ju52.id = "ju-52";
+            ju52.health = 1100;
+            ju52.flySpeed = 3.81;
+            ju52.dropFlySpeed = 2.35;
+            ju52.altitude = 120;
+            ss2::assets::UnitSpec crateSpec{};
+            crateSpec.id = "ammo.box";
+            crateSpec.isVehicle = true;
+            crateSpec.health = 100;
+            crateSpec.ammo1 = 1000;
+            crateSpec.selType = "crate";
+            crateSpec.dieExplosion = "crate";
+            ss2::assets::UnitSpec tankSpec{};
+            tankSpec.id = "pz4";
+            tankSpec.isVehicle = true;
+            tankSpec.health = 400;
+            tankSpec.ammo1 = 80;
+            tankSpec.moveSpeed = 1.4;
+            tankSpec.shot1.damage = 140;
+            tankSpec.shot1.range = 420;
+            tankSpec.shot1.reloadTicks = 20;
+            tankSpec.shot1.hitType = ss2::assets::HitType::Explosive;
+            const auto dropCat = ss2::assets::UnitCatalog::fromSpecs({crateSpec, tankSpec}, {ju52});
+
+            auto makeDropMission = [&]() {
+                auto md = makeFlatMission();
+                md.obstacles.assign(64u * 64u, 0u);
+                // Carve an unbridged deep-water pond around tile (44..52, 18..26): deep water nibble 0x00F0 set, ground nibble 0x000F clear.
+                for (unsigned ty = 18u; ty <= 26u; ++ty) {
+                    for (unsigned tx = 44u; tx <= 52u; ++tx) {
+                        md.obstacles[ty * 64u + tx] = 0x00F0u;
+                    }
+                }
+                md.scripts.push_back({0x7fffffffu});
+                const auto [tkX, tkY] = px64(25, 22); // ~96px from (22, 22): inside 140px supply radius and clean firing stand-off
+                const auto [solX, solY] = px64(24, 22);
+                std::vector<ss2::assets::Infantry> inf{
+                    {"dguner", solX, solY, 100, 5, 1, 0}, // low-ammo friendly soldier near supply drop zone
+                };
+                std::vector<ss2::assets::Placement> veh{
+                    {"pz4", tkX, tkY, 0, 60, 10, 1, 0},   // damaged & low-ammo friendly tank near supply drop zone
+                };
+                ss2::TutorialUnits u(
+                    ss2::InfantryPathGrid::fromSubCellMasks(md.width, md.height, md.flags, md.obstacles),
+                    inf, veh, ss2::FogGrid(md.width, md.height, md.flags), 2, false, {}, dropCat);
+                std::array<std::array<ss2::assets::AirSupportSlot, 5>, 4> air{};
+                air[0][static_cast<std::size_t>(ss2::assets::AirMissionKind::Paratrooper)] = {"ju-52", 2, 2};
+                air[0][static_cast<std::size_t>(ss2::assets::AirMissionKind::Supply)] = {"ju-52", 1, 1};
+                std::array<int, 4> pGrp{14, 0, 0, 0};
+                std::array<std::vector<ss2::assets::ParatrooperEntry>, 4> pRos{};
+                pRos[0] = {{"dsmguner", 4}};
+                u.setAirSupport(air, pGrp, pRos);
+                return std::pair{std::move(md), std::move(u)};
+            };
+
+            auto [md1, u1] = makeDropMission();
+            auto [md2, u2] = makeDropMission();
+            ss2::MissionRunner runA(ss2::MissionRunner::ManualClock{}, std::move(md1), std::move(u1));
+            ss2::MissionRunner runB(ss2::MissionRunner::ManualClock{}, std::move(md2), std::move(u2));
+
+            const auto [paraLandX, paraLandY] = px64(18, 22);
+            const auto [supLandX, supLandY] = px64(22, 22);
+            const auto [waterX, waterY] = px64(48, 22);
+            check(runA.callAirSupport(ss2::assets::AirMissionKind::Paratrooper, paraLandX, paraLandY),
+                  "Paratrooper sortie call failed");
+            check(runA.callAirSupport(ss2::assets::AirMissionKind::Supply, supLandX, supLandY),
+                  "Supply sortie call failed");
+            check(runA.callAirSupport(ss2::assets::AirMissionKind::Paratrooper, waterX, waterY),
+                  "Water Paratrooper sortie call failed");
+
+            // Step until canopies are actively descending mid-air (before touchdown!).
+            bool sawAirborneCanopy = false;
+            for (unsigned t = 0u; t < 320u; ++t) {
+                runA.advanceTicks(1u);
+                for (const auto& pp : runA.pollParachutes()) {
+                    if (pp.active && pp.altitudePx > 25) sawAirborneCanopy = true;
+                }
+                if (sawAirborneCanopy && !runA.takeFullSnapshot().unitsExtra.parachutes.empty()) break;
+            }
+            const auto midSnap = runA.takeFullSnapshot();
+            check(sawAirborneCanopy && !midSnap.unitsExtra.parachutes.empty(),
+                  "Paratrooper/Supply sorties must spawn airborne descending parachutes");
+            check(midSnap.units.soldiers.size() == 1u,
+                  "Airborne paratroopers must not materialize on ground before canopy touchdown");
+
+            // Mid-descent SS2FULL4 serialize -> deserialize -> loadFullSnapshot onto runB, then verify bit-identical landing!
+            const auto midBytes = ss2::MissionRunner::serializeFullSnapshot(midSnap);
+            const auto midDecoded = ss2::MissionRunner::deserializeFullSnapshot(midBytes);
+            check(midDecoded.has_value() && runB.loadFullSnapshot(*midDecoded),
+                  "Mid-descent SS2FULL4 snapshot failed to round-trip into twin runner");
+            check(runA.stateHash() == runB.stateHash(),
+                  "Mid-descent SS2FULL4 reload stateHash diverged immediately");
+
+            bool sawBoxDust = false;
+            unsigned paraLandedEvents = 0u;
+            unsigned crateLandedEvents = 0u;
+            for (unsigned t = 0u; t < 320u; ++t) {
+                runA.advanceTicks(1u);
+                runB.advanceTicks(1u);
+                for (const auto& ae : runA.pollAirStrikeEvents()) {
+                    if (ae.kind == ss2::AirStrikeEvent::BoxDust) sawBoxDust = true;
+                    if (ae.kind == ss2::AirStrikeEvent::ParatrooperLanded) ++paraLandedEvents;
+                    if (ae.kind == ss2::AirStrikeEvent::SupplyCrateLanded) ++crateLandedEvents;
+                }
+                (void)runB.pollAirStrikeEvents();
+            }
+            check(runA.stateHash() == runB.stateHash(),
+                  "Mid-descent SS2FULL4 twin runner stateHash diverged after canopy touchdown");
+            check(sawBoxDust && paraLandedEvents == 4u && crateLandedEvents == 3u,
+                  "Expected BoxDust + 4 dry-land paratroopers + 3 ammo.box crates (while 4 water jumpers drowned)");
+
+            const auto landedSnap = runA.takeFullSnapshot();
+            check(landedSnap.units.soldiers.size() == 5u,
+                  "Exactly 4 dry-land paratroopers must join initial soldier (water jumpers must drown)");
+            check(landedSnap.units.vehicles.size() == 4u,
+                  "Supply sortie must materialize 3 persistent neutral ammo.box crates alongside initial tank");
+            // Nearby low-ammo tank & soldier must have resupplied/repaired from the neutral (owner==3) ammo.box crates!
+            check(landedSnap.units.vehicles[0].ammo > 10 && landedSnap.units.vehicles[0].hp > 240,
+                  "Friendly tank failed to resupply/repair from airdropped neutral ammo.box crates");
+            check(landedSnap.units.soldiers[0].ammo > 5,
+                  "Friendly soldier failed to resupply from airdropped neutral ammo.box crates");
+
+            // Sympathetic crate detonation: shell crate #1 -> destroys crate #1 & #2 and chain-splashes crate #3 (>48px away)!
+            const int c1x = landedSnap.units.vehicles[1].x;
+            const int c1y = landedSnap.units.vehicles[1].y;
+            (void)runA.attackGroundVehicles(std::array<std::size_t, 1>{0u}, c1x, c1y);
+            runA.advanceTicks(80u);
+            const auto blownSnap = runA.takeFullSnapshot();
+            unsigned deadCrates = 0u;
+            for (std::size_t vi = 1u; vi < blownSnap.units.vehicles.size(); ++vi) {
+                if (!blownSnap.units.vehicles[vi].alive || blownSnap.units.vehicles[vi].hp == 0) ++deadCrates;
+            }
+            check(deadCrates >= 2u && blownSnap.units.vehicles[3].hp < 100,
+                  "Shelling airdropped ammo.box crate failed to trigger sympathetic cook-off chain across crate stick");
+        }
     }
 
-    std::cout << "CAOF complete 17-opcode + air-route + pool-carryover + bridges + specialized I-GROUPS checks PASSED\n";
+    std::cout << "CAOF complete 17-opcode + air-route + pool-carryover + bridges + specialized I-GROUPS + parachute/crates checks PASSED\n";
 }
 
 void runRetailCaofCorpusCheck(const std::filesystem::path& gameDir) {

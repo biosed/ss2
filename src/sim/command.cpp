@@ -427,4 +427,55 @@ std::optional<ReplayFile> fromReplayFileText(std::string_view text) {
     if (!out.commands.empty() && out.endTick < out.commands.back().tick) return std::nullopt;
     return out;
 }
+
+std::string_view ReplayTransport::speedLabel() const noexcept {
+    switch (std::clamp(speedIndex, 0, 4)) {
+    case 0: return "0.5x";
+    case 1: return "1x";
+    case 2: return "2x";
+    case 3: return "4x";
+    default: return "8x";
+    }
+}
+
+void ReplayTransport::cycleViewerSeat(int maxSeats) noexcept {
+    const int clampedMax = std::clamp(maxSeats, 1, 4);
+    if (viewerSeat < 0) {
+        viewerSeat = 0;
+    } else if (viewerSeat + 1 < clampedMax) {
+        ++viewerSeat;
+    } else {
+        viewerSeat = -1;
+    }
+}
+
+unsigned ReplayTransport::consumeTicks(double elapsedSeconds, double baseTickPeriodSec) noexcept {
+    if (paused || finished || elapsedSeconds <= 0.0 || baseTickPeriodSec <= 0.0) return 0u;
+    const double scaled = elapsedSeconds * (static_cast<double>(speedPercent()) / 100.0);
+    tickAccumulator = std::min(tickAccumulator + scaled / baseTickPeriodSec, 64.0);
+    const unsigned n = static_cast<unsigned>(tickAccumulator);
+    tickAccumulator -= static_cast<double>(n);
+    return n;
+}
+
+std::string ReplayTransport::formatBanner(std::uint32_t currentTick, std::uint32_t endTick) const {
+    std::string out = "REPLAY ";
+    if (finished) {
+        out += "END";
+        if (hashVerified) out += " OK";
+        else if (hashMismatch) out += " HASH!";
+    } else if (paused) {
+        out += "PAUSED";
+    } else {
+        out += speedLabel();
+    }
+    out += " | ";
+    out += std::to_string(std::min(currentTick, endTick)) + "/" + std::to_string(endTick) + "t | ";
+    if (viewerSeat < 0) {
+        out += "All Vision";
+    } else {
+        out += "P" + std::to_string(viewerSeat + 1);
+    }
+    return out;
+}
 }

@@ -175,6 +175,23 @@ TutorialUnits::ExtraState TutorialUnits::takeExtraState() const {
     for (const auto& br : bridges_) {
         ex.bridges.push_back({br.hp, br.stage, br.destroyed});
     }
+    ex.parachutes.reserve(parachutes_.size());
+    for (const auto& p : parachutes_) {
+        ex.parachutes.push_back({
+            p.id, p.unitId, p.owner, p.group, p.x, p.y,
+            p.altitude256, p.fallSpeed256, p.collapseTicks, p.hp, p.maxHp,
+            p.isSupplyCrate, p.emittedBoxDust
+        });
+    }
+    ex.sorties.reserve(sorties_.size());
+    for (const auto& st : sorties_) {
+        ex.sorties.push_back({
+            st.id, st.kind, st.planeId, st.owner, st.fx, st.fy, st.vx, st.vy,
+            st.targetX, st.targetY, st.dir32, st.hp, st.maxHp, st.payloadsLeft, st.totalPayloads,
+            st.bombDamage, st.strafeDamage, st.airToAirDamage, st.sightTiles, st.scoreValue,
+            st.isLeafletBomber, st.altitude, st.isRocketAttacker, st.strafeHitType, st.reconTick
+        });
+    }
     return ex;
 }
 
@@ -288,6 +305,8 @@ bool TutorialUnits::loadSnapshotWithExtra(const Snapshot& snap, const ExtraState
     vehiclePoses_.clear();
     sorties_.clear();
     sortiePoses_.clear();
+    parachutes_.clear();
+    parachutePoses_.clear();
     airEvents_.clear();
     if (extra) {
         randomState_ = extra->randomState;
@@ -305,6 +324,24 @@ bool TutorialUnits::loadSnapshotWithExtra(const Snapshot& snap, const ExtraState
         reserveUnits_ = extra->reserveUnits;
         evacuatingSoldiers_ = extra->evacuatingSoldiers;
         evacuatingVehicles_ = extra->evacuatingVehicles;
+        parachutes_.reserve(extra->parachutes.size());
+        for (const auto& ps : extra->parachutes) {
+            parachutes_.push_back(ActiveParachute{
+                ps.id, ps.unitId, ps.owner, ps.group, ps.x, ps.y,
+                ps.altitude256, std::max(1, ps.fallSpeed256), std::max(0, ps.collapseTicks),
+                ps.hp, std::max(1, ps.maxHp), ps.isSupplyCrate, ps.emittedBoxDust
+            });
+        }
+        sorties_.reserve(extra->sorties.size());
+        for (const auto& ss : extra->sorties) {
+            sorties_.push_back(ActiveSortie{
+                ss.id, ss.kind, ss.planeId, ss.owner, ss.fx, ss.fy, ss.vx, ss.vy,
+                ss.targetX, ss.targetY, ss.dir32 & 31u, ss.hp, std::max(1, ss.maxHp),
+                ss.payloadsLeft, ss.totalPayloads, ss.bombDamage, ss.strafeDamage, ss.airToAirDamage,
+                ss.sightTiles, ss.scoreValue, ss.isLeafletBomber, ss.altitude, ss.isRocketAttacker,
+                ss.strafeHitType, ss.reconTick
+            });
+        }
     } else {
         lastHitTick_.fill(std::nullopt);
         lastGroupHitTick_.fill(std::nullopt);

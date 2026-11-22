@@ -441,4 +441,27 @@ struct ReplayFile {
 
 std::string toReplayFileText(const ReplayFile&);
 std::optional<ReplayFile> fromReplayFileText(std::string_view text);
+
+// Interactive transport controller for watching a ReplayFile tick-by-tick on a
+// ManualClock runner without perturbing the simulation's internal stateHash().
+struct ReplayTransport {
+    static constexpr std::array<int, 5> kSpeedSteps{{50, 100, 200, 400, 800}};
+    bool paused{false};
+    int speedIndex{1};      // index into kSpeedSteps (default 100% = 1x)
+    int viewerSeat{0};      // 0..3 = Player 1..4 fog perspective, -1 = All Vision
+    std::size_t cursor{0};
+    double tickAccumulator{0.0};
+    bool finished{false};
+    bool hashVerified{false};
+    bool hashMismatch{false};
+
+    int speedPercent() const noexcept { return kSpeedSteps[static_cast<std::size_t>(std::clamp(speedIndex, 0, 4))]; }
+    std::string_view speedLabel() const noexcept;
+    void togglePause() noexcept { paused = !paused; }
+    void stepFaster() noexcept { speedIndex = std::min(4, speedIndex + 1); }
+    void stepSlower() noexcept { speedIndex = std::max(0, speedIndex - 1); }
+    void cycleViewerSeat(int maxSeats = 2) noexcept;
+    unsigned consumeTicks(double elapsedSeconds, double baseTickPeriodSec = 0.036) noexcept;
+    std::string formatBanner(std::uint32_t currentTick, std::uint32_t endTick) const;
+};
 }

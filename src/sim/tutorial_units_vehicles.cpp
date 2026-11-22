@@ -829,7 +829,9 @@ void TutorialUnits::destroyVehicle(size_t vehicleIdx, std::vector<SoldierPose>& 
     tv.spottedMask = 0;
     tv.suppressionTicks = 0;
     tv.wasSuppressed = false;
-    const int cookDmg = tv.cookOffDamage;
+    const int cookDmg = (tv.isCrate && tv.hasFiniteSupply && tv.ammo <= 0 && tv.ammo2 <= 0)
+        ? 0
+        : tv.cookOffDamage;
     const double cookR = tv.cookOffRadius;
     const int cookX = tv.x;
     const int cookY = tv.y;
@@ -2178,7 +2180,7 @@ void TutorialUnits::stepVehicleCombat(std::vector<SoldierPose>& changed) {
                 }
                 for (size_t k = 0; k < vehicles_.size(); ++k) {
                     auto& tv = vehicles_[k];
-                    if (!tv.alive || tv.hp <= 0 || !isHostile(v.owner, tv.owner)) continue;
+                    if (!tv.alive || tv.hp <= 0 || (!isHostile(v.owner, tv.owner) && !tv.isCrate)) continue;
                     const double vd = det::detHypot(tv.fx - static_cast<double>(impX), tv.fy - static_cast<double>(impY));
                     if (vd > 48.0) continue;
                     const int dealt = scaleVehicleDamageForDifficulty(

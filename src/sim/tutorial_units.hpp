@@ -147,8 +147,30 @@ struct AirSortiePose {
     std::string aaSoundGroup{};
 };
 
+struct ParachutePose {
+    std::uint32_t id{};
+    std::string unitId;
+    int owner{0};
+    int group{0};
+    int x{}, y{};
+    int altitudePx{0};
+    int collapseTick{0};
+    bool alive{true};
+    bool active{true};
+    bool isSupplyCrate{false};
+};
+
 struct AirStrikeEvent {
-    enum Kind { BombImpact, StrafeImpact, ParatrooperDrop, SupplyDrop, PlaneShotDown } kind{BombImpact};
+    enum Kind {
+        BombImpact,
+        StrafeImpact,
+        ParatrooperDrop,
+        SupplyDrop,
+        PlaneShotDown,
+        BoxDust,
+        ParatrooperLanded,
+        SupplyCrateLanded
+    } kind{BombImpact};
     int x{}, y{};
     int owner{0};
     int group{0};
@@ -156,6 +178,8 @@ struct AirStrikeEvent {
     int scoreValue{500};
     std::string planeId{};
     bool isLeaflet{false};
+    std::size_t landedUnitIndex{0};
+    bool landedIsVehicle{false};
 };
 
 struct TacticalOrderLine {
@@ -229,6 +253,45 @@ public:
             bool destroyed{false};
             bool operator==(const BridgeState&) const = default;
         };
+        struct ParachuteState {
+            std::uint32_t id{};
+            std::string unitId;
+            int owner{0};
+            int group{0};
+            int x{0};
+            int y{0};
+            int altitude256{0};
+            int fallSpeed256{307};
+            int collapseTicks{0};
+            int hp{40};
+            int maxHp{40};
+            bool isSupplyCrate{false};
+            bool emittedBoxDust{false};
+            bool operator==(const ParachuteState&) const = default;
+        };
+        struct SortieState {
+            std::uint32_t id{};
+            assets::AirMissionKind kind{assets::AirMissionKind::Bomber};
+            std::string planeId;
+            int owner{0};
+            double fx{}, fy{}, vx{}, vy{};
+            int targetX{}, targetY{};
+            unsigned dir32{0};
+            int hp{200}, maxHp{200};
+            int payloadsLeft{0};
+            int totalPayloads{0};
+            int bombDamage{380};
+            int strafeDamage{180};
+            int airToAirDamage{75};
+            int sightTiles{18};
+            int scoreValue{500};
+            bool isLeafletBomber{false};
+            int altitude{280};
+            bool isRocketAttacker{false};
+            assets::HitType strafeHitType{assets::HitType::Machine};
+            unsigned reconTick{0};
+            bool operator==(const SortieState&) const = default;
+        };
         static constexpr std::array<std::int32_t, 100> makeDefaultGroupHitTicks() noexcept {
             std::array<std::int32_t, 100> a{};
             a.fill(-1);
@@ -248,6 +311,8 @@ public:
         std::vector<EvacuationOrder> evacuatingSoldiers;
         std::vector<EvacuationOrder> evacuatingVehicles;
         std::vector<BridgeState> bridges;
+        std::vector<ParachuteState> parachutes;
+        std::vector<SortieState> sorties;
         bool operator==(const ExtraState&) const = default;
     };
 
@@ -466,7 +531,9 @@ public:
     std::array<assets::AirSupportSlot, 5> playerAirSupport() const;
     bool callAirSupport(assets::AirMissionKind kind, int targetX, int targetY, int owner = 0);
     std::vector<AirSortiePose> takeAirSorties();
+    std::vector<ParachutePose> takeParachutes();
     std::vector<AirStrikeEvent> takeAirStrikeEvents();
+    std::size_t activeParachuteCount() const noexcept { return parachutes_.size(); }
 
     unsigned countAliveInGroup(int owner, int group) const;
     unsigned countAliveByGroup(unsigned group) const;
@@ -835,11 +902,28 @@ private:
         assets::HitType strafeHitType{assets::HitType::Machine};
         unsigned reconTick{0};
     };
+    struct ActiveParachute {
+        std::uint32_t id{};
+        std::string unitId;
+        int owner{0};
+        int group{0};
+        int x{0};
+        int y{0};
+        int altitude256{0};
+        int fallSpeed256{307};
+        int collapseTicks{0};
+        int hp{40};
+        int maxHp{40};
+        bool isSupplyCrate{false};
+        bool emittedBoxDust{false};
+    };
     std::array<std::array<assets::AirSupportSlot, 5>, 4> airSupport_{};
     std::array<int, 4> paraGroups_{};
     std::array<std::vector<assets::ParatrooperEntry>, 4> paraRosters_{};
     std::vector<ActiveSortie> sorties_;
     std::vector<AirSortiePose> sortiePoses_;
+    std::vector<ActiveParachute> parachutes_;
+    std::vector<ParachutePose> parachutePoses_;
     std::vector<AirStrikeEvent> airEvents_;
     std::uint32_t nextSortieId_{1};
     std::vector<ReserveUnit> reserveUnits_;
@@ -943,6 +1027,7 @@ private:
     void markVehicleCombat(Vehicle& veh);
     void stepVehicleCombat(std::vector<SoldierPose>& changed);
     void stepAirSupport(std::vector<SoldierPose>& changed);
+    void stepParachutes(std::vector<SoldierPose>& changed);
     void reactToAttack(int victimOwner, int victimGroup, int attackerX, int attackerY,
                        std::optional<size_t> victimVehicleIdx = std::nullopt);
     void stepMedicHeal(std::vector<SoldierPose>& changed);

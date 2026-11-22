@@ -75,12 +75,23 @@ bool TutorialUnits::callAirSupport(assets::AirMissionKind kind, int targetX, int
            : (kind == assets::AirMissionKind::Paratrooper || kind == assets::AirMissionKind::Supply) ? 9.0
            : 12.5);
     const bool isRocketAttacker = (pSpec && pSpec->isRocketAttacker());
-    const int altitude = (pSpec && pSpec->altitude > 0) ? pSpec->altitude : 280;
+    const int altitude = (pSpec && pSpec->altitude > 0)
+        ? pSpec->altitude
+        : ((kind == assets::AirMissionKind::Paratrooper || kind == assets::AirMissionKind::Supply) ? 196 : 280);
+    int paraPayloadCount = 6;
+    if (kind == assets::AirMissionKind::Paratrooper) {
+        int sum = 0;
+        for (const auto& pe : paraRosters_[static_cast<std::size_t>(owner)]) {
+            if (pe.count > 0) sum += pe.count;
+        }
+        if (sum > 0) paraPayloadCount = std::clamp(sum, 1, 24);
+    }
     const int payloads = (kind == assets::AirMissionKind::Bomber)
         ? (pSpec && pSpec->bombsNumber > 0 ? std::clamp(pSpec->bombsNumber, 3, 12) : 5)
         : (kind == assets::AirMissionKind::Fighter)
             ? (isRocketAttacker ? (pSpec->groundAmmo > 0 ? std::clamp(pSpec->groundAmmo, 3, 6) : 6) : 3)
-        : (kind == assets::AirMissionKind::Paratrooper || kind == assets::AirMissionKind::Supply) ? 1
+        : (kind == assets::AirMissionKind::Paratrooper) ? paraPayloadCount
+        : (kind == assets::AirMissionKind::Supply) ? 3
         : 0;
     const int maxHp = pSpec && pSpec->health > 0
         ? std::clamp(pSpec->health, 120, 2500)
@@ -135,6 +146,10 @@ std::vector<AirSortiePose> TutorialUnits::takeAirSorties() {
     return std::exchange(sortiePoses_, {});
 }
 
+std::vector<ParachutePose> TutorialUnits::takeParachutes() {
+    return std::exchange(parachutePoses_, {});
+}
+
 std::vector<AirStrikeEvent> TutorialUnits::takeAirStrikeEvents() {
     return std::exchange(airEvents_, {});
 }
@@ -143,7 +158,10 @@ void TutorialUnits::stepAirSupport(std::vector<SoldierPose>& changed) {
     for (auto& v : vehicles_) {
         if (v.aaCooldown > 0u) --v.aaCooldown;
     }
-    if (sorties_.empty()) return;
+    if (sorties_.empty()) {
+        if (!parachutes_.empty()) stepParachutes(changed);
+        return;
+    }
 
     const auto pushSortiePose = [&](const AirSortiePose& pose) {
         const auto it = std::ranges::find(sortiePoses_, pose.id, &AirSortiePose::id);
@@ -168,7 +186,7 @@ void TutorialUnits::stepAirSupport(std::vector<SoldierPose>& changed) {
                                     assets::HitType hitType, int owner) {
         for (size_t k = 0; k < vehicles_.size(); ++k) {
             auto& tv = vehicles_[k];
-            if (!tv.alive || tv.hp <= 0 || !isHostile(owner, tv.owner)) continue;
+            if (!tv.alive || tv.hp <= 0 || (!isHostile(owner, tv.owner) && !tv.isCrate)) continue;
             const double d = det::detHypot(tv.fx - static_cast<double>(impactX), tv.fy - static_cast<double>(impactY));
             if (d > radius) continue;
             const int scaledDmg = std::max(20, static_cast<int>(det::detRoundToInt(
@@ -256,8 +274,22 @@ void TutorialUnits::stepAirSupport(std::vector<SoldierPose>& changed) {
     };
 
     for (auto& st : sorties_) {
-        st.fx += st.vx;
-        st.fy += st.vy;
+        double stepScale = 1.0;
+        if ((st.kind == assets::AirMissionKind::Paratrooper || st.kind == assets::AirMissionKind::Supply) &&
+            st.payloadsLeft > 0) {
+            const double spd = std::max(1e-4, det::detHypot(st.vx, st.vy));
+            const double alongPre = (st.fx - static_cast<double>(st.targetX)) * (st.vx / spd) +
+                                    (st.fy - static_cast<double>(st.targetY)) * (st.vy / spd);
+            if (alongPre >= -112.0 && alongPre <= 96.0) {
+                const auto* pSpec = catalog_ ? catalog_->findPlane(st.planeId) : nullptr;
+                const double dropSpd = (pSpec && pSpec->dropFlySpeed > 0.1)
+                    ? std::clamp(pSpec->dropFlySpeed * 1.45, 3.2, spd)
+                    : std::min(spd, 5.5);
+                stepScale = std::clamp(dropSpd / spd, 0.45, 1.0);
+            }
+        }
+        st.fx += st.vx * stepScale;
+        st.fy += st.vy * stepScale;
     }
 
     // Air-to-air interception: active Fighter sorties engage hostile aircraft within 420px.
@@ -409,78 +441,99 @@ void TutorialUnits::stepAirSupport(std::vector<SoldierPose>& changed) {
                 });
             }
         } else if (st.kind == assets::AirMissionKind::Paratrooper) {
-            if (st.payloadsLeft > 0 && along >= 0.0) {
-                st.payloadsLeft = 0;
-                const auto& rVec = paraRosters_[static_cast<std::size_t>(st.owner)];
-                std::vector<assets::ParatrooperEntry> dropRoster = rVec;
-                if (dropRoster.empty()) dropRoster.push_back({"dsmguner", 6});
-                airEvents_.push_back(AirStrikeEvent{
-                    AirStrikeEvent::ParatrooperDrop, st.targetX, st.targetY, st.owner,
-                    paraGroups_[static_cast<std::size_t>(st.owner)], std::move(dropRoster),
-                    st.scoreValue, st.planeId
-                });
+            const auto& rVec = paraRosters_[static_cast<std::size_t>(st.owner)];
+            std::vector<assets::ParatrooperEntry> dropRoster = rVec;
+            if (dropRoster.empty()) dropRoster.push_back({"dsmguner", 6});
+            std::vector<std::string> stickIds;
+            stickIds.reserve(static_cast<std::size_t>(std::max(1, st.totalPayloads)));
+            for (const auto& pe : dropRoster) {
+                for (int c = 0; c < pe.count && static_cast<int>(stickIds.size()) < st.totalPayloads; ++c) {
+                    stickIds.push_back(pe.unitId);
+                }
+            }
+            while (static_cast<int>(stickIds.size()) < std::max(1, st.totalPayloads)) {
+                stickIds.push_back("dsmguner");
+            }
+            const int totalDrops = std::max(1, st.totalPayloads);
+            const double spanHalf = totalDrops > 1
+                ? std::min(84.0, 14.0 * static_cast<double>(totalDrops - 1))
+                : 0.0;
+            const double fallSpd = catalog_ ? catalog_->paraSpec().fallSpeed : 1.2;
+            const int fallSpeed256 = std::max(64, static_cast<int>(det::detRoundToInt(fallSpd * 256.0)));
+            const int maxX = std::max(16, mapPixelW_ - 16);
+            const int maxY = std::max(16, mapPixelH_ - 16);
+            while (st.payloadsLeft > 0) {
+                const int dropIdx = totalDrops - st.payloadsLeft;
+                const double step = totalDrops > 1 ? ((spanHalf * 2.0) / static_cast<double>(totalDrops - 1)) : 0.0;
+                const double threshold = -spanHalf + step * static_cast<double>(dropIdx);
+                if (along < threshold) break;
+                if (st.payloadsLeft == totalDrops) {
+                    airEvents_.push_back(AirStrikeEvent{
+                        AirStrikeEvent::ParatrooperDrop, st.targetX, st.targetY, st.owner,
+                        paraGroups_[static_cast<std::size_t>(st.owner)], dropRoster,
+                        st.scoreValue, st.planeId
+                    });
+                }
+                --st.payloadsLeft;
+                const double sideSign = (dropIdx % 2 == 0) ? -10.0 : 10.0;
+                const int px = std::clamp(
+                    static_cast<int>(det::detRoundToInt(static_cast<double>(st.targetX) + ux * threshold - uy * sideSign)),
+                    16, maxX);
+                const int py = std::clamp(
+                    static_cast<int>(det::detRoundToInt(static_cast<double>(st.targetY) + uy * threshold + ux * sideSign)),
+                    16, maxY);
+                ActiveParachute para{};
+                para.id = nextSortieId_++;
+                para.unitId = stickIds[static_cast<std::size_t>(dropIdx)];
+                para.owner = st.owner;
+                para.group = paraGroups_[static_cast<std::size_t>(st.owner)];
+                para.x = px;
+                para.y = py;
+                para.altitude256 = std::max(64, st.altitude) * 256;
+                para.fallSpeed256 = fallSpeed256;
+                para.hp = 40;
+                para.maxHp = 40;
+                para.isSupplyCrate = false;
+                parachutes_.push_back(std::move(para));
             }
         } else if (st.kind == assets::AirMissionKind::Supply) {
-            if (st.payloadsLeft > 0 && along >= 0.0) {
-                st.payloadsLeft = 0;
-                for (size_t vi = 0; vi < vehicles_.size(); ++vi) {
-                    auto& tv = vehicles_[vi];
-                    if (!tv.alive || tv.hp <= 0 || isHostile(st.owner, tv.owner) ||
-                        (!multiplayerSymmetry_ && tv.owner >= 3)) {
-                        continue;
-                    }
-                    if (det::detHypot(tv.fx - static_cast<double>(st.targetX),
-                                   tv.fy - static_cast<double>(st.targetY)) > 220.0) {
-                        continue;
-                    }
-                    bool didRep = false;
-                    bool didRes = false;
-                    if (tv.hp < tv.maxHp) {
-                        tv.hp = std::min(tv.maxHp, tv.hp + 80);
-                        didRep = true;
-                    }
-                    if (tv.hasCrew && tv.crewHp < tv.maxCrewHp) {
-                        tv.crewHp = tv.maxCrewHp;
-                        didRep = true;
-                    }
-                    if (tv.maxAmmo > 0 && tv.ammo < tv.maxAmmo) {
-                        tv.ammo = std::min(tv.maxAmmo, tv.ammo + std::max(1, tv.maxAmmo / 2));
-                        didRes = true;
-                    }
-                    if (tv.maxAmmo2 > 0 && tv.ammo2 < tv.maxAmmo2) {
-                        tv.ammo2 = std::min(tv.maxAmmo2, tv.ammo2 + std::max(10, tv.maxAmmo2 / 2));
-                        didRes = true;
-                    }
-                    if (didRep || didRes) {
-                        emitVehiclePose(vi, false, 0, 0, false, {}, false, false, didRep, didRes);
-                    }
+            const int totalDrops = std::max(1, st.totalPayloads);
+            const double spanHalf = totalDrops > 1 ? 24.0 : 0.0;
+            const double fallSpd = catalog_ ? catalog_->paraSpec().fallSpeed : 1.2;
+            const int fallSpeed256 = std::max(64, static_cast<int>(det::detRoundToInt(fallSpd * 256.0)));
+            const int maxX = std::max(16, mapPixelW_ - 16);
+            const int maxY = std::max(16, mapPixelH_ - 16);
+            while (st.payloadsLeft > 0) {
+                const int dropIdx = totalDrops - st.payloadsLeft;
+                const double step = totalDrops > 1 ? ((spanHalf * 2.0) / static_cast<double>(totalDrops - 1)) : 0.0;
+                const double threshold = -spanHalf + step * static_cast<double>(dropIdx);
+                if (along < threshold) break;
+                if (st.payloadsLeft == totalDrops) {
+                    airEvents_.push_back(AirStrikeEvent{
+                        AirStrikeEvent::SupplyDrop, st.targetX, st.targetY, st.owner, 0, {}, st.scoreValue, st.planeId
+                    });
                 }
-                for (size_t si = 0; si < soldiers_.size(); ++si) {
-                    auto& ss = soldiers_[si];
-                    if (ss.hp <= 0 || ss.embarked || ss.garrisonBuilding ||
-                        isHostile(st.owner, ss.owner) || (!multiplayerSymmetry_ && ss.owner >= 3)) {
-                        continue;
-                    }
-                    const auto [su, sv] = soldierWorld(ss);
-                    const int sx = originX_ + su - sv;
-                    const int sy = (su + sv) / 2;
-                    if (det::detHypot(static_cast<double>(sx - st.targetX),
-                                   static_cast<double>(sy - st.targetY)) > 220.0) {
-                        continue;
-                    }
-                    const int maxInfAmmo = std::max(1, ss.desc.maxAmmo);
-                    if (ss.hp < ss.maxHp || ss.ammo < maxInfAmmo) {
-                        ss.hp = std::min(ss.maxHp, ss.hp + 40);
-                        ss.ammo = std::max(ss.ammo, std::min(maxInfAmmo, ss.ammo + std::max(1, maxInfAmmo / 2)));
-                        const bool vis = isVisibleToViewer(ss.owner, ss.spottedMask);
-                        pushOrUpdateSoldierPose(changed, {
-                            si, sx, sy, ss.direction, 0, false, ss.hp, true, ss.owner, ss.group, false, vis
-                        });
-                    }
-                }
-                airEvents_.push_back(AirStrikeEvent{
-                    AirStrikeEvent::SupplyDrop, ix, iy, st.owner, 0, {}, st.scoreValue, st.planeId
-                });
+                --st.payloadsLeft;
+                const double sideSign = (dropIdx == 1) ? 0.0 : ((dropIdx % 2 == 0) ? -8.0 : 8.0);
+                const int px = std::clamp(
+                    static_cast<int>(det::detRoundToInt(static_cast<double>(st.targetX) + ux * threshold - uy * sideSign)),
+                    16, maxX);
+                const int py = std::clamp(
+                    static_cast<int>(det::detRoundToInt(static_cast<double>(st.targetY) + uy * threshold + ux * sideSign)),
+                    16, maxY);
+                ActiveParachute para{};
+                para.id = nextSortieId_++;
+                para.unitId = "ammo.box";
+                para.owner = st.owner;
+                para.group = 0;
+                para.x = px;
+                para.y = py;
+                para.altitude256 = std::max(64, st.altitude) * 256;
+                para.fallSpeed256 = fallSpeed256;
+                para.hp = 50;
+                para.maxHp = 50;
+                para.isSupplyCrate = true;
+                parachutes_.push_back(std::move(para));
             }
         }
 
@@ -493,6 +546,199 @@ void TutorialUnits::stepAirSupport(std::vector<SoldierPose>& changed) {
         if (!outOfBounds) aliveSorties.push_back(std::move(st));
     }
     sorties_ = std::move(aliveSorties);
+    if (!parachutes_.empty()) stepParachutes(changed);
+}
+
+void TutorialUnits::stepParachutes(std::vector<SoldierPose>& changed) {
+    if (parachutes_.empty()) return;
+
+    const auto pushParaPose = [&](const ParachutePose& pose) {
+        const auto it = std::ranges::find(parachutePoses_, pose.id, &ParachutePose::id);
+        if (it == parachutePoses_.end()) {
+            parachutePoses_.push_back(pose);
+            return;
+        }
+        *it = pose;
+    };
+
+    const int frameDelay = std::clamp(catalog_ ? catalog_->paraSpec().paraFrameDelay : 3, 1, 8);
+    const int collapseDuration = 4 * frameDelay;
+
+    std::vector<ActiveParachute> remaining;
+    remaining.reserve(parachutes_.size());
+    for (auto& p : parachutes_) {
+        // Descending canopies (altitude > 0) are vulnerable to nearby hostile AA and ground small-arms fire.
+        if (p.altitude256 > 0 && p.hp > 0) {
+            for (size_t vi = 0; vi < vehicles_.size() && p.hp > 0; ++vi) {
+                auto& av = vehicles_[vi];
+                if (!av.alive || av.hp <= 0 || !av.isAntiAir || (av.ammo <= 0 && av.ammo2 <= 0) || av.towedBy) {
+                    continue;
+                }
+                if (!isHostile(av.owner, p.owner) || av.aaCooldown > 0u) continue;
+                const double d = det::detHypot(static_cast<double>(p.x) - av.fx, static_cast<double>(p.y) - av.fy);
+                if (d > 360.0) continue;
+                av.aaCooldown = 14u;
+                if (av.ammo > 0) --av.ammo;
+                else --av.ammo2;
+                av.turretDir = vehicleDirFromMapDelta(static_cast<double>(p.x) - av.fx,
+                                                      static_cast<double>(p.y) - av.fy);
+                emitVehiclePose(vi, true, p.x, p.y - (p.altitude256 >> 8));
+                p.hp = std::max(0, p.hp - (av.isHeavyAntiAir ? 35 : 22));
+            }
+            if (p.hp > 0 && (tick_ & 7u) == 0u) {
+                for (size_t si = 0; si < soldiers_.size() && p.hp > 0; ++si) {
+                    auto& s = soldiers_[si];
+                    if (s.hp <= 0 || s.embarked || s.garrisonBuilding || s.holdFire || s.ammo <= 0) continue;
+                    if (!isHostile(s.owner, p.owner) || s.attackReload > 0) continue;
+                    if (s.isMedic || s.isMortar || s.isFlamer || s.isAntiVehicle) continue;
+                    const auto [su, sv] = soldierWorld(s);
+                    const int sx = originX_ + su - sv;
+                    const int sy = (su + sv) / 2;
+                    if (det::detHypot(static_cast<double>(p.x - sx), static_cast<double>(p.y - sy)) > 192.0) continue;
+                    --s.ammo;
+                    applySoldierShotReload(s);
+                    p.hp = std::max(0, p.hp - 14);
+                }
+            }
+            if (p.hp <= 0) {
+                pushParaPose(ParachutePose{
+                    p.id, p.unitId, p.owner, p.group, p.x, p.y, p.altitude256 >> 8, 0, false, false, p.isSupplyCrate
+                });
+                continue;
+            }
+
+            // CPara::Step (n2Game_Dll.dll 0x1002e2cc..0x1002e32c): 8.8 fixed-point descent + 3*fallSpeed BOXDUST.
+            const int prevAlt = p.altitude256;
+            p.altitude256 = std::max(0, p.altitude256 - p.fallSpeed256);
+            if (p.isSupplyCrate && !p.emittedBoxDust &&
+                prevAlt > 3 * p.fallSpeed256 && p.altitude256 <= 3 * p.fallSpeed256) {
+                p.emittedBoxDust = true;
+                airEvents_.push_back(AirStrikeEvent{
+                    AirStrikeEvent::BoxDust, p.x, p.y, p.owner, p.group, {}, 0, p.unitId
+                });
+            }
+            pushParaPose(ParachutePose{
+                p.id, p.unitId, p.owner, p.group, p.x, p.y, p.altitude256 >> 8, 0, true, true, p.isSupplyCrate
+            });
+            remaining.push_back(std::move(p));
+            continue;
+        }
+
+        // Canopy collapse on ground (0x1002e245..0x1002e346: 4 collapse frames * paraframedelay).
+        ++p.collapseTicks;
+        if (p.collapseTicks < collapseDuration) {
+            pushParaPose(ParachutePose{
+                p.id, p.unitId, p.owner, p.group, p.x, p.y, 0, p.collapseTicks, true, true, p.isSupplyCrate
+            });
+            remaining.push_back(std::move(p));
+            continue;
+        }
+
+        // Touchdown materialization (0x1002e348..0x1002e3b3).
+        const SubCell rawCell = placementCell(p.x, p.y, originX_);
+        const auto* uSpec = catalog_ ? catalog_->find(p.unitId) : nullptr;
+        const bool isNaval = uSpec && uSpec->isNavalCraft();
+        const bool isUnbridgedWater =
+            grid_.inBounds(rawCell) && !grid_.walkable(rawCell) && grid_.walkableMask(rawCell, 0x000Fu);
+        if (isUnbridgedWater && !isNaval) {
+            // Landed in deep water without a passable bridge -> unit/crate drowns on splashdown.
+            pushParaPose(ParachutePose{
+                p.id, p.unitId, p.owner, p.group, p.x, p.y, 0, p.collapseTicks, false, false, p.isSupplyCrate
+            });
+            continue;
+        }
+
+        const unsigned rand3 = nextCombatRandom(7u);
+        if (p.isSupplyCrate) {
+            const SubCell landCell = findSpawnCell(grid_, rawCell);
+            const auto [lu, lv] = InfantryPathGrid::toWorldCenter(landCell);
+            const int lx = originX_ + lu - lv;
+            const int ly = (lu + lv) / 2;
+            assets::VehicleUnit vu{};
+            vu.id = "ammo.box";
+            vu.x = lx;
+            vu.y = ly;
+            vu.hp = 100;
+            vu.ammo = 100;
+            vu.group = p.group;
+            // Retail 0x1002e396 sets landed ammo.box owner to neutral (owner == 3) so any unit can resupply.
+            vu.owner = 3;
+            vu.hullDir = ((rand3 * 4u) + 2u) & 31u;
+            vu.turretDir = vu.hullDir;
+            vu.alive = true;
+            vu.visible = true;
+            vu.hasCrew = false;
+            const std::size_t vIdx = appendVehicle(vu);
+            // Supply crates also carry spare parts (ammo2) for field vehicle repairs alongside 1000 ammo.
+            vehicles_[vIdx].ammo2 = std::max(vehicles_[vIdx].ammo2, 500);
+            vehicles_[vIdx].maxAmmo2 = std::max(vehicles_[vIdx].maxAmmo2, 500);
+            vehicles_[vIdx].hasFiniteSupply = true;
+            fogDirty_ = true;
+            emitVehiclePose(vIdx);
+            airEvents_.push_back(AirStrikeEvent{
+                AirStrikeEvent::SupplyCrateLanded, lx, ly, vu.owner, p.group, {}, 10,
+                "ammo.box", false, vIdx, true
+            });
+        } else if (uSpec && uSpec->isVehicle) {
+            const SubCell landCell = findSpawnCell(grid_, rawCell);
+            const auto [lu, lv] = InfantryPathGrid::toWorldCenter(landCell);
+            const int lx = originX_ + lu - lv;
+            const int ly = (lu + lv) / 2;
+            assets::VehicleUnit vu{};
+            vu.id = p.unitId;
+            vu.x = lx;
+            vu.y = ly;
+            vu.hp = 100;
+            vu.ammo = 100;
+            vu.group = p.group;
+            vu.owner = p.owner;
+            vu.hullDir = ((rand3 * 4u) + 2u) & 31u;
+            vu.turretDir = vu.hullDir;
+            vu.alive = true;
+            vu.visible = true;
+            vu.hasCrew = (p.owner != 3) || multiplayerSymmetry_;
+            const std::size_t vIdx = appendVehicle(vu);
+            fogDirty_ = true;
+            emitVehiclePose(vIdx);
+            airEvents_.push_back(AirStrikeEvent{
+                AirStrikeEvent::ParatrooperLanded, lx, ly, p.owner, p.group, {}, 0,
+                p.unitId, false, vIdx, true
+            });
+        } else {
+            const SubCell landCell = findSpawnCell(grid_, rawCell);
+            const auto [lu, lv] = InfantryPathGrid::toWorldCenter(landCell);
+            const int lx = originX_ + lu - lv;
+            const int ly = (lu + lv) / 2;
+            assets::Infantry inf{};
+            inf.id = p.unitId;
+            inf.x = lx;
+            inf.y = ly;
+            inf.hp = 100;
+            inf.ammo = 100;
+            inf.group = p.group;
+            inf.owner = p.owner;
+            inf.direction = rand3 & 7u;
+            inf.visible = true;
+            const std::size_t sIdx = appendSoldier(inf, landCell, 0);
+            const auto& s = soldiers_[sIdx];
+            fogDirty_ = true;
+            const bool vis = isVisibleToViewer(s.owner, s.spottedMask);
+            SoldierPose sp{
+                sIdx, lx, ly, s.direction, 0u, false, s.hp, true, s.owner, s.group, false, vis,
+                0, 0, false, s.expa, s.kills, false, s.atGrenades, false, isSoldierCamouflaged(s),
+                s.mineAmmo, s.ammo
+            };
+            pushOrUpdateSoldierPose(changed, sp);
+            airEvents_.push_back(AirStrikeEvent{
+                AirStrikeEvent::ParatrooperLanded, lx, ly, p.owner, p.group, {}, 0,
+                p.unitId, false, sIdx, false
+            });
+        }
+        pushParaPose(ParachutePose{
+            p.id, p.unitId, p.owner, p.group, p.x, p.y, 0, p.collapseTicks, true, false, p.isSupplyCrate
+        });
+    }
+    parachutes_ = std::move(remaining);
 }
 
 unsigned TutorialUnits::countAirPlanes(int owner, unsigned slot) const {
