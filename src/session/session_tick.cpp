@@ -632,6 +632,50 @@ void GameSession::stepSimulationEvents() {
                 }
             }
         }
+        for (const auto& bru : simulation->pollBridgeUpdates()) {
+            if (bru.index >= liveBridges.size()) continue;
+            auto& lb = liveBridges[bru.index];
+            const bool wasDestroyed = lb.destroyed;
+            lb.hp = bru.hp;
+            lb.maxHp = bru.maxHp;
+            lb.stage = bru.stage;
+            lb.destroyed = bru.destroyed;
+            applyBridgeStage(bru.index, bru.stage);
+            const auto now = std::chrono::steady_clock::now();
+            const float bx = static_cast<float>(bru.x * mapScale);
+            const float by = static_cast<float>(bru.y * mapScale);
+            if (bru.collapsedThisTick) {
+                recordEventPos(static_cast<double>(bx), static_cast<double>(by));
+                pushMinimapPing(bru.x, bru.y, true);
+                if (combatEffects) {
+                    if (activeVfx.size() < 64) {
+                        activeVfx.push_back({ActiveVfx::Kind::VehicleExplosion, bx, by, bx, by, now,
+                                             std::chrono::milliseconds(700)});
+                    }
+                    if (burningWrecks.size() >= 8) burningWrecks.erase(burningWrecks.begin());
+                    burningWrecks.push_back({bx, by, now + std::chrono::seconds(20)});
+                }
+                (void)playWorldSound("defaultexplosion", 0.72f, bru.x, bru.y, ss2::VoicePriority::High);
+                showNotice(ss2::tr("Bridge destroyed!"), ss2::NoticeKind::blocked);
+            } else if (bru.damagedThisTick && combatEffects && activeVfx.size() < 64 &&
+                       isBuildingPointVisible(bru.x, bru.y)) {
+                activeVfx.push_back({ActiveVfx::Kind::Explosion, bx, by, bx, by, now,
+                                     std::chrono::milliseconds(340)});
+            } else if (bru.repairedThisTick) {
+                if (wasDestroyed && !bru.destroyed) {
+                    showNotice(ss2::tr("Bridge repaired and passable!"), ss2::NoticeKind::accepted);
+                }
+                if (combatEffects && activeVfx.size() < 64 && isBuildingPointVisible(bru.x, bru.y)) {
+                    activeVfx.push_back({ActiveVfx::Kind::RepairPulse, bx, by, bx, by, now,
+                                         std::chrono::milliseconds(550)});
+                }
+                if (audio && now - lastRepairAudioAt >= std::chrono::milliseconds(1500)) {
+                    if (playWorldSound("construct", 0.42f, bru.x, bru.y, ss2::VoicePriority::Low)) {
+                        lastRepairAudioAt = now;
+                    }
+                }
+            }
+        }
         if (!paused && audio) {
             const auto now = std::chrono::steady_clock::now();
             if (now >= nextAmbientAt) {

@@ -183,9 +183,10 @@ void GameSession::initializeMission() {
             : ss2::assets::loadMissionTerrain(gameDir, missionPath);
         ss2::assets::SceneryDepth depth(map.width, map.height);
         std::vector<ss2::assets::BuildingPlacement> missionBuildings;
+        std::vector<ss2::assets::BridgePlacement> missionBridges;
         const auto objects = isTutorial1
-            ? ss2::assets::drawTutorialScenery(map, gameDir, &depth, 0, &missionBuildings)
-            : ss2::assets::drawMissionScenery(map, gameDir, missionPath, &depth, &missionBuildings);
+            ? ss2::assets::drawTutorialScenery(map, gameDir, &depth, 0, &missionBuildings, &missionBridges)
+            : ss2::assets::drawMissionScenery(map, gameDir, missionPath, &depth, &missionBuildings, &missionBridges);
         const auto placements = isTutorial1
             ? ss2::assets::readTutorialPlacements(gameDir)
             : ss2::assets::readMissionPlacements(missionPath);
@@ -347,6 +348,15 @@ void GameSession::initializeMission() {
                 bp.ruinLeft, bp.ruinTop, std::move(bp.ruinedPatch), {}, false, {}
             });
         }
+        liveBridges.clear();
+        liveBridges.reserve(missionBridges.size());
+        for (auto& br : missionBridges) {
+            liveBridges.push_back({
+                br.x, br.y, br.left, br.top, br.width, br.height,
+                br.maxHp, br.maxHp, 0, false,
+                br.patchLeft, br.patchTop, std::move(br.basePatch), br.palette, std::move(br.stageFrames), 0
+            });
+        }
         craterCatalog = ss2::assets::loadCraterCatalog(gameDir, mapScheme);
         for (std::size_t vi = 0; vi < vehicleUnits.size(); ++vi) {
             const auto& v = vehicleUnits[vi];
@@ -442,6 +452,7 @@ void GameSession::initializeMission() {
         soldiers.setMultiplayerSymmetry(multiplayer.enabled);
         soldiers.setMines(initMines);
         soldiers.setBuildings(std::move(missionBuildings));
+        soldiers.setBridges(std::move(missionBridges));
         soldiers.setAirSupport(data.airSupport, data.paratrooperGroup, data.paratrooperRoster);
         const auto initAir = soldiers.airSupportFor(localOwner());
         for (const auto& [sIdx, vIdx] : preloadedRiders) {
@@ -939,6 +950,23 @@ void GameSession::restoreBuildingIntact(std::size_t bIdx) {
         renderer.updateMapRegion(patch.x, patch.y, patch.pixels);
     }
     lb.rubbleStamped = false;
+}
+
+void GameSession::applyBridgeStage(std::size_t brIdx, int stage) {
+    if (!scene || brIdx >= liveBridges.size()) return;
+    const int clamped = std::clamp(stage, 0, 4);
+    auto& lb = liveBridges[brIdx];
+    if (lb.stampedStage == clamped || lb.basePatch.width == 0 || lb.basePatch.height == 0) return;
+    assets::MapImage patch = lb.basePatch;
+    const auto& frame = lb.stageFrames[static_cast<std::size_t>(clamped)];
+    if (!frame.empty()) {
+        assets::drawIndexedFrame(patch, lb.x - lb.patchLeft, lb.y - lb.patchTop, frame, lb.palette);
+    }
+    const auto upd = scene->stampGroundPatch(lb.patchLeft, lb.patchTop, patch, false);
+    if (upd.pixels.width && upd.pixels.height) {
+        renderer.updateMapRegion(upd.x, upd.y, upd.pixels);
+    }
+    lb.stampedStage = clamped;
 }
 
 void GameSession::stampBattleCrater(int simX, int simY, bool large) {

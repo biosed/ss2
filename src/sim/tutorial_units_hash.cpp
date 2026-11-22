@@ -63,14 +63,15 @@ static_assert(sizeof(FogGrid) == 1600, "update FogGrid::hashState");
 static_assert(sizeof(TutorialUnits::ReserveUnit) == 56, "update hashValue(ReserveUnit)");
 static_assert(sizeof(assets::AirSupportSlot) == 40, "update hashValue(AirSupportSlot)");
 static_assert(sizeof(assets::ParatrooperEntry) == 40, "update hashValue(ParatrooperEntry)");
-static_assert(sizeof(TutorialUnits) == 3944, "update TutorialUnits::stateHash for the new member");
+static_assert(sizeof(TutorialUnits) == 3992, "update TutorialUnits::stateHash for the new member");
 #endif
 
 std::uint64_t TutorialUnits::stateHash() const {
 #ifdef SS2_STATE_HASH_SIZE_GUARDS
     static_assert(sizeof(Soldier) == 768, "update the Soldier hash below for the new field");
-    static_assert(sizeof(Vehicle) == 1456, "update the Vehicle hash below for the new field");
+    static_assert(sizeof(Vehicle) == 1472, "update the Vehicle hash below for the new field");
     static_assert(sizeof(Building) == 80, "update the Building hash below for the new field");
+    static_assert(sizeof(Bridge) == 64, "update the Bridge hash below for the new field");
     static_assert(sizeof(Projectile) == 32, "update the Projectile hash below for the new field");
     static_assert(sizeof(ActiveSortie) == 144, "update the ActiveSortie hash below for the new field");
 #endif
@@ -166,10 +167,22 @@ std::uint64_t TutorialUnits::stateHash() const {
     // and takeAirStrikeEvents().
     h.all(nextSortieId_, reserveUnits_, cookOffDepth_, weather_);
     // Excluded: soldierIds_ holds immutable spawn-time unit-type IDs (like catalog_).
-    // Only hash evacuating orders when active so unaffected scenarios keep identical hashes.
+    // Only hash evacuating orders, bridge repairs, or damaged bridges when active so unaffected scenarios keep identical hashes.
     if (!evacuatingSoldiers_.empty() || !evacuatingVehicles_.empty()) {
         h.each(evacuatingSoldiers_, [&h](const EvacuationOrder& e) { h.all(e.index, e.targetX, e.targetY); });
         h.each(evacuatingVehicles_, [&h](const EvacuationOrder& e) { h.all(e.index, e.targetX, e.targetY); });
+    }
+    if (std::ranges::any_of(vehicles_, [](const Vehicle& v) { return v.supportTargetBridge.has_value(); })) {
+        for (size_t vi = 0; vi < vehicles_.size(); ++vi) {
+            if (vehicles_[vi].supportTargetBridge) h.all(vi, *vehicles_[vi].supportTargetBridge);
+        }
+    }
+    if (std::ranges::any_of(bridges_, [](const Bridge& b) {
+            return b.hp != b.maxHp || b.stage != 0 || b.destroyed;
+        })) {
+        h.each(bridges_, [&h](const Bridge& b) {
+            h.all(b.x, b.y, b.left, b.top, b.width, b.height, b.hp, b.maxHp, b.stage, b.destroyed);
+        });
     }
     // Excluded: viewerOwner_ is presentation-only (fog/pose visibility perspective) and never affects
     // simulation state; commandActor_ is transient RAII context during applyAs() and always 0 at rest.

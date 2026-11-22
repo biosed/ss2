@@ -36,7 +36,7 @@ unsigned word32(View bytes, size_t at) {
            unsigned(bytes[at + 2]) << 16 | unsigned(bytes[at + 3]) << 24;
 }
 
-enum class Layout { Plain, EmbeddedPalette, House, Stand, Tree };
+enum class Layout { Plain, EmbeddedPalette, Bridge, House, Stand, Tree };
 
 struct Atlas {
     Bytes res, palette;
@@ -48,6 +48,7 @@ struct Object {
     unsigned index;
     int x, y;
     bool onGround;
+    int u{}, v{};
 };
 using AtlasMap = std::map<std::string, Atlas, std::less<>>;
 
@@ -75,8 +76,8 @@ AtlasMap loadSceneryAtlases(const std::filesystem::path& gameDir, unsigned schem
     load("lay", "LAY.RES", "lay.pl", 5);
     load("zabor", "zabor.res", "zabor.pl", 4);
     load("vor", "vor.res", "vor.pl", 0);
-    // Bridge records have their own 256-entry palette and a first undamaged frame.
-    load("most", "MOST.RES", nullptr, 2004, Layout::EmbeddedPalette);
+    // Bridge records have their own 256-entry palette, 38x38 passability grid, and 5 damage stages.
+    load("most", "MOST.RES", nullptr, 2004, Layout::Bridge);
     // Houses (dom.res) carry an embedded 512B palette + 16 intact/damage blocks; empty 0-byte records are skipped.
     load("dom", "dom.res", nullptr, 0, Layout::House);
     // Stands (STAND.RES) select one of 8 palettes in STAND.PL and store 6 frame offsets at byte 205.
@@ -210,8 +211,138 @@ void drawDepthBody(MapImage& map, const Object& object, View record, SceneryDept
     if (shadow) depth->addShadow(readShadowCoverage(object.x,object.y,record.subspan(shadow)));
 }
 
+void drawBridge(MapImage& map, const Object& obj, View record, BridgePlacement* outBridge = nullptr) {
+    if (record.size() < 2004) throw std::runtime_error("Truncated bridge scenery record");
+    const auto palette = record.first(512);
+    std::array<std::size_t, 5> bodyAbs{};
+    std::vector<std::size_t> cuts;
+    cuts.reserve(11);
+    for (int k = 0; k < 10; ++k) {
+        const std::size_t rel = word32(record, 1960u + static_cast<std::size_t>(k) * 4u);
+        if (rel == 0u) continue;
+        const std::size_t absOff = 1960u + rel;
+        if (absOff >= record.size()) continue;
+        cuts.push_back(absOff);
+        if ((k & 1) == 0) bodyAbs[static_cast<std::size_t>(k / 2)] = absOff;
+    }
+    if (bodyAbs[0] == 0u && 2004u < record.size()) {
+        bodyAbs[0] = 2004u;
+        cuts.push_back(2004u);
+    }
+    cuts.push_back(record.size());
+    std::sort(cuts.begin(), cuts.end());
+    cuts.erase(std::unique(cuts.begin(), cuts.end()), cuts.end());
+
+    std::array<View, 5> stageViews{};
+    for (int s = 0; s < 5; ++s) {
+        const std::size_t absOff = bodyAbs[static_cast<std::size_t>(s)];
+        if (absOff == 0u || absOff >= record.size()) continue;
+        const auto it = std::upper_bound(cuts.begin(), cuts.end(), absOff);
+        const std::size_t endOff = (it != cuts.end()) ? *it : record.size();
+        if (endOff > absOff) {
+            stageViews[static_cast<std::size_t>(s)] = record.subspan(absOff, endOff - absOff);
+        }
+    }
+
+    int patchLeft = 0, patchTop = 0;
+    MapImage basePatch;
+    if (outBridge) {
+        bool haveUnion = false;
+        int uL = 0, uT = 0, uR = 0, uB = 0;
+        for (int s = 0; s < 5; ++s) {
+            const View blk = stageViews[static_cast<std::size_t>(s)];
+            if (blk.size() < 9u || (blk[8] != 0xa1u && blk[8] != 0xa2u)) continue;
+            const int bx = obj.x + static_cast<int>(static_cast<std::int16_t>(word16(blk, 0)));
+            const int by = obj.y + static_cast<int>(static_cast<std::int16_t>(word16(blk, 2)));
+            const int bw = static_cast<int>(static_cast<std::int16_t>(word16(blk, 4)));
+            const int bh = static_cast<int>(static_cast<std::int16_t>(word16(blk, 6)));
+            if (bw <= 0 || bh <= 0) continue;
+            if (!haveUnion) {
+                uL = bx; uT = by; uR = bx + bw; uB = by + bh;
+                haveUnion = true;
+            } else {
+                uL = std::min(uL, bx);
+                uT = std::min(uT, by);
+                uR = std::max(uR, bx + bw);
+                uB = std::max(uB, by + bh);
+            }
+        }
+        if (haveUnion) {
+            uL = std::clamp(uL, 0, static_cast<int>(map.width));
+            uT = std::clamp(uT, 0, static_cast<int>(map.height));
+            uR = std::clamp(uR, uL, static_cast<int>(map.width));
+            uB = std::clamp(uB, uT, static_cast<int>(map.height));
+            if (uR > uL && uB > uT) {
+                patchLeft = uL;
+                patchTop = uT;
+                const unsigned pw = static_cast<unsigned>(uR - uL);
+                const unsigned ph = static_cast<unsigned>(uB - uT);
+                basePatch = MapImage{pw, ph, std::vector<std::uint8_t>(std::size_t(pw) * ph * 4u, 0)};
+                for (unsigned row = 0; row < ph; ++row) {
+                    const auto srcBegin = map.rgba.begin() +
+                        ((static_cast<std::size_t>(uT) + row) * map.width + static_cast<std::size_t>(uL)) * 4u;
+                    std::copy_n(srcBegin, std::size_t(pw) * 4u,
+                                basePatch.rgba.data() + std::size_t(row) * pw * 4u);
+                }
+            }
+        }
+    }
+
+    SpriteCoverage coverage{};
+    const View intact = stageViews[0].empty() ? record.subspan(2004) : stageViews[0];
+    drawIndexedFrame(map, obj.x, obj.y, intact, palette, outBridge ? &coverage : nullptr);
+
+    if (outBridge) {
+        outBridge->x = obj.x;
+        outBridge->y = obj.y;
+        outBridge->u = obj.u;
+        outBridge->v = obj.v;
+        if (coverage.width > 0 && coverage.height > 0) {
+            outBridge->left = coverage.left;
+            outBridge->top = coverage.top;
+            outBridge->width = coverage.width;
+            outBridge->height = coverage.height;
+        } else if (basePatch.width > 0 && basePatch.height > 0) {
+            outBridge->left = patchLeft;
+            outBridge->top = patchTop;
+            outBridge->width = static_cast<int>(basePatch.width);
+            outBridge->height = static_cast<int>(basePatch.height);
+        } else {
+            outBridge->left = obj.x - 64;
+            outBridge->top = obj.y - 48;
+            outBridge->width = 128;
+            outBridge->height = 96;
+        }
+        outBridge->maxHp = 3500;
+        outBridge->patchLeft = patchLeft;
+        outBridge->patchTop = patchTop;
+        outBridge->basePatch = std::move(basePatch);
+        std::copy_n(palette.data(), 512u, outBridge->palette.data());
+        for (int s = 0; s < 5; ++s) {
+            const View sv = stageViews[static_cast<std::size_t>(s)];
+            outBridge->stageFrames[static_cast<std::size_t>(s)].assign(sv.begin(), sv.end());
+        }
+        const int baseTx = (obj.u >> 5) - 9;
+        const int baseTy = (obj.v >> 5) - 9;
+        const auto maskGrid = record.subspan(516, 1444);
+        for (int sy = 0; sy < 38; ++sy) {
+            for (int sx = 0; sx < 38; ++sx) {
+                const std::uint8_t m = maskGrid[static_cast<std::size_t>(sy) * 38u + static_cast<std::size_t>(sx)];
+                if ((m & 0x05u) == 0u) continue;
+                const int tx = baseTx + (sx >> 1);
+                const int ty = baseTy + (sy >> 1);
+                const int subX = tx * 2 + (sx & 1);
+                const int subY = ty * 2 + (sy & 1);
+                if (subX < 0 || subY < 0) continue;
+                outBridge->cells.push_back({subX, subY, m});
+            }
+        }
+    }
+}
+
 std::size_t renderSceneryObjects(MapImage& map, std::vector<Object>& objects, SceneryDepth* depth,
-                                 std::vector<BuildingPlacement>* buildings = nullptr) {
+                                 std::vector<BuildingPlacement>* buildings = nullptr,
+                                 std::vector<BridgePlacement>* bridges = nullptr) {
     std::stable_sort(objects.begin(), objects.end(), [](const Object& a, const Object& b) {
         return a.onGround != b.onGround ? a.onGround : a.y < b.y;
     });
@@ -230,7 +361,15 @@ std::size_t renderSceneryObjects(MapImage& map, std::vector<Object>& objects, Sc
             if (record.empty()) continue;
             BuildingPlacement bp{};
             drawHouse(map, obj.x, obj.y, record, depth, buildings ? &bp : nullptr);
-            if (buildings) buildings->push_back(bp);
+            if (buildings) buildings->push_back(std::move(bp));
+            ++drawn;
+            continue;
+        }
+        if (a.layout == Layout::Bridge) {
+            if (record.empty()) continue;
+            BridgePlacement br{};
+            drawBridge(map, obj, record, bridges ? &br : nullptr);
+            if (bridges) bridges->push_back(std::move(br));
             ++drawn;
             continue;
         }
@@ -312,7 +451,8 @@ bool SceneryDepth::intersects(int left, int top, int width, int height) const {
 
 std::size_t drawTutorialScenery(MapImage& map, const std::filesystem::path& gameDir,
                                 SceneryDepth* depth, unsigned scheme,
-                                std::vector<BuildingPlacement>* buildings) {
+                                std::vector<BuildingPlacement>* buildings,
+                                std::vector<BridgePlacement>* bridges) {
     const auto path = resolveCaseInsensitivePath(gameDir, "maps.src/map.020/objects");
     if (std::filesystem::file_size(path) > (16u << 20)) throw std::runtime_error("Scenery list exceeds limit");
     std::ifstream input(path);
@@ -329,15 +469,16 @@ std::size_t drawTutorialScenery(MapImage& map, const std::filesystem::path& game
         const auto atlas = atlases.find(kind);
         if (atlas != atlases.end())
             objects.push_back({&atlas->second, unsigned(index), int(map.width / 2) + u - v,
-                               (u + v) / 2, kind == "trop" || kind == "lay" || kind == "vor"});
+                               (u + v) / 2, kind == "trop" || kind == "lay" || kind == "vor", u, v});
     }
-    return renderSceneryObjects(map, objects, depth, buildings);
+    return renderSceneryObjects(map, objects, depth, buildings, bridges);
 }
 
 std::size_t drawMissionScenery(MapImage& map, const std::filesystem::path& gameDir,
                                const std::filesystem::path& missionPath,
                                SceneryDepth* depth,
-                               std::vector<BuildingPlacement>* buildings) {
+                               std::vector<BuildingPlacement>* buildings,
+                               std::vector<BridgePlacement>* bridges) {
     const auto archive = loadMissionArchive(missionPath);
     const auto pLnames = archive.requireMapRecord("P-LNAMES");
     constexpr std::size_t kindSlots = 11;
@@ -389,10 +530,10 @@ std::size_t drawMissionScenery(MapImage& map, const std::filesystem::path& gameD
         const auto atlas = atlases.find(kind);
         if (atlas != atlases.end()) {
             objects.push_back({&atlas->second, index, px, py,
-                               kind == "trop" || kind == "lay" || kind == "vor"});
+                               kind == "trop" || kind == "lay" || kind == "vor", su, sv});
         }
     }
-    return renderSceneryObjects(map, objects, depth, buildings);
+    return renderSceneryObjects(map, objects, depth, buildings, bridges);
 }
 
 CraterCatalog loadCraterCatalog(const std::filesystem::path& gameDir, unsigned scheme) {

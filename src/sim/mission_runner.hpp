@@ -131,6 +131,9 @@ public:
     std::optional<size_t> attackBuilding(std::span<const size_t> soldierIds, size_t buildingIdx);
     std::optional<size_t> attackBuildingWithVehicles(std::span<const size_t> vehicleIds, size_t buildingIdx);
     std::vector<BuildingSnapshot> pollBuildingUpdates();
+    bool canSupportBridge(std::span<const size_t> supporterVehicleIds, size_t bridgeIdx) const;
+    std::optional<size_t> orderSupportBridge(std::span<const size_t> supporterVehicleIds, size_t bridgeIdx);
+    std::vector<BridgeSnapshot> pollBridgeUpdates();
     std::array<assets::AirSupportSlot, 5> airSupportFor(int owner) const;
     std::array<assets::AirSupportSlot, 5> playerAirSupport();
     bool callAirSupport(assets::AirMissionKind kind, int targetX, int targetY);
@@ -220,6 +223,7 @@ private:
     void mergeSoldierPoses(std::span<const SoldierPose> incoming);
     void collectVehiclePoses();
     void collectBuildingUpdates();
+    void collectBridgeUpdates();
     void collectAirSorties();
     unsigned countPendingReinforcementsByGroup(
         const std::array<std::vector<assets::ReinforcementUnit>, 64>& waves, unsigned group) const;
@@ -291,6 +295,7 @@ private:
     cmd::Acknowledge::Result applyLocked(const cmd::Acknowledge&);
     cmd::TogglePause::Result applyLocked(const cmd::TogglePause&);
     cmd::Resign::Result applyLocked(const cmd::Resign&);
+    cmd::SupportBridge::Result applyLocked(const cmd::SupportBridge&);
     struct MpZeppelinWave {
         std::uint32_t packed4{0};
         std::uint32_t jpWave{0};
@@ -333,6 +338,7 @@ private:
     std::vector<VehiclePose> vehiclePoses_;
     std::vector<MineEvent> mineEvents_;
     std::vector<BuildingSnapshot> buildingUpdates_;
+    std::vector<BridgeSnapshot> bridgeUpdates_;
     std::vector<AirSortiePose> airSorties_;
     std::vector<AirStrikeEvent> airEvents_;
     std::optional<std::vector<std::uint8_t>> fog_;

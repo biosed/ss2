@@ -46,7 +46,7 @@ public:
     using VehicleLayer = std::function<void(MapImage& patch, int patchX, int patchY, const SceneryDepth* depth)>;
     void setVehicleLayer(VehicleLayer layer);
     MapPatch repaintRegion(int left, int top, int right, int bottom) const;
-    MapPatch stampGroundPatch(int x, int y, const MapImage& patch);
+    MapPatch stampGroundPatch(int x, int y, const MapImage& patch, bool clearDepth = true);
     MapImage copyGroundRect(int x, int y, int width, int height) const;
     MapPatch stampAlphaOverlay(int centerX, int centerY, const MapImage& sprite);
     std::vector<MapPatch> setInspection(const std::set<std::size_t>& selected, Cursor cursor, int checkerPhase);

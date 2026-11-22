@@ -240,6 +240,9 @@ void TutorialUnits::stepAirSupport(std::vector<SoldierPose>& changed) {
                 damageBuilding(bi, bldDmg, hitType, owner, changed);
             }
         }
+        if (hitType == assets::HitType::Explosive) {
+            damageBridgesAtImpact(impactX, impactY, radius + 24.0, std::max(40, dmgBase), hitType, owner, changed);
+        }
         if (hitType == assets::HitType::Explosive && !mines_.empty()) {
             const SubCell impCell = pointerCell(impactX, impactY, originX_);
             const int itx = impCell.x / 2;

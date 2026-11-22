@@ -5,6 +5,7 @@
 namespace ss2 {
 namespace {
 constexpr std::array<std::uint8_t, 8> kFullMagicV1{'S', 'S', '2', 'F', 'U', 'L', 'L', '1'};
+constexpr std::array<std::uint8_t, 8> kFullMagicV2{'S', 'S', '2', 'F', 'U', 'L', 'L', '2'};
 constexpr std::uint32_t kMaxStringBytes = 4096u;
 
 void appendU8(std::vector<std::uint8_t>& out, std::uint8_t v) {
@@ -171,7 +172,7 @@ std::vector<std::uint8_t> MissionRunner::serializeFullSnapshot(const FullSnapsho
     const std::vector<std::uint8_t> unitBytes = TutorialUnits::serializeSnapshot(snap.units);
     std::vector<std::uint8_t> out;
     out.reserve(unitBytes.size() + 4096u);
-    out.insert(out.end(), kFullMagicV1.begin(), kFullMagicV1.end());
+    out.insert(out.end(), kFullMagicV2.begin(), kFullMagicV2.end());
 
     // 1. Core TutorialUnits snapshot.
     appendU32(out, static_cast<std::uint32_t>(unitBytes.size()));
@@ -274,12 +275,26 @@ std::vector<std::uint8_t> MissionRunner::serializeFullSnapshot(const FullSnapsho
         appendU32(out, snap.nextMissionSignal->first);
         appendU32(out, snap.nextMissionSignal->second);
     }
+
+    // 5. SS2FULL2 extension: destructible bridge states.
+    appendU32(out, static_cast<std::uint32_t>(ex.bridges.size()));
+    for (const auto& bs : ex.bridges) {
+        appendI32(out, bs.hp);
+        appendI32(out, bs.stage);
+        appendU8(out, bs.destroyed ? 1u : 0u);
+    }
     return out;
 }
 
 std::optional<MissionRunner::FullSnapshot> MissionRunner::deserializeFullSnapshot(std::span<const std::uint8_t> bytes) {
-    if (bytes.size() < kFullMagicV1.size() ||
-        !std::equal(kFullMagicV1.begin(), kFullMagicV1.end(), bytes.begin())) {
+    int version = 0;
+    if (bytes.size() >= kFullMagicV2.size() &&
+        std::equal(kFullMagicV2.begin(), kFullMagicV2.end(), bytes.begin())) {
+        version = 2;
+    } else if (bytes.size() >= kFullMagicV1.size() &&
+               std::equal(kFullMagicV1.begin(), kFullMagicV1.end(), bytes.begin())) {
+        version = 1;
+    } else {
         return std::nullopt;
     }
     FullReader r{bytes, kFullMagicV1.size()};
@@ -444,6 +459,21 @@ std::optional<MissionRunner::FullSnapshot> MissionRunner::deserializeFullSnapsho
         std::uint32_t a = 0, b = 0;
         if (!r.readU32(a) || !r.readU32(b)) return std::nullopt;
         out.nextMissionSignal = std::pair{a, b};
+    }
+
+    if (version >= 2) {
+        if (!r.readU32(cnt) || cnt > r.remaining() / 9u) return std::nullopt;
+        ex.bridges.resize(cnt);
+        for (auto& bs : ex.bridges) {
+            std::int32_t hp = 0, stage = 0;
+            bool destroyed = false;
+            if (!r.readI32(hp) || !r.readI32(stage) || !r.readBool(destroyed) || stage < 0 || stage > 4) {
+                return std::nullopt;
+            }
+            bs.hp = hp;
+            bs.stage = stage;
+            bs.destroyed = destroyed;
+        }
     }
 
     if (r.pos != bytes.size()) return std::nullopt;

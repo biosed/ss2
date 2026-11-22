@@ -57,6 +57,7 @@ void TutorialUnits::moveVehicleInternal(Vehicle& v, int mapX, int mapY) {
     v.facingTargetDir.reset();
     v.supportTargetVehicle.reset();
     v.supportTargetBuilding.reset();
+    v.supportTargetBridge.reset();
     v.supportTargetSoldier.reset();
     v.escortVehicleTarget.reset();
     v.escortSoldierTarget.reset();
@@ -228,6 +229,7 @@ size_t TutorialUnits::faceVehicles(std::span<const size_t> indices, int mapX, in
         v.pendingTowGun.reset();
         v.supportTargetVehicle.reset();
         v.supportTargetBuilding.reset();
+        v.supportTargetBridge.reset();
         v.supportTargetSoldier.reset();
         v.escortVehicleTarget.reset();
         v.escortSoldierTarget.reset();
@@ -333,6 +335,7 @@ size_t TutorialUnits::stopVehicles(std::span<const size_t> indices) {
         v.facingTargetDir.reset();
         v.supportTargetVehicle.reset();
         v.supportTargetBuilding.reset();
+        v.supportTargetBridge.reset();
         v.supportTargetSoldier.reset();
         v.escortVehicleTarget.reset();
         v.escortSoldierTarget.reset();
@@ -413,6 +416,7 @@ size_t TutorialUnits::attackWithVehicles(std::span<const size_t> indices, bool t
         v.facingTargetDir.reset();
         v.supportTargetVehicle.reset();
         v.supportTargetBuilding.reset();
+        v.supportTargetBridge.reset();
         v.supportTargetSoldier.reset();
         v.escortVehicleTarget.reset();
         v.escortSoldierTarget.reset();
@@ -717,6 +721,7 @@ std::vector<assets::Placement> TutorialUnits::abandonVehicles(std::span<const si
         v.facingTargetDir.reset();
         v.supportTargetVehicle.reset();
         v.supportTargetBuilding.reset();
+        v.supportTargetBridge.reset();
         v.supportTargetSoldier.reset();
         v.escortVehicleTarget.reset();
         v.escortSoldierTarget.reset();
@@ -759,6 +764,7 @@ size_t TutorialUnits::orderAttackGroundVehicles(std::span<const size_t> indices,
         v.facingTargetDir.reset();
         v.supportTargetVehicle.reset();
         v.supportTargetBuilding.reset();
+        v.supportTargetBridge.reset();
         v.supportTargetSoldier.reset();
         v.escortVehicleTarget.reset();
         v.escortSoldierTarget.reset();
@@ -809,6 +815,7 @@ void TutorialUnits::destroyVehicle(size_t vehicleIdx, std::vector<SoldierPose>& 
     tv.facingTargetDir.reset();
     tv.supportTargetVehicle.reset();
     tv.supportTargetBuilding.reset();
+    tv.supportTargetBridge.reset();
     tv.supportTargetSoldier.reset();
     tv.escortVehicleTarget.reset();
     tv.escortSoldierTarget.reset();
@@ -908,6 +915,8 @@ void TutorialUnits::destroyVehicle(size_t vehicleIdx, std::vector<SoldierPose>& 
                 damageBuilding(bi, std::max(30, cookDmg / 2), assets::HitType::Explosive, -1, changed);
             }
         }
+        damageBridgesAtImpact(cookX, cookY, cookR + 24.0, std::max(30, cookDmg / 2),
+                              assets::HitType::Explosive, -1, changed);
         if (!mines_.empty()) {
             triggerMineAtTile(cookCell.x / 2, cookCell.y / 2, changed, true);
         }
@@ -1284,6 +1293,7 @@ void TutorialUnits::stepVehicles(std::vector<SoldierPose>& changed) {
             v.facingTargetDir.reset();
             v.supportTargetVehicle.reset();
             v.supportTargetBuilding.reset();
+            v.supportTargetBridge.reset();
             v.supportTargetSoldier.reset();
             v.escortVehicleTarget.reset();
             v.escortSoldierTarget.reset();
@@ -1513,6 +1523,7 @@ void TutorialUnits::stepVehicles(std::vector<SoldierPose>& changed) {
             v.reverseMove = false;
             v.supportTargetVehicle.reset();
             v.supportTargetBuilding.reset();
+            v.supportTargetBridge.reset();
             v.supportTargetSoldier.reset();
             v.wasMoving = false;
             emitVehiclePose(i);
@@ -1984,6 +1995,8 @@ void TutorialUnits::stepVehicleCombat(std::vector<SoldierPose>& changed) {
                     damageBuilding(bi, std::max(10, dmgBase / 2), assets::HitType::Explosive, v.owner, changed);
                 }
             }
+            damageBridgesAtImpact(impactX, impactY, bldSplashR + 24.0, std::max(20, dmgBase),
+                                  assets::HitType::Explosive, v.owner, changed);
             if (!mines_.empty()) {
                 const SubCell impCell = pointerCell(impactX, impactY, originX_);
                 const int itx = impCell.x / 2, ity = impCell.y / 2;

@@ -247,6 +247,24 @@ std::optional<std::size_t> GameSession::buildingAtMap(int simX, int simY) const 
     return best;
 }
 
+std::optional<std::size_t> GameSession::bridgeAtMap(int simX, int simY) const {
+    std::optional<std::size_t> best;
+    long long bestDist2 = std::numeric_limits<long long>::max();
+    for (std::size_t i = 0; i < liveBridges.size(); ++i) {
+        const auto& br = liveBridges[i];
+        if (simX >= br.left && simX < br.left + br.width && simY >= br.top && simY < br.top + br.height) {
+            const long long dx = br.x - simX;
+            const long long dy = br.y - simY;
+            const long long d2 = dx * dx + dy * dy;
+            if (!best || d2 < bestDist2) {
+                bestDist2 = d2;
+                best = i;
+            }
+        }
+    }
+    return best;
+}
+
 void GameSession::doUnloadOrUnhitch() {
     if (!simulation || !selection) return;
     bool handledU = false;

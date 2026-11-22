@@ -438,6 +438,36 @@ bool GameSession::updateViewTooltipAndPresent() {
                         }
                     }
                 }
+                if (!showTip && !liveBridges.empty()) {
+                    const int simX = int(std::floor(mapX / mapScale));
+                    const int simY = int(std::floor(mapY / mapScale));
+                    if (const auto brHovered = bridgeAtMap(simX, simY)) {
+                        const auto& br = liveBridges[*brHovered];
+                        if (isBuildingPointVisible(br.x, br.y)) {
+                            ss2::TooltipContent tc;
+                            tc.title = ss2::tr("Bridge");
+                            tc.gauge = std::clamp(static_cast<float>(br.hp) / static_cast<float>(std::max(1, br.maxHp)),
+                                                  0.0f, 1.0f);
+                            tc.lines.push_back(ss2::trf("Integrity {0} / {1}",
+                                                        {std::to_string(br.hp), std::to_string(br.maxHp)}));
+                            if (br.destroyed) {
+                                tc.lines.push_back(ss2::tr("Destroyed — impassable"));
+                            } else if (br.stage >= 2) {
+                                tc.lines.push_back(ss2::tr("Heavily damaged"));
+                            } else if (br.stage == 1) {
+                                tc.lines.push_back(ss2::tr("Damaged"));
+                            } else {
+                                tc.lines.push_back(ss2::tr("Intact"));
+                            }
+                            tc.lines.push_back(ss2::tr(
+                                (br.hp < br.maxHp)
+                                    ? "Right-click with supply truck to repair"
+                                    : "Press G (Attack Ground) or bombers to demolish"));
+                            tooltip.show(tc, mx, my);
+                            showTip = true;
+                        }
+                    }
+                }
                 if (!showTip && !liveVisibleMines.empty()) {
                     const int simX = int(std::floor(mapX / mapScale));
                     const int simY = int(std::floor(mapY / mapScale));

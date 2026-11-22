@@ -282,6 +282,7 @@ size_t TutorialUnits::attackBuildingWithVehicles(std::span<const size_t> vehicle
         v.facingTargetDir.reset();
         v.supportTargetVehicle.reset();
         v.supportTargetBuilding.reset();
+        v.supportTargetBridge.reset();
         v.supportTargetSoldier.reset();
         v.escortVehicleTarget.reset();
         v.escortSoldierTarget.reset();
@@ -454,6 +455,285 @@ void TutorialUnits::damageBuilding(size_t bIdx, int rawDamage, assets::HitType h
         emitBuildingUpdate(bIdx, true, true);
     } else {
         emitBuildingUpdate(bIdx, structDmg > 0, false);
+    }
+}
+
+int TutorialUnits::bridgeStageForHp(int hp, int maxHp) noexcept {
+    if (hp <= 0) return 4;
+    // Retail LAND\MOST stages: 1000 1500 500 500 -> thresholds scaled cleanly if maxHp != 3500.
+    const int effMax = std::max(100, maxHp);
+    if (effMax == 3500) {
+        if (hp > 2500) return 0;
+        if (hp > 1000) return 1;
+        if (hp > 500) return 2;
+        return 3;
+    }
+    const double frac = static_cast<double>(hp) / static_cast<double>(effMax);
+    if (frac > 2500.0 / 3500.0) return 0;
+    if (frac > 1000.0 / 3500.0) return 1;
+    if (frac > 500.0 / 3500.0) return 2;
+    return 3;
+}
+
+void TutorialUnits::emitBridgeUpdate(size_t brIdx, bool damaged, bool collapsed, bool repaired) {
+    if (brIdx >= bridges_.size()) return;
+    const auto& br = bridges_[brIdx];
+    BridgeSnapshot snap{
+        brIdx, br.x, br.y, br.left, br.top, br.width, br.height,
+        br.hp, br.maxHp, br.stage, br.destroyed, damaged, collapsed, repaired
+    };
+    const auto it = std::ranges::find(bridgeUpdates_, brIdx, &BridgeSnapshot::index);
+    if (it == bridgeUpdates_.end()) {
+        bridgeUpdates_.push_back(snap);
+        return;
+    }
+    const bool prevDamaged = it->damagedThisTick;
+    const bool prevCollapsed = it->collapsedThisTick;
+    const bool prevRepaired = it->repairedThisTick;
+    *it = snap;
+    it->damagedThisTick = it->damagedThisTick || prevDamaged;
+    it->collapsedThisTick = it->collapsedThisTick || prevCollapsed;
+    it->repairedThisTick = it->repairedThisTick || prevRepaired;
+}
+
+void TutorialUnits::setBridges(std::vector<assets::BridgePlacement> bridges) {
+    bridges_.clear();
+    bridgeUpdates_.clear();
+    bridges_.reserve(bridges.size());
+    for (auto& bp : bridges) {
+        Bridge br{};
+        br.x = bp.x;
+        br.y = bp.y;
+        br.left = bp.left;
+        br.top = bp.top;
+        br.width = bp.width;
+        br.height = bp.height;
+        br.maxHp = std::max(100, bp.maxHp);
+        br.hp = br.maxHp;
+        br.stage = 0;
+        br.destroyed = false;
+        br.cells = std::move(bp.cells);
+        bridges_.push_back(std::move(br));
+    }
+}
+
+std::vector<BridgeSnapshot> TutorialUnits::takeBridgeUpdates() {
+    return std::exchange(bridgeUpdates_, {});
+}
+
+double TutorialUnits::distanceToBridge(const Bridge& br, double px, double py) const {
+    const double cx = std::clamp(px, static_cast<double>(br.left), static_cast<double>(br.left + br.width));
+    const double cy = std::clamp(py, static_cast<double>(br.top), static_cast<double>(br.top + br.height));
+    const double boxDist = det::detHypot(px - cx, py - cy);
+    if (br.cells.empty() || boxDist > 256.0) return boxDist;
+    double best = 1e18;
+    bool anyCell = false;
+    for (const auto& bc : br.cells) {
+        if ((bc.mask & 0x05u) == 0u) continue;
+        anyCell = true;
+        const int wu = bc.subX * 16 + 8;
+        const int wv = bc.subY * 16 + 8;
+        const double mx = static_cast<double>(originX_ + wu - wv);
+        const double my = static_cast<double>(wu + wv) * 0.5;
+        best = std::min(best, det::detHypot(px - mx, py - my));
+    }
+    return anyCell ? best : boxDist;
+}
+
+std::pair<int, int> TutorialUnits::bridgeRepairApproachPoint(const Bridge& br, const Vehicle& v) const {
+    double bestAnchorX = static_cast<double>(br.x);
+    double bestAnchorY = static_cast<double>(br.y);
+    double bestAnchorDist = 1e18;
+    for (const auto& bc : br.cells) {
+        if ((bc.mask & 0x01u) == 0u) continue;
+        const int wu = bc.subX * 16 + 8;
+        const int wv = bc.subY * 16 + 8;
+        const double mx = static_cast<double>(originX_ + wu - wv);
+        const double my = static_cast<double>(wu + wv) * 0.5;
+        const double d = det::detHypot(v.fx - mx, v.fy - my);
+        if (d < bestAnchorDist) {
+            bestAnchorDist = d;
+            bestAnchorX = mx;
+            bestAnchorY = my;
+        }
+    }
+    const double dx = v.fx - bestAnchorX;
+    const double dy = v.fy - bestAnchorY;
+    const double len = det::detHypot(dx, dy);
+    if (len >= 1.0) {
+        const double ux = dx / len;
+        const double uy = dy / len;
+        for (int r = 48; r <= 144; r += 16) {
+            const int px = std::clamp(static_cast<int>(det::detRoundToInt(bestAnchorX + ux * static_cast<double>(r))),
+                                      0, std::max(0, mapPixelW_ - 1));
+            const int py = std::clamp(static_cast<int>(det::detRoundToInt(bestAnchorY + uy * static_cast<double>(r))),
+                                      0, std::max(0, mapPixelH_ - 1));
+            const SubCell c = pointerCell(px, py, originX_);
+            if (grid_.inBounds(c) && grid_.walkableMask(c, v.forbiddenTerrainMask)) {
+                return {px, py};
+            }
+        }
+    }
+    return approachPointNear(v.fx, v.fy, bestAnchorX, bestAnchorY, 72.0, mapPixelW_, mapPixelH_);
+}
+
+void TutorialUnits::applyBridgeStageTransition(size_t brIdx, int prevStage, int newStage,
+                                               bool killPlungedUnits, std::vector<SoldierPose>* changed) {
+    if (brIdx >= bridges_.size()) return;
+    const auto& br = bridges_[brIdx];
+    const std::uint8_t prevBit = (prevStage >= 0 && prevStage < 4)
+        ? static_cast<std::uint8_t>(0x10u << prevStage) : 0u;
+    const std::uint8_t newBit = (newStage >= 0 && newStage < 4)
+        ? static_cast<std::uint8_t>(0x10u << newStage) : 0u;
+
+    std::vector<SubCell> newlyBlocked;
+    for (const auto& bc : br.cells) {
+        if ((bc.mask & 0x01u) == 0u) continue;
+        const bool wasPassable = prevBit != 0u && (bc.mask & prevBit) != 0u;
+        const bool nowPassable = newBit != 0u && (bc.mask & newBit) != 0u;
+        if (wasPassable == nowPassable) continue;
+        const SubCell cell{bc.subX, bc.subY};
+        grid_.setSubCellBlocked(cell, !nowPassable);
+        if (!nowPassable && killPlungedUnits) {
+            newlyBlocked.push_back(cell);
+        }
+    }
+    if (newlyBlocked.empty() || !changed) return;
+
+    auto isCollapsedCell = [&](SubCell c) {
+        for (const SubCell& nb : newlyBlocked) {
+            if (nb == c) return true;
+            if ((nb.x >> 1) == (c.x >> 1) && (nb.y >> 1) == (c.y >> 1) && !grid_.walkable(c)) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    for (size_t si = 0; si < soldiers_.size(); ++si) {
+        auto& s = soldiers_[si];
+        if (s.hp <= 0 || s.embarked || s.garrisonBuilding) continue;
+        if (isCollapsedCell(s.cell)) {
+            if (!vehicleAtCell(s.cell)) grid_.setOccupied(s.cell, false);
+            s.hp = 0;
+            s.motion.reset();
+            clearMovingSightPenalty(s);
+            s.goal.reset();
+            s.route.clear();
+            s.cursor = 0;
+            s.needsRoute = false;
+            s.queuedGoals.clear();
+            s.attackMove = false;
+            s.attackTarget.reset();
+            s.attackVehicleTarget.reset();
+            s.attackBuildingTarget.reset();
+            s.attackGround.reset();
+            s.autoTarget.reset();
+            s.boardVehicleTarget.reset();
+            s.captureVehicleTarget.reset();
+            s.garrisonTarget.reset();
+            s.healTarget.reset();
+            s.escortVehicleTarget.reset();
+            s.escortSoldierTarget.reset();
+            s.disarmMineTarget.reset();
+            s.disarmWorkTicks = 0;
+            s.binoculars = false;
+            s.spottedMask = 0;
+            fogDirty_ = true;
+            const auto [su, sv] = soldierWorld(s);
+            pushOrUpdateSoldierPose(*changed, {
+                si, originX_ + su - sv, (su + sv) / 2, s.direction, 0, false, 0, false, s.owner, s.group,
+                false, false
+            });
+        } else if (!s.route.empty() && s.goal) {
+            s.needsRoute = true;
+        }
+    }
+
+    for (size_t vi = 0; vi < vehicles_.size(); ++vi) {
+        auto& v = vehicles_[vi];
+        if (!v.alive || v.hp <= 0 || v.isNaval) continue;
+        if (!isCollapsedCell(v.cell)) continue;
+        // Drown embarked passengers inside the submerged vehicle instead of bailing onto banks.
+        for (size_t pIdx : v.passengers) {
+            if (pIdx >= soldiers_.size()) continue;
+            auto& ps = soldiers_[pIdx];
+            if (ps.hp <= 0) continue;
+            ps.embarked = false;
+            ps.hp = 0;
+            ps.motion.reset();
+            clearMovingSightPenalty(ps);
+            ps.goal.reset();
+            ps.route.clear();
+            ps.cursor = 0;
+            ps.needsRoute = false;
+            ps.queuedGoals.clear();
+            ps.attackMove = false;
+            ps.attackTarget.reset();
+            ps.attackVehicleTarget.reset();
+            ps.attackBuildingTarget.reset();
+            ps.attackGround.reset();
+            ps.autoTarget.reset();
+            ps.boardVehicleTarget.reset();
+            ps.captureVehicleTarget.reset();
+            ps.garrisonTarget.reset();
+            ps.healTarget.reset();
+            ps.escortVehicleTarget.reset();
+            ps.escortSoldierTarget.reset();
+            ps.disarmMineTarget.reset();
+            ps.binoculars = false;
+            ps.spottedMask = 0;
+            fogDirty_ = true;
+            pushOrUpdateSoldierPose(*changed, {
+                pIdx, v.x, v.y, ps.direction, 0, false, 0, false, ps.owner, ps.group, false, false
+            });
+        }
+        v.passengers.clear();
+        destroyVehicle(vi, *changed);
+        emitVehiclePose(vi);
+    }
+}
+
+void TutorialUnits::damageBridge(size_t brIdx, int rawDamage, assets::HitType hitType, int attackerOwner,
+                                 std::vector<SoldierPose>& changed) {
+    (void)attackerOwner;
+    if (brIdx >= bridges_.size() || rawDamage <= 0) return;
+    auto& br = bridges_[brIdx];
+    if (br.destroyed || br.hp <= 0) return;
+
+    int structDmg = 0;
+    if (hitType == assets::HitType::Explosive || hitType == assets::HitType::Mine) {
+        structDmg = std::max(25, rawDamage * 2);
+    } else if (hitType == assets::HitType::Pierce || hitType == assets::HitType::Transpierce) {
+        structDmg = std::max(12, rawDamage);
+    } else if (hitType == assets::HitType::Fire) {
+        structDmg = std::max(6, rawDamage / 2);
+    } else {
+        return;
+    }
+
+    const int prevStage = br.stage;
+    br.hp = std::max(0, br.hp - structDmg);
+    const int newStage = bridgeStageForHp(br.hp, br.maxHp);
+    br.stage = newStage;
+    br.destroyed = (newStage >= 4 || br.hp == 0);
+    if (newStage != prevStage) {
+        applyBridgeStageTransition(brIdx, prevStage, newStage, true, &changed);
+    }
+    emitBridgeUpdate(brIdx, true, prevStage < 4 && br.destroyed, false);
+}
+
+void TutorialUnits::damageBridgesAtImpact(int impactX, int impactY, double radius, int rawDamage,
+                                          assets::HitType hitType, int attackerOwner,
+                                          std::vector<SoldierPose>& changed) {
+    if (bridges_.empty() || rawDamage <= 0) return;
+    if (hitType == assets::HitType::Machine || hitType == assets::HitType::Sniper) return;
+    for (size_t bi = 0; bi < bridges_.size(); ++bi) {
+        const auto& br = bridges_[bi];
+        if (br.destroyed || br.hp <= 0) continue;
+        if (distanceToBridge(br, static_cast<double>(impactX), static_cast<double>(impactY)) <= radius) {
+            damageBridge(bi, rawDamage, hitType, attackerOwner, changed);
+        }
     }
 }
 }

@@ -1,5 +1,7 @@
 #include "tutorial_vm_test_internal.hpp"
 #include "assets/placement.hpp"
+#include "assets/scenery.hpp"
+#include "assets/terrain.hpp"
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -569,7 +571,209 @@ void runCaofCompleteOpcodes() {
               "Shrink-back loadFullSnapshot did not restore pre-reinforcement counts/VM state");
     }
 
-    std::cout << "CAOF complete 17-opcode + air-route + pool-carryover checks PASSED\n";
+    // 4. Destructible & Repairable Bridges: demolition, unit plunge, OP(41), supply-truck repair & FullSnapshot.
+    {
+        ss2::assets::TutorialData brData{};
+        brData.width = 128;
+        brData.height = 128;
+        brData.flags.assign(128u * 128u, 0u);
+        brData.obstacles.assign(128u * 128u, 0u);
+        // Carve impassable water river along tileX = 20, except tileY == 20 where our bridge sits.
+        for (int ty = 0; ty < 128; ++ty) {
+            if (ty == 20) continue;
+            brData.obstacles[static_cast<std::size_t>(ty) * 128u + 20u] = 0x00F0u;
+        }
+        brData.zones.assign(128u * 128u, 0u);
+        brData.phrases.resize(1);
+        const auto [brPx, brPy] = tc(20, 20);
+        brData.markers[0] = {brPx, brPy}; // marker 0 = bridge center
+        constexpr std::uint32_t kVarBase = 0x7fffff00u;
+        // Trigger 0: OP(41) when bridge at marker 0 is destroyed -> set var[0] = 1
+        brData.scripts.push_back({
+            lit(0u), 41u, 7u,
+            lit(kVarBase + 0u), lit(1u), 47u, 11u,
+            0x7fffffffu
+        });
+        // Trigger 1: once bridge is repaired back (not destroyed && var[0] == 1) -> set var[1] = 1
+        brData.scripts.push_back({
+            lit(0u), 41u, 26u, 7u,
+            lit(kVarBase + 0u), lit(0u), lit(1u), 50u, 7u,
+            lit(kVarBase + 1u), lit(1u), 47u, 11u,
+            0x7fffffffu
+        });
+
+        ss2::assets::UnitSpec infSpec{};
+        infSpec.id = "dguner";
+        infSpec.isVehicle = false;
+        infSpec.health = 9000;
+        infSpec.ammo1 = 40;
+        infSpec.moveSpeed = 1.6;
+        infSpec.sight = 10;
+
+        ss2::assets::UnitSpec howSpec{};
+        howSpec.id = "wespe";
+        howSpec.isVehicle = true;
+        howSpec.health = 500;
+        howSpec.ammo1 = 40;
+        howSpec.moveSpeed = 1.5;
+        howSpec.sight = 14;
+        howSpec.roleClass = "artillery";
+        howSpec.shot1 = {"he105", ss2::assets::HitType::Explosive, 650, 1200, 600, 600, 0, 10, 1, 10, "howitzer"};
+        howSpec.shot1.indirectArc = true;
+        howSpec.shot1.accuracyBase = 4;
+        howSpec.shot1.accuracyMin = 4;
+
+        ss2::assets::UnitSpec supSpec{};
+        supSpec.id = "ss";
+        supSpec.isVehicle = true;
+        supSpec.selType = "sappers";
+        supSpec.ammoRegenDelay = 8;
+        supSpec.health = 240;
+        supSpec.ammo1 = 5000;
+        supSpec.ammo2 = 5000;
+        supSpec.moveSpeed = 2.0;
+        supSpec.sight = 10;
+        supSpec.roleClass = "supply";
+        supSpec.stock = 44;
+
+        ss2::assets::UnitSpec tankVictim{};
+        tankVictim.id = "t34";
+        tankVictim.isVehicle = true;
+        tankVictim.health = 9000;
+        tankVictim.ammo1 = 30;
+        tankVictim.moveSpeed = 1.8;
+        tankVictim.sight = 10;
+        tankVictim.roleClass = "tank";
+        tankVictim.stock = 4;
+
+        const auto brCat = ss2::assets::UnitCatalog::fromSpecs({infSpec, howSpec, supSpec, tankVictim});
+        const auto [howX, howY] = tc(17, 20);
+        const auto [supX, supY] = tc(11, 20);
+        const auto [westX, westY] = tc(16, 20);
+        const auto [eastX, eastY] = tc(22, 20);
+        const auto [onBrX, onBrY] = tc(20, 20);
+
+        // Two infantry: one on bridge (will drown), one on west bank (tests route across bridge); plus passenger on bridge tank.
+        std::vector<ss2::assets::Infantry> inf{
+            {"dguner", onBrX, onBrY, 9000, 40, 1, 0},
+            {"dguner", westX, westY, 100, 40, 2, 0},
+            {"dguner", eastX, eastY, 100, 40, 3, 1},
+        };
+        std::vector<ss2::assets::Placement> veh{
+            {"wespe", howX, howY, 0, 100, 100, 4, 0},
+            {"ss", supX, supY, 0, 100, 100, 5, 0},
+            {"t34", onBrX + 4, onBrY, 0, 100, 100, 6, 1},
+        };
+
+        ss2::assets::BridgePlacement bp{};
+        bp.x = brPx;
+        bp.y = brPy;
+        bp.left = brPx - 32;
+        bp.top = brPy - 24;
+        bp.width = 64;
+        bp.height = 48;
+        bp.maxHp = 3500;
+        // Passable at stages 0..3 (0xF0), blocked at stage 4 (0); bits 0x01|0x04 = passable+hit.
+        bp.cells = {
+            {40, 40, 0xF5u},
+            {41, 40, 0xF5u},
+            {40, 41, 0xF5u},
+            {41, 41, 0xF5u},
+        };
+
+        auto brGrid = ss2::InfantryPathGrid::fromSubCellMasks(brData.width, brData.height, brData.flags, brData.obstacles);
+        ss2::FogGrid brFog(brData.width, brData.height, brData.flags);
+        ss2::TutorialUnits brUnits(std::move(brGrid), inf, veh, std::move(brFog), 2, false, {}, brCat);
+        brUnits.setBridges({bp});
+        check(brUnits.embarkImmediate(2, 2), "Expected soldier 2 to embark on bridge tank before demolition");
+        check(brUnits.canMove(std::size_t{1}, eastX, eastY), "Expected west-bank soldier canMove across intact bridge");
+        check(!brUnits.isObjectDestroyedAt(brPx, brPy), "OP(41) expected intact bridge -> not destroyed");
+
+        ss2::MissionRunner brRunner(ss2::MissionRunner::ManualClock{}, brData, std::move(brUnits));
+        check(brRunner.countByGroupMask(1u, 1u) == 1u, "Expected soldier on bridge alive before collapse");
+        check(brRunner.countByGroupMask(6u, 3u) == 1u, "Expected tank on bridge alive before collapse");
+        check(brRunner.countByGroupMask(3u, 1u) == 1u, "Expected embarked rider alive before collapse");
+        check(brRunner.attackGroundVehicles(std::array<std::size_t, 1>{0u}, brPx, brPy).value_or(0u) == 1u,
+              "Expected howitzer to accept attack-ground order on bridge");
+
+        bool sawDamage = false;
+        bool sawCollapse = false;
+        for (int tick = 0; tick < 250; ++tick) {
+            brRunner.advanceTicks(1u);
+            for (const auto& u : brRunner.pollBridgeUpdates()) {
+                if (u.damagedThisTick) sawDamage = true;
+                if (u.collapsedThisTick && u.destroyed && u.stage == 4 && u.hp == 0) sawCollapse = true;
+            }
+            if (sawCollapse) break;
+        }
+        check(sawDamage && sawCollapse, "Expected artillery bombardment to damage and collapse bridge to stage 4");
+        (void)brRunner.stopVehicles(std::array<std::size_t, 1>{0u});
+        brRunner.advanceTicks(2u);
+        for (int s = 0; s < 65 && brRunner.takeFullSnapshot().tutorial.variables[0] == 0u; ++s) {
+            brRunner.advanceTicks(1u);
+        }
+        check(brRunner.countByGroupMask(1u, 1u) == 0u, "Expected soldier standing on bridge to plunge on collapse");
+        check(brRunner.countByGroupMask(6u, 3u) == 0u, "Expected vehicle on bridge to plunge on collapse");
+        check(brRunner.countByGroupMask(3u, 1u) == 0u, "Expected embarked rider in plunged tank to drown too");
+        (void)brRunner.move(std::array<std::size_t, 1>{1u}, eastX, eastY);
+        brRunner.advanceTicks(180u);
+        const auto collapsedSnap = brRunner.takeFullSnapshot();
+        check(collapsedSnap.units.soldiers[1].cellX / 2 <= 19,
+              "Expected collapsed bridge to block soldier 1 on west bank");
+        check(collapsedSnap.tutorial.variables[0] == 1u,
+              "Expected OP(41) trigger to observe destroyed bridge");
+
+        // Supply truck must repair collapsed bridge back to full HP and restore passability + OP(41).
+        check(brRunner.canSupportBridge(std::array<std::size_t, 1>{1u}, 0u),
+              "Expected supply truck with ammo2 to report canSupportBridge=true");
+        check(brRunner.orderSupportBridge(std::array<std::size_t, 1>{1u}, 0u).value_or(0u) == 1u,
+              "Expected supply truck to accept orderSupportBridge");
+
+        bool sawRepair = false;
+        int finalBridgeHp = 0;
+        for (int tick = 0; tick < 1000; ++tick) {
+            brRunner.advanceTicks(1u);
+            for (const auto& u : brRunner.pollBridgeUpdates()) {
+                if (u.repairedThisTick) sawRepair = true;
+                finalBridgeHp = u.hp;
+            }
+            if (finalBridgeHp >= 3500) break;
+        }
+        check(sawRepair && finalBridgeHp == 3500, "Expected supply truck to fully repair bridge to 3500 HP");
+        brRunner.advanceTicks(2u);
+        for (int s = 0; s < 65 && brRunner.takeFullSnapshot().tutorial.variables[1] == 0u; ++s) {
+            brRunner.advanceTicks(1u);
+        }
+        const auto postRepairFull = brRunner.takeFullSnapshot();
+        check(postRepairFull.units.vehicles[1].ammo2 < 5000,
+              "Expected supply truck repair to expend finite spare parts ammo2");
+        check(postRepairFull.tutorial.variables[1] == 1u,
+              "Expected OP(41) to detect bridge became intact again after repair");
+        check(postRepairFull.unitsExtra.bridges.size() == 1u &&
+                  postRepairFull.unitsExtra.bridges[0].hp == 3500 &&
+                  !postRepairFull.unitsExtra.bridges[0].destroyed,
+              "Expected FullSnapshot ExtraState to capture repaired bridge");
+        (void)brRunner.move(std::array<std::size_t, 1>{1u}, eastX, eastY);
+        brRunner.advanceTicks(180u);
+        check(brRunner.takeFullSnapshot().units.soldiers[1].cellX / 2 >= 21,
+              "Expected soldier 1 to cross repaired bridge to east bank");
+        check(brRunner.loadFullSnapshot(collapsedSnap), "Expected loadFullSnapshot to restore collapsed bridge state");
+        (void)brRunner.move(std::array<std::size_t, 1>{1u}, eastX, eastY);
+        brRunner.advanceTicks(120u);
+        const auto restoredCollapsed = brRunner.takeFullSnapshot();
+        check(restoredCollapsed.unitsExtra.bridges[0].stage == 4 &&
+                  restoredCollapsed.units.soldiers[1].cellX / 2 <= 19,
+              "Expected restored collapsed bridge to re-block crossing");
+        check(brRunner.loadFullSnapshot(postRepairFull), "Expected loadFullSnapshot to restore repaired bridge state");
+        (void)brRunner.move(std::array<std::size_t, 1>{1u}, eastX, eastY);
+        brRunner.advanceTicks(180u);
+        const auto restoredRepaired = brRunner.takeFullSnapshot();
+        check(restoredRepaired.unitsExtra.bridges[0].hp == 3500 &&
+                  restoredRepaired.units.soldiers[1].cellX / 2 >= 21,
+              "Expected restored repaired bridge to allow crossing");
+    }
+
+    std::cout << "CAOF complete 17-opcode + air-route + pool-carryover + bridges checks PASSED\n";
 }
 
 void runRetailCaofCorpusCheck(const std::filesystem::path& gameDir) {
@@ -670,9 +874,31 @@ void runRetailCaofCorpusCheck(const std::filesystem::path& gameDir) {
         runner.advanceTicks(64u);
         (void)runner.poll();
     }
+    // Verify retail MOST.RES extraction on Tutorial I (4 bridges) and mission 006000.ssc (>= 1 bridge).
+    {
+        auto tutMap = ss2::assets::loadTutorialTerrain(gameDir);
+        std::vector<ss2::assets::BuildingPlacement> tutBlds;
+        std::vector<ss2::assets::BridgePlacement> tutBridges;
+        (void)ss2::assets::drawTutorialScenery(tutMap, gameDir, nullptr, 0, &tutBlds, &tutBridges);
+        check(tutBridges.size() == 4u, "Expected 4 MOST.RES bridges on Tutorial I");
+        for (const auto& br : tutBridges) {
+            check(br.maxHp == 3500 && br.basePatch.width > 0u && br.basePatch.height > 0u && !br.cells.empty(),
+                  "Expected valid Tutorial I BridgePlacement dimensions and 38x38 cells");
+            for (int st = 0; st < 5; ++st) {
+                check(!br.stageFrames[static_cast<std::size_t>(st)].empty(),
+                      "Expected non-empty MOST.RES sprite frame for every bridge damage stage 0..4");
+            }
+        }
+        const auto m006 = gameDir / "maps/campaign/006000.ssc";
+        auto m006Map = ss2::assets::loadMissionTerrain(gameDir, m006);
+        std::vector<ss2::assets::BuildingPlacement> m006Blds;
+        std::vector<ss2::assets::BridgePlacement> m006Bridges;
+        (void)ss2::assets::drawMissionScenery(m006Map, gameDir, m006, nullptr, &m006Blds, &m006Bridges);
+        check(!m006Bridges.empty(), "Expected retail campaign 006000.ssc to contain at least 1 bridge");
+    }
     std::cout << "Retail CAOF 136-mission corpus check (" << missionFiles.size() << " files, "
               << totalScripts << " triggers, 0 unhandled opcodes, " << evaluatedMissions
-              << " VM evals, 6 smoke sims) PASSED\n";
+              << " VM evals, 6 smoke sims, retail MOST.RES bridges) PASSED\n";
 }
 
 }  // namespace ss2::vm_test

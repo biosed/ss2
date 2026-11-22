@@ -385,6 +385,13 @@ struct Resign {
     std::uint8_t seat{0};
     bool operator==(const Resign&) const = default;
 };
+struct SupportBridge {
+    static constexpr std::string_view tag = "support-bridge";
+    using Result = std::optional<std::size_t>;
+    Ids supporters;
+    std::size_t bridge{};
+    bool operator==(const SupportBridge&) const = default;
+};
 
 using Command = std::variant<
     Move, AttackMove, Patrol, Scatter, Attack, Stop, ToggleHoldFire, ToggleCrouch, ToggleBinoculars, SpawnInfantry,
@@ -394,7 +401,7 @@ using Command = std::variant<
     AbandonVehicles, TowVehicle, UnhitchVehicles, SpawnVehicle, AddReserveUnit, TakeReserveUnits,
     AttackGroundVehicles, AttackGroundSoldiers, LayMine, DisarmMine, GroupMove, GarrisonBuilding, EvacuateBuilding,
     ToggleBuildingHoldFire, ToggleBuildingBinoculars, BuildingAttack, BuildingAttackBuilding, AttackBuilding,
-    AttackBuildingWithVehicles, CallAirSupport, LoadSnapshot, Acknowledge, TogglePause, Resign>;
+    AttackBuildingWithVehicles, CallAirSupport, LoadSnapshot, Acknowledge, TogglePause, Resign, SupportBridge>;
 
 // `tick` is the simulation tick at which the command was applied: after the
 // step that produced `tick` and before the next one.

@@ -29,6 +29,7 @@ public:
     bool walkable(SubCell cell) const;
     bool walkableMask(SubCell cell, std::uint16_t forbiddenMask) const;
     bool isShallows(SubCell cell) const;
+    void setSubCellBlocked(SubCell cell, bool blocked);
 
     // 4-bit per-slot occupancy matching n2Game_Dll.dll 0x10036370 / 0x10056710.
     void clearOccupancy();

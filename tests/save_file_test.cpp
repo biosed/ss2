@@ -288,6 +288,7 @@ int main() try {
         full.unitsExtra.reserveUnits.push_back({"panther", 0, 14, 92, 88, 30, 0});
         full.unitsExtra.evacuatingSoldiers.push_back({1u, 64, 96});
         full.unitsExtra.evacuatingVehicles.push_back({0u, 128, 160});
+        full.unitsExtra.bridges = {{3500, 0, false}, {400, 3, false}, {0, 4, true}};
         full.tutorial.tick = 1425u;
         full.tutorial.countdown = 300;
         full.tutorial.active = {false, true, false};
@@ -330,17 +331,36 @@ int main() try {
               "SS2SAVE2 metadata round-trips");
 
         const auto rawFull = ss2::MissionRunner::serializeFullSnapshot(full);
-        check(ss2::MissionRunner::deserializeFullSnapshot(rawFull).has_value(), "SS2FULL1 decodes cleanly");
+        check(rawFull.size() >= 8u &&
+                  std::string_view(reinterpret_cast<const char*>(rawFull.data()), 8u) == "SS2FULL2",
+              "serializeFullSnapshot emits SS2FULL2 header");
+        check(ss2::MissionRunner::deserializeFullSnapshot(rawFull).has_value(), "SS2FULL2 decodes cleanly");
         check(!ss2::MissionRunner::deserializeFullSnapshot(
                   std::span<const std::uint8_t>(rawFull.data(), rawFull.size() - 1)).has_value(),
-              "SS2FULL1 rejects truncated payload");
+              "SS2FULL2 rejects truncated payload");
         auto badFullMagic = rawFull;
         badFullMagic[7] = '9';
-        check(!ss2::MissionRunner::deserializeFullSnapshot(badFullMagic).has_value(), "SS2FULL1 rejects bad magic");
+        check(!ss2::MissionRunner::deserializeFullSnapshot(badFullMagic).has_value(), "SS2FULL2 rejects bad magic");
         auto extraFullByte = rawFull;
         extraFullByte.push_back(0x55u);
         check(!ss2::MissionRunner::deserializeFullSnapshot(extraFullByte).has_value(),
-              "SS2FULL1 rejects trailing byte");
+              "SS2FULL2 rejects trailing byte");
+
+        // Backward compatibility: SS2FULL1 (without section 5 bridge trailer) still decodes cleanly.
+        const std::size_t v2BridgeTrailerBytes = 4u + full.unitsExtra.bridges.size() * 9u;
+        std::vector<std::uint8_t> rawFullV1(
+            rawFull.begin(), rawFull.end() - static_cast<std::ptrdiff_t>(v2BridgeTrailerBytes));
+        rawFullV1[7] = '1';
+        const auto decFullV1 = ss2::MissionRunner::deserializeFullSnapshot(rawFullV1);
+        check(decFullV1.has_value() && decFullV1->unitsExtra.bridges.empty() &&
+                  decFullV1->unitsExtra.weather == ss2::assets::WeatherKind::Snow &&
+                  decFullV1->nextMissionSignal == full.nextMissionSignal,
+              "SS2FULL1 backward compatibility decodes cleanly");
+
+        auto badBridgeStage = full;
+        badBridgeStage.unitsExtra.bridges[0].stage = 5;
+        const auto badStageBytes = ss2::encodeSaveFile(meta, badBridgeStage);
+        check(!ss2::decodeSaveFile(badStageBytes).has_value(), "SS2SAVE2 rejects out-of-range bridge stage");
 
         check(!ss2::decodeSaveFile(std::span<const std::uint8_t>(bytes2.data(), bytes2.size() - 1)).has_value(),
               "SS2SAVE2 rejects truncated payload");

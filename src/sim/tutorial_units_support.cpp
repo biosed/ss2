@@ -74,6 +74,7 @@ size_t TutorialUnits::orderSupportVehicle(std::span<const size_t> supporterVehic
             v.facingTargetDir.reset();
             v.supportTargetVehicle.reset();
             v.supportTargetBuilding.reset();
+            v.supportTargetBridge.reset();
             v.supportTargetSoldier.reset();
             v.escortVehicleTarget.reset();
             v.escortSoldierTarget.reset();
@@ -166,6 +167,7 @@ size_t TutorialUnits::orderSupportBuilding(std::span<const size_t> supporterVehi
             v.facingTargetDir.reset();
             v.supportTargetVehicle.reset();
             v.supportTargetBuilding.reset();
+            v.supportTargetBridge.reset();
             v.supportTargetSoldier.reset();
             v.escortVehicleTarget.reset();
             v.escortSoldierTarget.reset();
@@ -178,6 +180,64 @@ size_t TutorialUnits::orderSupportBuilding(std::span<const size_t> supporterVehi
                                                     bRadius + 32.0, mapPixelW_, mapPixelH_);
             moveVehicleInternal(v, approach.first, approach.second);
             v.supportTargetBuilding = buildingIdx;
+        }
+        ++accepted;
+    }
+    return accepted;
+}
+
+bool TutorialUnits::canSupportBridge(std::span<const size_t> supporterVehicleIds, size_t bridgeIdx) const {
+    const int owner = effectiveQueryOwner();
+    if (bridgeIdx >= bridges_.size()) return false;
+    const auto& br = bridges_[bridgeIdx];
+    if (br.hp >= br.maxHp) return false;
+    return std::ranges::any_of(supporterVehicleIds, [&](size_t id) {
+        if (id >= vehicles_.size()) return false;
+        const auto& v = vehicles_[id];
+        return v.alive && v.hp > 0 && v.owner == owner && v.isSupply && !v.isCrate &&
+               v.speedPx > 0.0 && !v.towedBy && (!v.hasFiniteSupply || v.ammo2 > 0);
+    });
+}
+
+size_t TutorialUnits::orderSupportBridge(std::span<const size_t> supporterVehicleIds, size_t bridgeIdx) {
+    const int actor = actorOwner();
+    if (!canSupportBridge(supporterVehicleIds, bridgeIdx)) return 0;
+    const auto& br = bridges_[bridgeIdx];
+    size_t accepted = 0;
+    std::vector<size_t> seen;
+    for (size_t id : supporterVehicleIds) {
+        if (id >= vehicles_.size() || std::ranges::find(seen, id) != seen.end()) continue;
+        seen.push_back(id);
+        auto& v = vehicles_[id];
+        if (!v.alive || v.hp <= 0 || v.owner != actor || !v.isSupply || v.isCrate ||
+            v.speedPx <= 0.0 || v.towedBy || (v.hasFiniteSupply && v.ammo2 <= 0)) {
+            continue;
+        }
+        v.pendingTowGun.reset();
+        v.queuedOrders.clear();
+        v.attackMove = false;
+        v.attackMoveEngaging = false;
+        const double dist = distanceToBridge(br, v.fx, v.fy);
+        if (dist <= 156.0) {
+            v.moveTarget.reset();
+            v.waypoints.clear();
+            v.patrolOrigin.reset();
+            v.patrolDest.reset();
+            v.facingTargetDir.reset();
+            v.supportTargetVehicle.reset();
+            v.supportTargetBuilding.reset();
+            v.supportTargetBridge.reset();
+            v.supportTargetSoldier.reset();
+            v.escortVehicleTarget.reset();
+            v.escortSoldierTarget.reset();
+            if (v.wasMoving) {
+                v.wasMoving = false;
+                emitVehiclePose(id);
+            }
+        } else {
+            const auto approach = bridgeRepairApproachPoint(br, v);
+            moveVehicleInternal(v, approach.first, approach.second);
+            v.supportTargetBridge = bridgeIdx;
         }
         ++accepted;
     }
@@ -277,6 +337,7 @@ size_t TutorialUnits::orderHealSoldier(std::span<const size_t> medicSoldierIds, 
             v.facingTargetDir.reset();
             v.supportTargetVehicle.reset();
             v.supportTargetBuilding.reset();
+            v.supportTargetBridge.reset();
             v.supportTargetSoldier.reset();
             v.escortVehicleTarget.reset();
             v.escortSoldierTarget.reset();
@@ -408,6 +469,7 @@ size_t TutorialUnits::dispatchEscort(std::span<const size_t> soldierIds, std::sp
         v.attackBuildingTarget.reset();
         v.supportTargetVehicle.reset();
         v.supportTargetBuilding.reset();
+        v.supportTargetBridge.reset();
         v.supportTargetSoldier.reset();
         v.reverseMove = false;
         v.attackMoveEngaging = false;
@@ -609,7 +671,8 @@ void TutorialUnits::stepSupplyAndRepair(std::vector<SoldierPose>& changed) {
         const bool canAutoDispatch =
             autoEngage_ && !v.holdFire && v.hasCrew && v.speedPx > 0.0 && !v.towedBy &&
             !v.moveTarget && v.waypoints.empty() && v.queuedOrders.empty() &&
-            !v.supportTargetVehicle && !v.supportTargetBuilding && !v.supportTargetSoldier &&
+            !v.supportTargetVehicle && !v.supportTargetBuilding && !v.supportTargetBridge &&
+            !v.supportTargetSoldier &&
             !v.escortVehicleTarget && !v.escortSoldierTarget && !v.patrolOrigin &&
             !v.pendingTowGun && !v.facingTargetDir;
         if (v.isSupply) {
@@ -733,6 +796,34 @@ void TutorialUnits::stepSupplyAndRepair(std::vector<SoldierPose>& changed) {
                     --repairsLeft;
                 }
             }
+            if (!v.isCrate && repairsLeft > 0 && canRepairParts && (!v.hasFiniteSupply || v.ammo2 > 0)) {
+                for (size_t bi = 0; bi < bridges_.size() && repairsLeft > 0 && (!v.hasFiniteSupply || v.ammo2 > 0); ++bi) {
+                    auto& br = bridges_[bi];
+                    if (br.hp >= br.maxHp) continue;
+                    if (distanceToBridge(br, v.fx, v.fy) > kSupportRadius + 32.0) continue;
+                    const int maxBridgeStep = std::max(1, static_cast<int>(det::detRoundToInt(140.0 * supplyMult)));
+                    int gain = std::min(maxBridgeStep, br.maxHp - br.hp);
+                    if (v.hasFiniteSupply) {
+                        const int maxGainByStock = std::max(1, v.ammo2 * 2);
+                        gain = std::min(gain, maxGainByStock);
+                        const int spent = std::min(v.ammo2, std::max(1, (gain + 1) / 2));
+                        v.ammo2 -= spent;
+                        truckStockChanged = true;
+                    }
+                    const int prevStage = br.stage;
+                    br.hp = std::min(br.maxHp, br.hp + gain);
+                    const int newStage = bridgeStageForHp(br.hp, br.maxHp);
+                    br.stage = newStage;
+                    br.destroyed = (newStage >= 4 || br.hp == 0);
+                    if (newStage != prevStage) {
+                        applyBridgeStageTransition(bi, prevStage, newStage, false, nullptr);
+                    }
+                    didAnyService = true;
+                    emitBridgeUpdate(bi, false, false, true);
+                    emitVehiclePose(i, false, 0, 0, false, {}, false, false, true, false);
+                    --repairsLeft;
+                }
+            }
             auto resupplySoldier = [&](Soldier& s) -> std::pair<bool, bool> {
                 if (v.hasFiniteSupply && v.ammo <= 0) return {false, false};
                 const bool canCarryGrenades = !s.isAntiVehicle && !s.isMedic && !s.isOfficer && !s.isMortar;
@@ -835,6 +926,23 @@ void TutorialUnits::stepSupplyAndRepair(std::vector<SoldierPose>& changed) {
                     const auto approach = approachPointNear(v.fx, v.fy, t.fx, t.fy, 64.0, mapPixelW_, mapPixelH_);
                     moveVehicleInternal(v, approach.first, approach.second);
                     v.supportTargetVehicle = *bestVeh;
+                } else if (!v.isCrate && (!v.hasFiniteSupply || v.ammo2 > 0)) {
+                    std::optional<size_t> bestBridge;
+                    double bestBrDist = kAutoSupportRadius + 1.0;
+                    for (size_t bi = 0; bi < bridges_.size(); ++bi) {
+                        const auto& br = bridges_[bi];
+                        if (br.hp >= br.maxHp) continue;
+                        const double d = distanceToBridge(br, v.fx, v.fy);
+                        if (d <= kAutoSupportRadius && d < bestBrDist) {
+                            bestBrDist = d;
+                            bestBridge = bi;
+                        }
+                    }
+                    if (bestBridge) {
+                        const auto approach = bridgeRepairApproachPoint(bridges_[*bestBridge], v);
+                        moveVehicleInternal(v, approach.first, approach.second);
+                        v.supportTargetBridge = *bestBridge;
+                    }
                 }
             }
         }
@@ -969,6 +1077,7 @@ void TutorialUnits::stepSupportApproach() {
         veh.queuedOrders.clear();
         veh.supportTargetVehicle.reset();
         veh.supportTargetBuilding.reset();
+        veh.supportTargetBridge.reset();
         veh.supportTargetSoldier.reset();
         if (veh.wasMoving) {
             veh.wasMoving = false;
@@ -978,10 +1087,14 @@ void TutorialUnits::stepSupportApproach() {
 
     for (size_t i = 0; i < vehicles_.size(); ++i) {
         auto& v = vehicles_[i];
-        if (!v.supportTargetVehicle && !v.supportTargetBuilding && !v.supportTargetSoldier) continue;
+        if (!v.supportTargetVehicle && !v.supportTargetBuilding && !v.supportTargetBridge &&
+            !v.supportTargetSoldier) {
+            continue;
+        }
         if (!v.alive || v.hp <= 0 || v.speedPx <= 0.0 || v.towedBy) {
             v.supportTargetVehicle.reset();
             v.supportTargetBuilding.reset();
+            v.supportTargetBridge.reset();
             v.supportTargetSoldier.reset();
             continue;
         }
@@ -1044,6 +1157,21 @@ void TutorialUnits::stepSupportApproach() {
             }
             const double bReach = 125.0 + static_cast<double>(std::max(b.width, b.height)) * 0.5;
             if (det::detHypot(static_cast<double>(b.x) - v.fx, static_cast<double>(b.y) - v.fy) <= bReach) {
+                haltVehicleSupport(i, v);
+            }
+        } else if (v.supportTargetBridge) {
+            const size_t brIdx = *v.supportTargetBridge;
+            if (!v.isSupply || v.isCrate || brIdx >= bridges_.size() ||
+                (v.hasFiniteSupply && v.ammo2 <= 0)) {
+                v.supportTargetBridge.reset();
+                continue;
+            }
+            const auto& br = bridges_[brIdx];
+            if (br.hp >= br.maxHp) {
+                v.supportTargetBridge.reset();
+                continue;
+            }
+            if (distanceToBridge(br, v.fx, v.fy) <= 156.0) {
                 haltVehicleSupport(i, v);
             }
         } else if (v.supportTargetSoldier) {

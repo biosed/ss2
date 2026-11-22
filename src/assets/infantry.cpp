@@ -277,11 +277,11 @@ MapPatch InfantryScene::repaintRegion(int left, int top, int right, int bottom) 
     return repaint(left, top, right, bottom);
 }
 
-MapPatch InfantryScene::stampGroundPatch(int x, int y, const MapImage& patch) {
+MapPatch InfantryScene::stampGroundPatch(int x, int y, const MapImage& patch, bool clearDepth) {
     if (!patch.width || !patch.height || patch.rgba.size() < std::size_t(patch.width) * patch.height * 4u) {
         return {0, 0, {}};
     }
-    depth_.clearRect(x, y, int(patch.width), int(patch.height));
+    if (clearDepth) depth_.clearRect(x, y, int(patch.width), int(patch.height));
     const int dstLeft = std::clamp(x * resolution_, 0, int(ground_.width));
     const int dstTop = std::clamp(y * resolution_, 0, int(ground_.height));
     const int dstRight = std::clamp((x + int(patch.width)) * resolution_, dstLeft, int(ground_.width));

@@ -156,6 +156,19 @@ bool InfantryPathGrid::isShallows(SubCell cell) const {
     return idx < obstacles_.size() && (obstacles_[idx] & 0x0F00u) != 0;
 }
 
+void InfantryPathGrid::setSubCellBlocked(SubCell cell, bool blocked) {
+    if (cell.x < 0 || cell.y < 0 || cell.x >= subWidth_ || cell.y >= subHeight_) return;
+    if (!walkable_.empty()) {
+        walkable_[std::size_t(cell.y) * std::size_t(subWidth_) + std::size_t(cell.x)] = blocked ? 0u : 1u;
+        return;
+    }
+    const std::size_t idx = std::size_t(cell.y >> 1) * std::size_t(tileWidth_) + std::size_t(cell.x >> 1);
+    const std::uint32_t slotBit = 1u << unsigned((cell.x & 1) | ((cell.y & 1) << 1));
+    if (idx >= flags_.size()) return;
+    if (blocked) flags_[idx] |= slotBit;
+    else flags_[idx] &= ~slotBit;
+}
+
 void InfantryPathGrid::clearOccupancy() {
     std::fill(occupancy_.begin(), occupancy_.end(), 0u);
 }

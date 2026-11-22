@@ -96,6 +96,18 @@ struct BuildingSnapshot {
     std::vector<size_t> occupantIds{};
 };
 
+struct BridgeSnapshot {
+    std::size_t index{};
+    int x{}, y{};
+    int left{}, top{}, width{}, height{};
+    int hp{}, maxHp{};
+    int stage{0};
+    bool destroyed{false};
+    bool damagedThisTick{false};
+    bool collapsedThisTick{false};
+    bool repairedThisTick{false};
+};
+
 struct MineEvent {
     enum Kind { Detonated, Detected, Disarmed, Laid } kind{Detonated};
     int x{};
@@ -211,6 +223,12 @@ public:
             bool hatchOpen{false};
             bool operator==(const VehicleExtra&) const = default;
         };
+        struct BridgeState {
+            int hp{3500};
+            int stage{0};
+            bool destroyed{false};
+            bool operator==(const BridgeState&) const = default;
+        };
         static constexpr std::array<std::int32_t, 100> makeDefaultGroupHitTicks() noexcept {
             std::array<std::int32_t, 100> a{};
             a.fill(-1);
@@ -229,6 +247,7 @@ public:
         std::vector<ReserveUnit> reserveUnits;
         std::vector<EvacuationOrder> evacuatingSoldiers;
         std::vector<EvacuationOrder> evacuatingVehicles;
+        std::vector<BridgeState> bridges;
         bool operator==(const ExtraState&) const = default;
     };
 
@@ -386,6 +405,11 @@ public:
     size_t orderAttackBuilding(std::span<const size_t> soldierIds, size_t buildingIdx);
     size_t attackBuildingWithVehicles(std::span<const size_t> vehicleIds, size_t buildingIdx);
     std::vector<BuildingSnapshot> takeBuildingUpdates();
+    void setBridges(std::vector<assets::BridgePlacement> bridges);
+    std::vector<BridgeSnapshot> takeBridgeUpdates();
+    bool canSupportBridge(std::span<const size_t> supporterVehicleIds, size_t bridgeIdx) const;
+    size_t orderSupportBridge(std::span<const size_t> supporterVehicleIds, size_t bridgeIdx);
+    static int bridgeStageForHp(int hp, int maxHp) noexcept;
 
     Snapshot takeSnapshot() const;
     bool loadSnapshot(const Snapshot& snap, std::vector<SoldierPose>* outSoldiers = nullptr);
@@ -613,6 +637,7 @@ private:
         std::optional<unsigned> facingTargetDir;
         std::optional<size_t> supportTargetVehicle;
         std::optional<size_t> supportTargetBuilding;
+        std::optional<size_t> supportTargetBridge;
         std::optional<size_t> supportTargetSoldier;
         std::optional<size_t> escortVehicleTarget;
         std::optional<size_t> escortSoldierTarget;
@@ -716,6 +741,14 @@ private:
         SubCell entryCell{};
         std::vector<size_t> occupants;
     };
+    struct Bridge {
+        int x{}, y{};
+        int left{}, top{}, width{}, height{};
+        int hp{3500}, maxHp{3500};
+        int stage{0};
+        bool destroyed{false};
+        std::vector<assets::BridgeSubCell> cells;
+    };
     InfantryPathGrid grid_;
     int originX_{4096};
     int mapPixelW_{8192};
@@ -740,6 +773,8 @@ private:
     std::vector<MineEvent> mineEvents_;
     std::vector<Building> buildings_;
     std::vector<BuildingSnapshot> buildingUpdates_;
+    std::vector<Bridge> bridges_;
+    std::vector<BridgeSnapshot> bridgeUpdates_;
     struct ActiveSortie {
         std::uint32_t id{};
         assets::AirMissionKind kind{assets::AirMissionKind::Bomber};
@@ -845,6 +880,16 @@ private:
     void stepGarrisons(std::vector<SoldierPose>& changed);
     void damageBuilding(size_t bIdx, int rawDamage, assets::HitType hitType, int attackerOwner,
                         std::vector<SoldierPose>& changed);
+    void emitBridgeUpdate(size_t brIdx, bool damaged = false, bool collapsed = false, bool repaired = false);
+    void applyBridgeStageTransition(size_t brIdx, int prevStage, int newStage, bool killPlungedUnits,
+                                    std::vector<SoldierPose>* changed);
+    void damageBridge(size_t brIdx, int rawDamage, assets::HitType hitType, int attackerOwner,
+                      std::vector<SoldierPose>& changed);
+    void damageBridgesAtImpact(int impactX, int impactY, double radius, int rawDamage,
+                               assets::HitType hitType, int attackerOwner,
+                               std::vector<SoldierPose>& changed);
+    double distanceToBridge(const Bridge& br, double px, double py) const;
+    std::pair<int, int> bridgeRepairApproachPoint(const Bridge& br, const Vehicle& v) const;
     void bailoutPassengers(size_t vehicleIdx, std::vector<SoldierPose>& changed);
     void stepBoarding(std::vector<SoldierPose>& changed);
     void stepCaptures(std::vector<SoldierPose>& changed);

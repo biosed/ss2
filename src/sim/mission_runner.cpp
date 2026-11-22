@@ -703,6 +703,23 @@ void MissionRunner::collectBuildingUpdates() {
     }
 }
 
+void MissionRunner::collectBridgeUpdates() {
+    for (const auto& br : units_.takeBridgeUpdates()) {
+        const auto old = std::ranges::find(bridgeUpdates_, br.index, &BridgeSnapshot::index);
+        if (old == bridgeUpdates_.end()) {
+            bridgeUpdates_.push_back(br);
+            continue;
+        }
+        const bool wasDamaged = old->damagedThisTick;
+        const bool wasCollapsed = old->collapsedThisTick;
+        const bool wasRepaired = old->repairedThisTick;
+        *old = br;
+        old->damagedThisTick = old->damagedThisTick || wasDamaged;
+        old->collapsedThisTick = old->collapsedThisTick || wasCollapsed;
+        old->repairedThisTick = old->repairedThisTick || wasRepaired;
+    }
+}
+
 void MissionRunner::collectAirSorties() {
     for (const auto& pose : units_.takeAirSorties()) {
         const auto old = std::ranges::find(airSorties_, pose.id, &AirSortiePose::id);
@@ -762,6 +779,7 @@ void MissionRunner::stepTickLocked() {
     mergeSoldierPoses(units_.step());
     collectVehiclePoses();
     collectBuildingUpdates();
+    collectBridgeUpdates();
     collectAirSorties();
     auto newAir = units_.takeAirStrikeEvents();
     if (!newAir.empty()) {
@@ -995,6 +1013,20 @@ std::optional<size_t> MissionRunner::orderSupportBuilding(std::span<const size_t
 cmd::SupportBuilding::Result MissionRunner::applyLocked(const cmd::SupportBuilding& c) {
     if (modal_) return {};
     const size_t res = units_.orderSupportBuilding(c.supporters, c.building);
+    collectVehiclePoses();
+    return res;
+}
+bool MissionRunner::canSupportBridge(std::span<const size_t> supporterVehicleIds, size_t bridgeIdx) const {
+    std::lock_guard lock(mutex_);
+    return !modal_ && units_.canSupportBridge(supporterVehicleIds, bridgeIdx);
+}
+std::optional<size_t> MissionRunner::orderSupportBridge(std::span<const size_t> supporterVehicleIds,
+                                                          size_t bridgeIdx) {
+    return submit(cmd::SupportBridge{ids(supporterVehicleIds), bridgeIdx});
+}
+cmd::SupportBridge::Result MissionRunner::applyLocked(const cmd::SupportBridge& c) {
+    if (modal_) return {};
+    const size_t res = units_.orderSupportBridge(c.supporters, c.bridge);
     collectVehiclePoses();
     return res;
 }
@@ -1252,6 +1284,10 @@ std::vector<BuildingSnapshot> MissionRunner::pollBuildingUpdates() {
     std::lock_guard lock(mutex_);
     return std::exchange(buildingUpdates_, {});
 }
+std::vector<BridgeSnapshot> MissionRunner::pollBridgeUpdates() {
+    std::lock_guard lock(mutex_);
+    return std::exchange(bridgeUpdates_, {});
+}
 std::array<assets::AirSupportSlot, 5> MissionRunner::airSupportFor(int owner) const {
     std::lock_guard lock(mutex_);
     return units_.airSupportFor(owner);
@@ -1316,6 +1352,7 @@ bool MissionRunner::loadFullSnapshot(const FullSnapshot& snap) {
     vehiclePoses_.clear();
     mineEvents_.clear();
     buildingUpdates_.clear();
+    bridgeUpdates_.clear();
     airSorties_.clear();
     airEvents_.clear();
     pending_.clear();
@@ -1331,6 +1368,7 @@ bool MissionRunner::loadFullSnapshot(const FullSnapshot& snap) {
     nextMissionSignal_ = snap.nextMissionSignal;
     collectVehiclePoses();
     collectBuildingUpdates();
+    collectBridgeUpdates();
     simTick_.store(units_.tick_, std::memory_order_relaxed);
     if (auto f = units_.takeFogSnapshot()) fog_ = std::move(f);
     changed_.notify_all();
@@ -1343,6 +1381,7 @@ cmd::LoadSnapshot::Result MissionRunner::applyLocked(const cmd::LoadSnapshot& c)
     vehiclePoses_.clear();
     mineEvents_.clear();
     buildingUpdates_.clear();
+    bridgeUpdates_.clear();
     airSorties_.clear();
     airEvents_.clear();
     scheduledReinforcements_.clear();
@@ -1350,6 +1389,7 @@ cmd::LoadSnapshot::Result MissionRunner::applyLocked(const cmd::LoadSnapshot& c)
     modal_ = false;
     collectVehiclePoses();
     collectBuildingUpdates();
+    collectBridgeUpdates();
     simTick_.store(units_.tick_, std::memory_order_relaxed);
     if (auto f = units_.takeFogSnapshot()) fog_ = std::move(f);
     return true;

@@ -43,7 +43,7 @@ std::uint64_t MissionRunner::stateHash() const {
     static_assert(sizeof(ScheduledReinforcement) == 28, "update the ScheduledReinforcement hash below");
     static_assert(sizeof(MissionRunner) - sizeof(TutorialUnits) - sizeof(Tutorial) - sizeof(std::mutex) -
                       sizeof(std::condition_variable_any) ==
-                      728 + sizeof(std::function<void(cmd::Command)>) + sizeof(std::vector<assets::Placement>) +
+                      752 + sizeof(std::function<void(cmd::Command)>) + sizeof(std::vector<assets::Placement>) +
                           sizeof(std::vector<MissionEvent>) + sizeof(std::optional<MpSkirmishState>) +
                           sizeof(void*),
                   "update MissionRunner::stateHash for the new member");

@@ -100,6 +100,7 @@ std::vector<cmd::Command> everyCommand() {
         cmd::Acknowledge{},
         cmd::TogglePause{},
         cmd::Resign{0},
+        cmd::SupportBridge{b, 22},
     };
 }
 

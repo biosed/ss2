@@ -517,6 +517,7 @@ void TutorialUnits::applyVehicleCrewDamage(size_t vehicleIdx, int attackerX, int
     tv.facingTargetDir.reset();
     tv.supportTargetVehicle.reset();
     tv.supportTargetBuilding.reset();
+    tv.supportTargetBridge.reset();
     tv.supportTargetSoldier.reset();
     tv.escortVehicleTarget.reset();
     tv.escortSoldierTarget.reset();
@@ -820,6 +821,7 @@ void TutorialUnits::applyFlameSplash(int impactX, int impactY, int rawDamage, in
             emitVehiclePose(vi);
         }
     }
+    damageBridgesAtImpact(impactX, impactY, 56.0, rawDamage, assets::HitType::Fire, attackerOwner, changed);
 }
 
 void TutorialUnits::applyMortarSplash(int impactX, int impactY, int rawDamage, int attackerOwner,
@@ -907,6 +909,7 @@ void TutorialUnits::applyMortarSplash(int impactX, int impactY, int rawDamage, i
             emitVehiclePose(vi);
         }
     }
+    damageBridgesAtImpact(impactX, impactY, 72.0, rawDamage, assets::HitType::Explosive, attackerOwner, changed);
 }
 
 void TutorialUnits::stepCombat(std::vector<SoldierPose>& changed) {

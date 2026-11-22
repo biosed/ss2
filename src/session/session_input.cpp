@@ -1334,6 +1334,26 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
                     }
                 }
             }
+            if (!vids.empty()) {
+                if (const auto targetBr = bridgeAtMap(simX, simY);
+                    targetBr && simulation->canSupportBridge(vids, *targetBr)) {
+                    if (const auto res = simulation->orderSupportBridge(vids, *targetBr); res && *res > 0) {
+                        const auto& lb = liveBridges[*targetBr];
+                        std::erase_if(activeMarkers, [](const TimedMarker& m) { return m.isOrder; });
+                        activeMarkers.push_back({
+                            {{lb.left * mapScale, lb.top * mapScale, lb.width * mapScale, lb.height * mapScale},
+                             ss2::MarkerKind::move},
+                            std::chrono::steady_clock::now() + std::chrono::milliseconds(700),
+                            std::nullopt,
+                            true
+                        });
+                        syncMarkers();
+                        playSelectionVoice("move");
+                        showNotice(ss2::tr("Supply truck repairing bridge..."), ss2::NoticeKind::accepted);
+                        return;
+                    }
+                }
+            }
             if (!ids.empty() && simulation->canDisarmMineAt(ids, simX, simY)) {
                 if (const auto res = simulation->orderDisarmMine(ids, simX, simY); res && *res > 0) {
                     std::erase_if(activeMarkers, [](const TimedMarker& m) { return m.isOrder; });
@@ -1365,6 +1385,7 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
         const auto targetInf = selection->infantryAt(int(std::floor(x)), int(std::floor(y)));
         const auto targetVeh = selection->vehicleAt(int(std::floor(x)), int(std::floor(y)));
         const auto hoverBld = (!targetInf && !targetVeh) ? buildingAtMap(simX, simY) : std::nullopt;
+        const auto hoverBridge = (!targetInf && !targetVeh && !hoverBld) ? bridgeAtMap(simX, simY) : std::nullopt;
         const bool hasAny = !ids.empty() || !pickedVeh.empty();
         const bool hasGarrisonCmd = !hasAny && selectedBuilding &&
                                     *selectedBuilding < liveBuildings.size() &&
@@ -1396,6 +1417,7 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
              vehicleScene->vehicles().at(*targetVeh).owner == localOwner() &&
              simulation->canSupportVehicle(pvids, *targetVeh)) ||
             (!pvids.empty() && hoverBld && simulation->canSupportBuilding(pvids, *hoverBld)) ||
+            (!pvids.empty() && hoverBridge && simulation->canSupportBridge(pvids, *hoverBridge)) ||
             (hasAny && targetInf && scene->units().at(*targetInf).owner == 0 &&
              simulation->canHealSoldier(ids, pvids, *targetInf));
         const bool canEscortHover =

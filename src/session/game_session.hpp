@@ -141,6 +141,17 @@ struct GameSession {
         bool rubbleStamped{false};
         std::vector<size_t> occupantIds;
     };
+    struct LiveBridge {
+        int x{}, y{}, left{}, top{}, width{}, height{};
+        int hp{3500}, maxHp{3500};
+        int stage{0};
+        bool destroyed{false};
+        int patchLeft{}, patchTop{};
+        assets::MapImage basePatch{};
+        std::array<std::uint8_t, 512> palette{};
+        std::array<std::vector<std::uint8_t>, 5> stageFrames{};
+        int stampedStage{0};
+    };
     struct TimedMarker {
         MapMarker marker;
         std::chrono::steady_clock::time_point until;
@@ -252,6 +263,7 @@ struct GameSession {
     std::vector<int> vehicleTowedBy;
     std::vector<LiveBuilding> liveBuildings;
     std::optional<std::size_t> selectedBuilding;
+    std::vector<LiveBridge> liveBridges;
     assets::CraterCatalog craterCatalog;
     unsigned craterSeed = 1;
     std::map<std::string, assets::MapImage> planeSpriteCache;
@@ -360,6 +372,7 @@ struct GameSession {
     int initialGrenadesForId(std::string_view id) const;
     void applyBuildingRubble(std::size_t bIdx);
     void restoreBuildingIntact(std::size_t bIdx);
+    void applyBridgeStage(std::size_t brIdx, int stage);
     void stampBattleCrater(int simX, int simY, bool large);
     int initialMinesForId(std::string_view id) const;
     static bool isCombatAmmoSoldierId(std::string_view id);
@@ -429,6 +442,7 @@ struct GameSession {
     void doArmPatrol();
     void doArmAttackGround();
     std::optional<std::size_t> buildingAtMap(int simX, int simY) const;
+    std::optional<std::size_t> bridgeAtMap(int simX, int simY) const;
     void doUnloadOrUnhitch();
     void doLayMine();
     void doScatter();

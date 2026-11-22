@@ -287,6 +287,7 @@ void TutorialUnits::triggerMineAtTile(int tx, int ty, std::vector<SoldierPose>& 
                 damageBuilding(bi, 140, assets::HitType::Mine, -1, changed);
             }
         }
+        damageBridgesAtImpact(mx, my, 72.0, 260, assets::HitType::Mine, -1, changed);
     }
     if (antiTank) {
         for (const auto [dx, dy] : std::array<std::pair<int, int>, 4>{{{-1, 0}, {1, 0}, {0, -1}, {0, 1}}}) {

@@ -171,6 +171,10 @@ TutorialUnits::ExtraState TutorialUnits::takeExtraState() const {
     ex.reserveUnits = reserveUnits_;
     ex.evacuatingSoldiers = evacuatingSoldiers_;
     ex.evacuatingVehicles = evacuatingVehicles_;
+    ex.bridges.reserve(bridges_.size());
+    for (const auto& br : bridges_) {
+        ex.bridges.push_back({br.hp, br.stage, br.destroyed});
+    }
     return ex;
 }
 
@@ -196,6 +200,12 @@ bool TutorialUnits::loadSnapshotWithExtra(const Snapshot& snap, const ExtraState
         }
         for (const auto& eo : extra->evacuatingVehicles) {
             if (eo.index >= snap.vehicles.size()) return false;
+        }
+        if (!extra->bridges.empty() && extra->bridges.size() != bridges_.size()) {
+            return false;
+        }
+        for (const auto& bs : extra->bridges) {
+            if (bs.stage < 0 || bs.stage > 4) return false;
         }
     }
     if (!snap.buildings.empty() && snap.buildings.size() != buildings_.size()) {
@@ -274,6 +284,7 @@ bool TutorialUnits::loadSnapshotWithExtra(const Snapshot& snap, const ExtraState
     projectiles_.clear();
     mineEvents_.clear();
     buildingUpdates_.clear();
+    bridgeUpdates_.clear();
     vehiclePoses_.clear();
     sorties_.clear();
     sortiePoses_.clear();
@@ -408,6 +419,7 @@ bool TutorialUnits::loadSnapshotWithExtra(const Snapshot& snap, const ExtraState
         v.facingTargetDir.reset();
         v.supportTargetVehicle.reset();
         v.supportTargetBuilding.reset();
+        v.supportTargetBridge.reset();
         v.supportTargetSoldier.reset();
         v.escortVehicleTarget.reset();
         v.escortSoldierTarget.reset();
@@ -502,6 +514,25 @@ bool TutorialUnits::loadSnapshotWithExtra(const Snapshot& snap, const ExtraState
             b.occupants.push_back(static_cast<size_t>(sIdx));
         }
         emitBuildingUpdate(i, false, false);
+    }
+
+    for (size_t i = 0; i < bridges_.size(); ++i) {
+        auto& br = bridges_[i];
+        const int prevStage = br.stage;
+        if (extra && i < extra->bridges.size()) {
+            const auto& bs = extra->bridges[i];
+            br.hp = std::clamp(bs.hp, 0, br.maxHp);
+            br.stage = std::clamp(bs.stage, 0, 4);
+            br.destroyed = bs.destroyed || (br.stage >= 4) || (br.hp == 0);
+        } else {
+            br.hp = br.maxHp;
+            br.stage = 0;
+            br.destroyed = false;
+        }
+        if (prevStage != br.stage) {
+            applyBridgeStageTransition(i, prevStage, br.stage, false, nullptr);
+        }
+        emitBridgeUpdate(i, false, false, false);
     }
 
     if (fog_) {

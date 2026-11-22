@@ -903,6 +903,7 @@ size_t TutorialUnits::orderGroupAttackGround(unsigned group, int mapX, int mapY,
         v.facingTargetDir.reset();
         v.supportTargetVehicle.reset();
         v.supportTargetBuilding.reset();
+        v.supportTargetBridge.reset();
         v.supportTargetSoldier.reset();
         v.escortVehicleTarget.reset();
         v.escortSoldierTarget.reset();
@@ -1001,6 +1002,7 @@ size_t TutorialUnits::transferGroupOwner(unsigned group, int newOwner, std::vect
         v.facingTargetDir.reset();
         v.supportTargetVehicle.reset();
         v.supportTargetBuilding.reset();
+        v.supportTargetBridge.reset();
         v.supportTargetSoldier.reset();
         v.escortVehicleTarget.reset();
         v.escortSoldierTarget.reset();
@@ -1107,6 +1109,7 @@ size_t TutorialUnits::reassignGroupInZone(std::span<const std::uint8_t> zones, u
         v.facingTargetDir.reset();
         v.supportTargetVehicle.reset();
         v.supportTargetBuilding.reset();
+        v.supportTargetBridge.reset();
         v.supportTargetSoldier.reset();
         v.escortVehicleTarget.reset();
         v.escortSoldierTarget.reset();
@@ -1119,7 +1122,7 @@ size_t TutorialUnits::reassignGroupInZone(std::span<const std::uint8_t> zones, u
 
 bool TutorialUnits::isObjectDestroyedAt(int mapX, int mapY) const {
     if (mapX == 0 && mapY == 0) return true;
-    const Building* best = nullptr;
+    std::optional<bool> bestDestroyed;
     double bestDist2 = 1e18;
     for (const auto& b : buildings_) {
         const bool inBox = (mapX >= b.left - 32 && mapX <= b.left + b.width + 32 &&
@@ -1128,13 +1131,24 @@ bool TutorialUnits::isObjectDestroyedAt(int mapX, int mapY) const {
         const double dy = static_cast<double>(mapY - b.y);
         const double dist2 = dx * dx + dy * dy;
         if (!inBox && dist2 > 96.0 * 96.0) continue;
-        if (!best || dist2 < bestDist2) {
-            best = &b;
+        if (!bestDestroyed || dist2 < bestDist2) {
+            bestDestroyed = b.destroyed;
             bestDist2 = dist2;
         }
     }
-    if (!best) return true;
-    return best->destroyed;
+    for (const auto& br : bridges_) {
+        const double dCell = distanceToBridge(br, static_cast<double>(mapX), static_cast<double>(mapY));
+        const double dx = static_cast<double>(mapX - br.x);
+        const double dy = static_cast<double>(mapY - br.y);
+        const double dist2 = dx * dx + dy * dy;
+        if (dCell > 72.0 && dist2 > 96.0 * 96.0) continue;
+        if (!bestDestroyed || dist2 < bestDist2) {
+            bestDestroyed = br.destroyed;
+            bestDist2 = dist2;
+        }
+    }
+    if (!bestDestroyed) return true;
+    return *bestDestroyed;
 }
 
 void TutorialUnits::revealFogAt(int mapX, int mapY, int radiusTiles, int player) {
@@ -1213,7 +1227,7 @@ std::vector<IdleUnit> TutorialUnits::idlePlayerUnits() const {
         if (v.alive && v.hp > 0 && v.owner == viewerOwner_ && v.hasCrew && !v.towedBy && !v.moveTarget &&
             v.waypoints.empty() && !v.attackTarget && !v.attackGround && !v.attackBuildingTarget &&
             !v.pendingTowGun && !v.facingTargetDir && !v.supportTargetVehicle &&
-            !v.supportTargetBuilding && !v.supportTargetSoldier &&
+            !v.supportTargetBuilding && !v.supportTargetBridge && !v.supportTargetSoldier &&
             !v.escortVehicleTarget && !v.escortSoldierTarget && !v.patrolOrigin) {
             out.push_back({true, i});
         }
@@ -1331,6 +1345,9 @@ std::vector<TacticalOrderLine> TutorialUnits::selectionOrderLines(std::span<cons
         } else if (v.supportTargetBuilding && *v.supportTargetBuilding < buildings_.size()) {
             const auto& tb = buildings_[*v.supportTargetBuilding];
             if (!tb.destroyed) pushSeg(v.x, v.y, tb.x, tb.y, TacticalOrderLine::Kind::Support);
+        } else if (v.supportTargetBridge && *v.supportTargetBridge < bridges_.size()) {
+            const auto& tbr = bridges_[*v.supportTargetBridge];
+            if (tbr.hp < tbr.maxHp) pushSeg(v.x, v.y, tbr.x, tbr.y, TacticalOrderLine::Kind::Support);
         } else if (v.supportTargetSoldier && *v.supportTargetSoldier < soldiers_.size()) {
             const auto& ts = soldiers_[*v.supportTargetSoldier];
             if (ts.hp > 0 && !ts.embarked && !ts.garrisonBuilding) {

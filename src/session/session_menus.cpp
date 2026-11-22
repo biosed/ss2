@@ -824,6 +824,16 @@ bool GameSession::loadSaveFromPath(const std::filesystem::path& path, const std:
             else restoreBuildingIntact(bu.index);
         }
     }
+    for (const auto& bru : simulation->pollBridgeUpdates()) {
+        if (bru.index < liveBridges.size()) {
+            auto& lb = liveBridges[bru.index];
+            lb.hp = bru.hp;
+            lb.maxHp = bru.maxHp;
+            lb.stage = bru.stage;
+            lb.destroyed = bru.destroyed;
+            applyBridgeStage(bru.index, bru.stage);
+        }
+    }
     (void)simulation->pollMineEvents();
     liveVisibleMines = simulation->visibleMines();
     (void)simulation->pollAirSorties();

@@ -264,6 +264,19 @@ void GameSession::updateHudAndBeams() {
                 std::clamp(static_cast<float>(b.hp) / static_cast<float>(std::max(1, b.maxHp)), 0.0f, 1.0f)
             });
         }
+        for (std::size_t bri = 0; bri < liveBridges.size(); ++bri) {
+            const auto& br = liveBridges[bri];
+            if (br.hp >= br.maxHp) continue;
+            if (!isBuildingPointVisible(br.x, br.y)) continue;
+            const float barW = static_cast<float>(std::clamp(br.width / 2, 28, 60) * mapScale);
+            const float barY = static_cast<float>((br.top - 5) * mapScale);
+            unitBars.push_back({
+                static_cast<float>(br.x * mapScale),
+                barY,
+                barW,
+                std::clamp(static_cast<float>(br.hp) / static_cast<float>(std::max(1, br.maxHp)), 0.0f, 1.0f)
+            });
+        }
         std::vector<ss2::ZeppelinMarkerStatus> mpZeppelins;
         if (multiplayer.enabled && simulation) {
             mpZeppelins = simulation->zeppelinStatuses();
