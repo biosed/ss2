@@ -40,11 +40,15 @@ jobs:
     steps:
       - run: dnf install -y git gcc-c++ zlib-ng-compat-devel libjpeg-turbo-devel libpng-devel python3 clang compiler-rt cmake ninja-build ccache SDL3-devel pango-devel fontconfig google-noto-sans-fonts ffmpeg-free-devel vulkan-headers vulkan-loader-devel mesa-vulkan-drivers vulkan-validation-layers
       - uses: actions/checkout@v4
-      - uses: actions/cache@v4
+      - name: Compute ccache cache epoch (UTC day)
+        run: echo "DATE_EPOCH=$(date -u -d 'today 00:00' +%s)" >> "$GITHUB_ENV"
+      - name: Restore ccache cache
+        uses: actions/cache/restore@v4
         with:
           path: ~/.cache/ccache
-          key: ccache-${{ matrix.icd_arch }}-${{ matrix.compiler }}-${{ matrix.type }}
+          key: ccache-${{ matrix.icd_arch }}-${{ matrix.compiler }}-${{ matrix.type }}-${{ env.DATE_EPOCH }}
           restore-keys: |
+            ccache-${{ matrix.icd_arch }}-${{ matrix.compiler }}-${{ matrix.type }}-
             ccache-${{ matrix.icd_arch }}-${{ matrix.compiler }}-${{ matrix.type }}
       - run: >
           cmake -S . -B build -G Ninja
@@ -54,6 +58,12 @@ jobs:
           "-DCMAKE_CXX_FLAGS=${{ matrix.flags }}"
           -DSS2_TEST_WINDOW=ON -DSS2_TEST_VALIDATION=ON
       - run: cmake --build build
+      - name: Save ccache cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-${{ matrix.icd_arch }}-${{ matrix.compiler }}-${{ matrix.type }}-${{ env.DATE_EPOCH }}
       - name: ctest
         run: ctest --test-dir build --output-on-failure --no-tests=error 2>&1 | tee ctest.log
         shell: bash
