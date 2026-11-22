@@ -101,7 +101,7 @@ run_toolchain() {
     printf '%s\n' "$out"
     printf '%s\n' "$lock_out"
     printf '%s\n' "$out" | grep '^SIM_DETERMINISM_HASHES ' > "$TMP/hash_$label"
-    printf '%s\n' "$lock_out" | grep -E '^(LOCKSTEP_DETERMINISM_HASH|LOCKSTEP_SKIRMISH_HASH) ' > "$TMP/lockhash_$label"
+    printf '%s\n' "$lock_out" | grep -E '^(LOCKSTEP_DETERMINISM_HASH|LOCKSTEP_SKIRMISH_HASH|LOCKSTEP_4P_2V2_HASH) ' > "$TMP/lockhash_$label"
 }
 
 run_toolchain "arm64_gcc" "" g++ -O3

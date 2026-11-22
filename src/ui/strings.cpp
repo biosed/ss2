@@ -904,6 +904,16 @@ constexpr Entry table[] = {
     {"Chat: {0}", "Tchat : {0}", "Chat: {0}"},
     {"Multiplayer match ended.", "Partie multijoueur terminée.", "Partida multijugador terminada."},
     {"Say ({0}): {1}", "Dire ({0}) : {1}", "Decir ({0}): {1}"},
+    {"Players", "Joueurs", "Jugadores"},
+    {"Teams", "Équipes", "Equipos"},
+    {"2v2", "2c2", "2c2"},
+    {"FFA", "Chacun", "Todos"},
+    {"Allies", "Alliés", "Aliados"},
+    {"Say Allies ({0}): {1}", "Dire aux alliés ({0}) : {1}", "Decir a aliados ({0}): {1}"},
+    {"Team Chat: {0}", "Tchat équipe : {0}", "Chat equipo: {0}"},
+    {"Beacon from {0}!", "Balise de {0} !", "¡Baliza de {0}!"},
+    {"{0} disconnected.", "{0} s'est déconnecté.", "{0} se desconectó."},
+    {"Beacon placed.", "Balise placée.", "Baliza colocada."},
 };
 
 std::atomic<Language> current{Language::english};

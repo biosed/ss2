@@ -410,7 +410,13 @@ void GameSession::initializeMission() {
                       << " scenery placements, " << infantry.size() << " infantry, " << drawnVehicles << " vehicle and gun placements\n";
         } else {
             const auto title = "Sudden Strike II | " + missionPath.stem().string() +
-                (multiplayer.enabled ? (" [MP Seat " + std::to_string(localOwner() + 1) + "]") : "");
+                (multiplayer.enabled
+                    ? (multiplayer.playerCount > 2
+                        ? (" [MP Seat " + std::to_string(localOwner() + 1) + "/" +
+                           std::to_string(multiplayer.playerCount) + " T" +
+                           std::to_string(multiplayer.playerTeams[localOwner() & 3] + 1) + "]")
+                        : (" [MP Seat " + std::to_string(localOwner() + 1) + "]"))
+                    : "");
             SDL_SetWindowTitle(window, title.c_str());
             std::cout << "Mission " << missionPath.stem().string() << ": " << mapWidth << 'x' << mapHeight << ", "
                       << objects << " scenery placements, " << infantry.size() << " infantry, "
@@ -424,7 +430,7 @@ void GameSession::initializeMission() {
                       << gameDir << "; falling back to approximate fog sight rings.\n";
         }
         auto navigation = ss2::InfantryPathGrid::fromSubCellMasks(data.width, data.height, std::move(data.flags), std::move(data.obstacles));
-        missionPlayerTeams = data.playerTeams;
+        missionPlayerTeams = multiplayer.enabled ? multiplayer.playerTeams : data.playerTeams;
         const auto initMines = data.mines;
         const int effDiff = multiplayer.enabled ? 2 : std::clamp(settings.difficulty, 1, 3);
         ss2::TutorialUnits soldiers(std::move(navigation), infantry, vehicles, std::move(fog),
@@ -516,6 +522,12 @@ void GameSession::initializeMission() {
         } else if (multiplayer.enabled) {
             simulation.emplace(ss2::MissionRunner::ManualClock{}, std::move(data), std::move(soldiers));
             if (!recordPath.empty()) simulation->startRecording();
+            mpTransport.emplace(
+                multiplayer.isHost,
+                static_cast<std::uint8_t>(localOwner()),
+                static_cast<std::uint8_t>(multiplayer.playerCount),
+                missionPlayerTeams,
+                multiplayer.peers);
             lockstep.emplace(ss2::LockstepConfig{
                 static_cast<std::uint8_t>(localOwner()),
                 static_cast<std::uint8_t>(multiplayer.playerCount),
@@ -658,10 +670,8 @@ int GameSession::run() {
         if (updateViewTooltipAndPresent()) break;
     }
     resetCursor();
-    if (multiplayer.enabled && multiplayer.peer && multiplayer.peer->isConnected()) {
-        (void)multiplayer.peer->sendPacket(
-            ss2::ByePacket{static_cast<std::uint8_t>(localOwner()), "Session ended"});
-        (void)multiplayer.peer->flush();
+    if (multiplayer.enabled && mpTransport && mpTransport->isActive()) {
+        (void)mpTransport->sendBye(ss2::ByePacket{static_cast<std::uint8_t>(localOwner()), "Session ended"});
     }
     writeRecordingIfRequested();
     std::cout << "Presented " << frames << " frames\n";
@@ -861,14 +871,17 @@ void GameSession::syncGpuSprites() {
 
 bool GameSession::isAllyOwner(int owner) const {
     const int me = localOwner();
-    return owner == me || (owner >= 0 && owner < 4 && owner != 3 &&
-                           missionPlayerTeams[static_cast<std::size_t>(owner)] != 3 &&
-                           missionPlayerTeams[static_cast<std::size_t>(owner)] ==
-                               missionPlayerTeams[static_cast<std::size_t>(me)]);
+    if (owner == me) return true;
+    if (owner < 0 || owner >= 4) return false;
+    if (!multiplayer.enabled && (owner == 3 || missionPlayerTeams[static_cast<std::size_t>(owner)] == 3)) {
+        return false;
+    }
+    return missionPlayerTeams[static_cast<std::size_t>(owner)] ==
+           missionPlayerTeams[static_cast<std::size_t>(me)];
 }
 
 bool GameSession::isHostileOwner(int owner) const {
-    return owner != 3 && !isAllyOwner(owner);
+    return (multiplayer.enabled || owner != 3) && !isAllyOwner(owner);
 }
 
 const char* GameSession::veterancyRank(int expa) {
@@ -1235,7 +1248,10 @@ std::optional<std::pair<size_t, size_t>> GameSession::spawnAndRegisterVehicle(co
     if (!vehicleScene || !simulation || !selection) return std::nullopt;
     const auto vIdx = vehicleScene->spawn(p);
     if (!vIdx) return std::nullopt;
-    const auto& v = vehicleScene->vehicles().at(*vIdx);
+    auto v = vehicleScene->vehicles().at(*vIdx);
+    if (multiplayer.enabled && p.owner >= 0 && p.owner < multiplayer.playerCount) {
+        v.hasCrew = true;
+    }
     ensureUnitPortrait(v.id, true);
     const size_t simVIdx = simulation->spawnVehicle(v);
     int maxVehHp = std::max(1, v.hp);

@@ -23,10 +23,23 @@ std::vector<MenuItem> GameSession::buildPauseItems() {
         }
         if (multiplayer.enabled) {
             const std::uint8_t nat = multiplayer.playerNations[localOwner() & 3];
-            items.push_back({"", ss2::tr("Nation"),
-                             ss2::tr(mpNationName(nat)) + " (#" + std::to_string(localOwner() + 1) + ")", false});
+            std::string natVal = ss2::tr(mpNationName(nat)) + " (#" + std::to_string(localOwner() + 1) + ")";
+            if (multiplayer.playerCount > 2) {
+                natVal += " T" + std::to_string(missionPlayerTeams[localOwner() & 3] + 1);
+            }
+            items.push_back({"", ss2::tr("Nation"), natVal, false});
             if (mpRttMs >= 0) {
                 items.push_back({"", "RTT", std::to_string(mpRttMs) + " ms", false});
+            }
+            if (multiplayer.playerCount > 2) {
+                for (int s = 0; s < std::min(multiplayer.playerCount, 4); ++s) {
+                    const std::string pName = !multiplayer.playerNames[s].empty()
+                        ? multiplayer.playerNames[s]
+                        : ("Player " + std::to_string(s + 1));
+                    const std::string pVal = ss2::tr(mpNationName(multiplayer.playerNations[s])) +
+                        " • T" + std::to_string(missionPlayerTeams[s] + 1);
+                    items.push_back({"", "#" + std::to_string(s + 1) + " " + pName, pVal, false});
+                }
             }
         } else {
             items.push_back({"quicksave", ss2::tr("Quick Save"), "F9", true});

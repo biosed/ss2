@@ -243,6 +243,7 @@ void MissionRunner::configureMultiplayerSkirmish(const MultiplayerSkirmishConfig
             : activeGates[static_cast<std::size_t>(s) % activeGates.size()];
     }
     mpSkirmish_ = std::move(mp);
+    if (auto snap = units_.takeFogSnapshot()) fog_ = std::move(snap);
     auto deferred = std::exchange(deferredMpScriptEvents_, {});
     for (const auto& ev : deferred) {
         handleMpScriptEventLocked(ev);

@@ -422,7 +422,10 @@ void TutorialUnits::stepAirSupport(std::vector<SoldierPose>& changed) {
                 st.payloadsLeft = 0;
                 for (size_t vi = 0; vi < vehicles_.size(); ++vi) {
                     auto& tv = vehicles_[vi];
-                    if (!tv.alive || tv.hp <= 0 || isHostile(st.owner, tv.owner) || tv.owner >= 3) continue;
+                    if (!tv.alive || tv.hp <= 0 || isHostile(st.owner, tv.owner) ||
+                        (!multiplayerSymmetry_ && tv.owner >= 3)) {
+                        continue;
+                    }
                     if (det::detHypot(tv.fx - static_cast<double>(st.targetX),
                                    tv.fy - static_cast<double>(st.targetY)) > 220.0) {
                         continue;
@@ -452,7 +455,7 @@ void TutorialUnits::stepAirSupport(std::vector<SoldierPose>& changed) {
                 for (size_t si = 0; si < soldiers_.size(); ++si) {
                     auto& ss = soldiers_[si];
                     if (ss.hp <= 0 || ss.embarked || ss.garrisonBuilding ||
-                        isHostile(st.owner, ss.owner) || ss.owner >= 3) {
+                        isHostile(st.owner, ss.owner) || (!multiplayerSymmetry_ && ss.owner >= 3)) {
                         continue;
                     }
                     const auto [su, sv] = soldierWorld(ss);

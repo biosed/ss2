@@ -221,6 +221,9 @@ if(BUILD_TESTING)
   add_test(NAME invalid_mp_join_replay COMMAND ${CMAKE_COMMAND} -DPROGRAM=$<TARGET_FILE:ss2>
     "-DARGS=--join;127.0.0.1:27015;--replay;b.ss2rep" "-DEXPECTED=--host/--join cannot be combined with"
     -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_failure.cmake)
+  add_test(NAME invalid_mp_players COMMAND ${CMAKE_COMMAND} -DPROGRAM=$<TARGET_FILE:ss2>
+    "-DARGS=--host;27015;--mission;foo;--mp-players;5" "-DEXPECTED=--mp-players requires 2, 3 or 4"
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_failure.cmake)
   option(SS2_TEST_WINDOW "Present frames during CTest (requires Vulkan WSI)" OFF)
   if(SS2_TEST_WINDOW)
     option(SS2_TEST_VALIDATION "Require Khronos validation in Vulkan tests" OFF)

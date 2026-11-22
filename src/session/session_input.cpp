@@ -10,6 +10,21 @@
 
 namespace ss2 {
 
+void GameSession::placeMpBeacon(int simX, int simY) {
+    if (!multiplayer.enabled || !simulation) return;
+    const auto now = std::chrono::steady_clock::now();
+    if (mpTransport && mpTransport->isActive()) {
+        (void)mpTransport->sendBeacon(
+            ss2::BeaconPacket{static_cast<std::uint8_t>(localOwner()), simX, simY, true});
+        mpTransport->flushAll();
+    }
+    if (activeBeacons.size() >= 6u) activeBeacons.erase(activeBeacons.begin());
+    activeBeacons.push_back({simX, simY, static_cast<std::uint8_t>(localOwner()), now});
+    pushMinimapPing(simX, simY, false);
+    if (audio) audio->playGroup("accept", 0.55f);
+    showNotice(ss2::tr("Beacon placed."), ss2::NoticeKind::accepted);
+}
+
 void GameSession::pollInputEvents() {
     SDL_Event event;
     while (running && SDL_PollEvent(&event)) {
@@ -37,18 +52,20 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
             ? multiplayer.playerNames[localOwner()]
             : (settings.activeProfile.empty() ? std::string("Player") : settings.activeProfile);
         if (mpChatActive) {
+            const char* promptKey = mpChatTeamOnly ? "Say Allies ({0}): {1}" : "Say ({0}): {1}";
             if (event.type == SDL_EVENT_TEXT_INPUT && event.text.text) {
                 for (const unsigned char uc : std::string_view(event.text.text)) {
                     if (uc >= 0x20u && uc != 0x7fu && mpChatDraft.size() < 120u) {
                         mpChatDraft.push_back(static_cast<char>(uc));
                     }
                 }
-                showNotice(ss2::trf("Say ({0}): {1}", {senderName, mpChatDraft + "_"}), ss2::NoticeKind::accepted);
+                showNotice(ss2::trf(promptKey, {senderName, mpChatDraft + "_"}), ss2::NoticeKind::accepted);
                 return;
             }
             if (event.type == SDL_EVENT_KEY_DOWN) {
                 if (event.key.key == SDLK_ESCAPE) {
                     mpChatActive = false;
+                    mpChatTeamOnly = false;
                     mpChatDraft.clear();
                     if (window) SDL_StopTextInput(window);
                     showNotice("", ss2::NoticeKind::accepted);
@@ -60,23 +77,33 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
                         mpChatDraft.pop_back();
                     }
                     if (!mpChatDraft.empty()) mpChatDraft.pop_back();
-                    showNotice(ss2::trf("Say ({0}): {1}", {senderName, mpChatDraft + "_"}), ss2::NoticeKind::accepted);
+                    showNotice(ss2::trf(promptKey, {senderName, mpChatDraft + "_"}), ss2::NoticeKind::accepted);
                     return;
                 }
                 if (event.key.key == SDLK_RETURN || event.key.key == SDLK_KP_ENTER) {
-                    const std::string msg = std::move(mpChatDraft);
+                    std::string msg = std::move(mpChatDraft);
+                    bool teamOnly = mpChatTeamOnly;
                     mpChatDraft.clear();
                     mpChatActive = false;
+                    mpChatTeamOnly = false;
                     if (window) SDL_StopTextInput(window);
+                    if (msg.starts_with("/a ")) {
+                        teamOnly = true;
+                        msg.erase(0, 3);
+                    } else if (msg == "/a") {
+                        msg.clear();
+                    }
                     if (!msg.empty()) {
-                        if (multiplayer.peer && multiplayer.peer->isConnected()) {
-                            (void)multiplayer.peer->sendPacket(
-                                ss2::ChatPacket{static_cast<std::uint8_t>(localOwner()), senderName, msg});
-                            (void)multiplayer.peer->flush();
+                        if (mpTransport && mpTransport->isActive()) {
+                            (void)mpTransport->sendChat(
+                                ss2::ChatPacket{static_cast<std::uint8_t>(localOwner()), senderName, msg, teamOnly});
+                            mpTransport->flushAll();
                         }
-                        const std::string line = senderName + ": " + msg;
+                        const std::string line = (teamOnly ? ("[" + ss2::tr("Allies") + "] ") : std::string{}) +
+                                                 senderName + ": " + msg;
                         logHud(line);
-                        showNotice(ss2::trf("Chat: {0}", {line}), ss2::NoticeKind::accepted);
+                        showNotice(ss2::trf(teamOnly ? "Team Chat: {0}" : "Chat: {0}", {line}),
+                                   ss2::NoticeKind::accepted);
                     } else {
                         showNotice("", ss2::NoticeKind::accepted);
                     }
@@ -87,9 +114,11 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
         } else if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat &&
                    (event.key.key == SDLK_RETURN || event.key.key == SDLK_KP_ENTER)) {
             mpChatActive = true;
+            mpChatTeamOnly = (event.key.mod & SDL_KMOD_SHIFT) != 0;
             mpChatDraft.clear();
             if (window) SDL_StartTextInput(window);
-            showNotice(ss2::trf("Say ({0}): {1}", {senderName, "_"}), ss2::NoticeKind::accepted);
+            showNotice(ss2::trf(mpChatTeamOnly ? "Say Allies ({0}): {1}" : "Say ({0}): {1}", {senderName, "_"}),
+                       ss2::NoticeKind::accepted);
             return;
         }
     }
@@ -304,7 +333,15 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
     if (hud && !briefing.active()) {
         const auto hr = hud->handle(event);
         if (hr.action == ss2::HudAction::moveCamera && hudMapW && hudMapH) {
-            if (simulation && event.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
+            if (multiplayer.enabled && simulation && event.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
+                event.button.button == SDL_BUTTON_LEFT && (SDL_GetModState() & SDL_KMOD_ALT) != 0) {
+                hud->cancelMinimapDrag();
+                const int simX = std::clamp(static_cast<int>(std::lround(hr.u * static_cast<float>(hudMapW))),
+                                            0, static_cast<int>(hudMapW) - 1);
+                const int simY = std::clamp(static_cast<int>(std::lround(hr.v * static_cast<float>(hudMapH))),
+                                            0, static_cast<int>(hudMapH) - 1);
+                placeMpBeacon(simX, simY);
+            } else if (simulation && event.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
                 event.button.button == SDL_BUTTON_LEFT &&
                 (armedAirSupport || attackMoveArmed || patrolArmed)) {
                 hud->cancelMinimapDrag();
@@ -893,6 +930,16 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
             attackMoveArmed = false;
         }
         resetCursor();
+        return;
+    }
+    if (multiplayer.enabled && simulation && !menu.active() && !briefing.active() && !mpChatActive &&
+        event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_LEFT &&
+        (SDL_GetModState() & SDL_KMOD_ALT) != 0) {
+        (void)selection->cancelDrag();
+        const auto [x, y] = renderer.mapPosition(event.button.x, event.button.y);
+        const int simX = std::clamp(static_cast<int>(std::floor(x / mapScale)), 0, static_cast<int>(hudMapW > 0 ? hudMapW - 1 : 0));
+        const int simY = std::clamp(static_cast<int>(std::floor(y / mapScale)), 0, static_cast<int>(hudMapH > 0 ? hudMapH - 1 : 0));
+        placeMpBeacon(simX, simY);
         return;
     }
     if (simulation && event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_RIGHT) {

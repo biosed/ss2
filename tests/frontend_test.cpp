@@ -163,14 +163,27 @@ int main() {
               "Host Start with no multiplayer maps stays put and emits notice");
         check(def.takeNotice().empty(), "notice is cleared after reading");
         check(def.shortcutId('m') == "mp_mode" && def.shortcutId('n') == "mp_nation" &&
+              def.shortcutId('p') == "mp_players" && def.shortcutId('t') == "mp_teams" &&
               def.shortcutId('s') == "mp_start",
-              "Multiplayer advertises M (mode), N (Nation), and S (Start) shortcuts");
+              "Multiplayer advertises M (mode), N (Nation), P (Players), T (Teams), and S (Start) shortcuts");
         check(def.mpNation() == 1u, "Multiplayer defaults nation to German (1)");
         def.activate("mp_nation");
         check(def.mpNation() == 2u, "mp_nation cycles nation to British (2)");
+        check(def.mpPlayerCount() == 2u, "Multiplayer defaults player count to 2");
+        def.activate("mp_players");
+        check(def.mpPlayerCount() == 3u, "mp_players cycles 2 -> 3");
+        def.activate("mp_players");
+        check(def.mpPlayerCount() == 4u, "mp_players cycles 3 -> 4");
+        def.activate("mp_teams");
+        check(def.mpTeam2v2() && def.mpPlayerTeams() == std::array<int, 4>{0, 1, 0, 1},
+              "mp_teams toggles 4P teams to 2v2");
+        def.activate("mp_players");
+        check(def.mpPlayerCount() == 2u, "mp_players wraps 4 -> 2");
         check(def.mpIsHost(), "Multiplayer defaults to Host Match");
         def.activate("mp_mode");
         check(!def.mpIsHost(), "mp_mode toggles to Join Match");
+        def.activate("mp_players");
+        check(def.mpPlayerCount() == 2u, "mp_players is read-only in Join Match mode");
         def.setMpHostAddress("");
         def.activate("mp_start");
         check(def.screen() == FrontEnd::Screen::Multiplayer && !def.takeNotice().empty(),
@@ -186,8 +199,9 @@ int main() {
               "Multiplayer lists installed map items");
         def.activate("mpmap:1");
         check(def.selectedMultiplayerMission() == 1 &&
-              def.launchMultiplayerPath() == "/game/maps/mplay/2x2(101-0)_.smm",
-              "mpmap:1 selects multiplayer map");
+              def.launchMultiplayerPath() == "/game/maps/mplay/2x2(101-0)_.smm" &&
+              def.mpPlayerCount() == 4u && def.mpTeam2v2(),
+              "mpmap:1 selects 2x2 multiplayer map and auto-sets 4P 2v2");
         def.activate("mp_start");
         check(def.screen() == FrontEnd::Screen::LaunchMultiplayer,
               "mp_start enters Screen::LaunchMultiplayer");

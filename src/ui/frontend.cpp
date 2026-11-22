@@ -109,10 +109,43 @@ std::string FrontEnd::launchSavePath() const {
 void FrontEnd::setMultiplayerMissions(std::vector<Entry> missions) {
     mpMissions_ = std::move(missions);
     if (selectedMpMission_ >= mpMissions_.size()) selectedMpMission_ = 0;
+    if (!mpMissions_.empty()) selectMultiplayerMission(selectedMpMission_);
 }
 
 void FrontEnd::selectMultiplayerMission(std::size_t index) {
-    if (index < mpMissions_.size()) selectedMpMission_ = index;
+    if (index >= mpMissions_.size()) return;
+    selectedMpMission_ = index;
+    const std::string nameLow = toLowerAscii(mpMissions_[index].name);
+    const std::string pathLow = toLowerAscii(mpMissions_[index].path);
+    const auto matchesStemPrefix = [&](std::string_view pfx) {
+        return nameLow.starts_with(pfx) ||
+               pathLow.find("/" + std::string(pfx)) != std::string::npos ||
+               pathLow.find("\\" + std::string(pfx)) != std::string::npos;
+    };
+    if (matchesStemPrefix("2x2")) {
+        mpPlayerCount_ = 4;
+        mpTeam2v2_ = true;
+    } else if (matchesStemPrefix("1x1x1")) {
+        mpPlayerCount_ = 3;
+        mpTeam2v2_ = false;
+    } else if (matchesStemPrefix("1x1(")) {
+        mpPlayerCount_ = 2;
+        mpTeam2v2_ = false;
+    }
+}
+
+void FrontEnd::setMpPlayerCount(int count) {
+    mpPlayerCount_ = static_cast<std::uint8_t>(std::clamp(count, 2, 4));
+}
+
+void FrontEnd::cycleMpPlayerCount(int delta) {
+    const int offset = ((static_cast<int>(mpPlayerCount_) - 2) + (delta % 3) + 3) % 3;
+    mpPlayerCount_ = static_cast<std::uint8_t>(2 + offset);
+}
+
+std::array<int, 4> FrontEnd::mpPlayerTeams() const {
+    if (mpPlayerCount_ == 4 && mpTeam2v2_) return {0, 1, 0, 1};
+    return {0, 1, 2, 3};
 }
 
 const FrontEnd::Entry* FrontEnd::selectedMultiplayerMissionEntry() const {
@@ -350,6 +383,10 @@ std::vector<MenuItem> FrontEnd::items() const {
             break;
         case Screen::Multiplayer:
             items.push_back({"mp_mode", tr(mpIsHost_ ? "Host Match" : "Join Match"), "M", true});
+            items.push_back({"mp_players", tr("Players"), std::to_string(mpPlayerCount_), mpIsHost_});
+            items.push_back({"mp_teams", tr("Teams"),
+                             tr(mpPlayerCount_ == 4 && mpTeam2v2_ ? "2v2" : "FFA"),
+                             mpIsHost_ && mpPlayerCount_ == 4});
             if (mpMissions_.empty()) {
                 items.push_back({"mp_none", tr("No multiplayer maps installed."), "", false});
             } else {
@@ -524,6 +561,10 @@ void FrontEnd::activate(const std::string& id) {
                 toggleMpMode();
             } else if (id == "mp_nation") {
                 cycleMpNation(1);
+            } else if (id == "mp_players") {
+                if (mpIsHost_) cycleMpPlayerCount(1);
+            } else if (id == "mp_teams") {
+                if (mpIsHost_ && mpPlayerCount_ == 4) toggleMpTeamMode();
             } else if (id == "mp_start") {
                 if (mpIsHost_ && mpMissions_.empty()) {
                     notice_ = tr("No multiplayer maps installed.");
@@ -635,6 +676,8 @@ std::string FrontEnd::shortcutId(char letter) const {
         case Screen::Multiplayer:
             if (c == 'm') return "mp_mode";
             if (c == 'n') return "mp_nation";
+            if (c == 'p') return "mp_players";
+            if (c == 't') return "mp_teams";
             if (c == 's') return "mp_start";
             break;
         case Screen::CustomCampaigns:

@@ -18,7 +18,7 @@ namespace ss2 {
 class MissionRunner;
 
 inline constexpr std::array<char, 8> kLockstepMagic{'S', 'S', '2', 'N', 'E', 'T', '1', '\0'};
-inline constexpr std::uint32_t kLockstepProtocolVersion = 2u;
+inline constexpr std::uint32_t kLockstepProtocolVersion = 3u;
 inline constexpr std::uint32_t kDefaultTurnTicks = 2u;
 inline constexpr std::uint32_t kDefaultInputDelayTurns = 2u;
 inline constexpr std::uint32_t kDefaultHashIntervalTurns = 5u;
@@ -68,6 +68,7 @@ struct ChatPacket {
     std::uint8_t seat{0};
     std::string sender;
     std::string text;
+    bool teamOnly{false};
 };
 
 struct PingPacket {
@@ -80,8 +81,16 @@ struct PongPacket {
     std::uint64_t echoedTimeMs{0};
 };
 
+struct BeaconPacket {
+    std::uint8_t seat{0};
+    std::int32_t x{0};
+    std::int32_t y{0};
+    bool teamOnly{true};
+};
+
 using LockstepPacket = std::variant<
-    HelloPacket, MatchSetupPacket, TurnBundlePacket, DesyncPacket, ByePacket, ChatPacket, PingPacket, PongPacket>;
+    HelloPacket, MatchSetupPacket, TurnBundlePacket, DesyncPacket, ByePacket, ChatPacket, PingPacket, PongPacket,
+    BeaconPacket>;
 
 enum class LockstepDecodeStatus {
     Ok,

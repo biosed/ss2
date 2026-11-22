@@ -44,6 +44,9 @@ void GameSession::updateHudAndBeams() {
             if (multiplayer.enabled) {
                 prefix += " | ";
                 prefix += ss2::tr(mpNationName(multiplayer.playerNations[localOwner() & 3]));
+                if (multiplayer.playerCount > 2) {
+                    prefix += " T" + std::to_string(missionPlayerTeams[localOwner() & 3] + 1);
+                }
                 if (mpRttMs >= 0) {
                     prefix += " | " + std::to_string(mpRttMs) + "ms";
                 }
@@ -206,7 +209,8 @@ void GameSession::updateHudAndBeams() {
             if (u.hp <= 0 || !u.visible) continue;
             const float du = std::round(std::clamp(static_cast<float>(u.x) * invW, 0.0f, 1.0f) * 256.0f) / 256.0f;
             const float dv = std::round(std::clamp(static_cast<float>(u.y) * invH, 0.0f, 1.0f) * 128.0f) / 128.0f;
-            hs.dots.push_back({du, dv, isHostileOwner(u.owner), isAllyOwner(u.owner) && u.owner != localOwner(), u.owner == 3});
+            hs.dots.push_back({du, dv, isHostileOwner(u.owner), isAllyOwner(u.owner) && u.owner != localOwner(),
+                               !multiplayer.enabled && u.owner == 3});
             const int maxHp = (idx < initialUnitHp.size()) ? initialUnitHp[idx] : 100;
             if (selection->selected().contains(idx) || u.hp < maxHp) {
                 if (u.hp < maxHp && woundedBarLogged.insert(idx).second) {
@@ -228,7 +232,8 @@ void GameSession::updateHudAndBeams() {
             if (!v.alive || v.hp <= 0 || !v.visible) continue;
             const float du = std::round(std::clamp(static_cast<float>(v.x) * invW, 0.0f, 1.0f) * 256.0f) / 256.0f;
             const float dv = std::round(std::clamp(static_cast<float>(v.y) * invH, 0.0f, 1.0f) * 128.0f) / 128.0f;
-            hs.dots.push_back({du, dv, isHostileOwner(v.owner), isAllyOwner(v.owner) && v.owner != localOwner(), v.owner == 3});
+            hs.dots.push_back({du, dv, isHostileOwner(v.owner), isAllyOwner(v.owner) && v.owner != localOwner(),
+                               (!multiplayer.enabled || multiplayer.playerCount < 4) && v.owner == 3});
             const int maxHp = (idx < initialVehicleHp.size()) ? initialVehicleHp[idx] : 100;
             if (selection->selectedVehicles().contains(idx) || v.hp < maxHp) {
                 const float barW = 28.0f * static_cast<float>(mapScale);
@@ -474,10 +479,13 @@ void GameSession::updateHudAndBeams() {
     if (!activeVfx.empty() || !burningWrecks.empty() || !crippledSmokeVehicles.empty() ||
         !movingSmokeVehicles.empty() || !livePlanes.empty() || !orderLines.empty() ||
         previewRing || facePreview || !rangePreviews.empty() || !visibleOnScreenMines.empty() ||
-        !statusBadges.empty() || !beamZeppelins.empty() || vfxWasNonEmpty) {
+        !statusBadges.empty() || !beamZeppelins.empty() || !activeBeacons.empty() || vfxWasNonEmpty) {
         const auto now = std::chrono::steady_clock::now();
         std::erase_if(activeVfx, [&](const ActiveVfx& v) { return now - v.start >= v.duration; });
         std::erase_if(burningWrecks, [&](const BurningWreck& w) { return now >= w.until; });
+        std::erase_if(activeBeacons, [&](const ActiveBeacon& b) {
+            return now - b.start >= std::chrono::milliseconds(4500);
+        });
         std::vector<ss2::MapBeam> beams;
         beams.reserve(visibleOnScreenMines.size() * 2u + statusBadges.size() * 3u + orderLines.size() * 2u +
                       (previewRing ? 18u : 0u) + (facePreview ? 8u : 0u) + rangePreviews.size() * 40u +
@@ -540,6 +548,18 @@ void GameSession::updateHudAndBeams() {
                                      zx - 14.0f * s + fillW, zy - 32.0f * s,
                                      3.0f * s, cr, cg, cb, 0.95f, 0.95f});
                 }
+            }
+            for (const auto& ab : activeBeacons) {
+                if (beams.size() >= 112u) break;
+                const float bx = static_cast<float>(ab.x) * s;
+                const float by = static_cast<float>(ab.y) * s;
+                const float bt = std::clamp(
+                    std::chrono::duration<float>(now - ab.start).count() / 4.5f, 0.0f, 1.0f);
+                const float pulse = 28.0f + 46.0f * std::abs(std::sin(bt * 9.424778f));
+                const float alpha = 0.85f * (1.0f - 0.55f * bt);
+                pushIsoEllipse(bx, by, pulse, 16, 2.0f * s, 105, 212, 235, alpha);
+                beams.push_back({bx, by, bx, by - (34.0f - 10.0f * bt) * s,
+                                 2.6f * s, 244, 186, 78, alpha, alpha * 0.65f});
             }
         }
         for (const auto& ol : orderLines) {

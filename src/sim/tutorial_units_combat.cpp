@@ -146,7 +146,7 @@ void TutorialUnits::applySuppression(size_t soldierIdx, int addTicks, bool allow
 void TutorialUnits::applyVehicleSuppression(size_t vehicleIdx, int addTicks, int threatX, int threatY) {
     if (vehicleIdx >= vehicles_.size() || addTicks <= 0) return;
     auto& tv = vehicles_[vehicleIdx];
-    if (!tv.alive || tv.hp <= 0 || !tv.hasCrew || tv.owner == 3) return;
+    if (!tv.alive || tv.hp <= 0 || !tv.hasCrew || (!multiplayerSymmetry_ && tv.owner == 3)) return;
     int effective = addTicks;
     if (tv.moraleResist >= 10000) {
         effective = std::max(1, addTicks / 4);
@@ -450,7 +450,7 @@ void TutorialUnits::applyVehicleCrewDamage(size_t vehicleIdx, int attackerX, int
                                            int attackerSoldierIdx, int attackerVehicleIdx) {
     if (vehicleIdx >= vehicles_.size() || rawDamage <= 0) return;
     auto& tv = vehicles_[vehicleIdx];
-    if (!tv.alive || tv.hp <= 0 || tv.owner == 3) return;
+    if (!tv.alive || tv.hp <= 0 || (!multiplayerSymmetry_ && tv.owner == 3)) return;
     damageTankDesantRiders(vehicleIdx, rawDamage, hitType, changed, attackerSoldierIdx, attackerVehicleIdx);
     const bool unbuttonedCommander = (hitType == assets::HitType::Sniper) && isVehicleUnbuttoned(tv);
     if (!tv.hasCrew || (!tv.hasCrewProtection && !unbuttonedCommander)) return;
@@ -1449,7 +1449,7 @@ void TutorialUnits::stepOpenTopPassengerFire(std::vector<SoldierPose>& changed) 
 
 void TutorialUnits::reactToAttack(int victimOwner, int victimGroup, int attackerX, int attackerY,
                                   std::optional<size_t> victimVehicleIdx) {
-    if (!autoEngage_ || victimOwner < 0 || victimOwner == 0 || victimOwner == 3 ||
+    if (!autoEngage_ || victimOwner < 0 || victimOwner == 0 || (!multiplayerSymmetry_ && victimOwner == 3) ||
         attackerX < 0 || attackerY < 0) {
         return;
     }

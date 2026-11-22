@@ -601,7 +601,7 @@ size_t TutorialUnits::unloadVehicles(std::span<const size_t> vehicleIds, std::ve
 bool TutorialUnits::canCaptureVehicle(size_t vehicleIdx, int viewerOwner) const {
     if (vehicleIdx >= vehicles_.size() || viewerOwner < 0 || viewerOwner >= 4) return false;
     const auto& v = vehicles_[vehicleIdx];
-    if (!v.alive || v.hp <= 0 || v.owner != 3) return false;
+    if (!v.alive || v.hp <= 0 || v.owner != 3 || (multiplayerSymmetry_ && v.hasCrew)) return false;
     if (viewerOwner == 0 && !multiplayerSymmetry_) return v.visible;
     return !fog_ || (v.spottedMask & static_cast<std::uint8_t>(1u << viewerOwner)) != 0u;
 }

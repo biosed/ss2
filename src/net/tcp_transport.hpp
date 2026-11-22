@@ -2,6 +2,7 @@
 
 #include "sim/lockstep.hpp"
 
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -101,12 +102,21 @@ public:
     const std::string& errorText() const noexcept { return errorText_; }
     const MatchSetupPacket& matchSetup() const noexcept { return setup_; }
     std::shared_ptr<TcpConnection> takeConnection();
+    std::vector<std::shared_ptr<TcpConnection>> takeConnections();
 
 private:
+    struct PendingPeer {
+        std::shared_ptr<TcpConnection> conn;
+        bool helloDone{false};
+        std::uint8_t seat{1};
+    };
+
     bool isHost_{false};
     State state_{State::Idle};
     TcpListener listener_;
     std::shared_ptr<TcpConnection> conn_;
+    std::vector<PendingPeer> pendingPeers_;
+    std::vector<std::shared_ptr<TcpConnection>> readyPeers_;
     MatchSetupPacket setup_{};
     std::string playerName_{"Player 2"};
     std::uint64_t expectedMapHash_{0};
@@ -114,6 +124,50 @@ private:
     bool helloSent_{false};
     std::string statusText_;
     std::string errorText_;
+};
+
+// Star Host-Relay lockstep transport supporting 2-4 players: the Host (seat 0) relays
+// TurnBundles, global/team ChatPackets, BeaconPackets, DesyncPackets, and ByePackets
+// across seats 1..playerCount-1 and answers/tracks per-peer RTT pings.
+class StarRelayTransport {
+public:
+    struct PollResult {
+        std::vector<LockstepPacket> localPackets;
+        std::vector<std::uint8_t> disconnectedSeats;
+        int maxRttMs{-1};
+    };
+
+    StarRelayTransport() = default;
+    StarRelayTransport(bool isHost,
+                       std::uint8_t localSeat,
+                       std::uint8_t playerCount,
+                       std::array<int, 4> playerTeams,
+                       std::vector<std::shared_ptr<TcpConnection>> peers);
+
+    bool isActive() const noexcept;
+    bool isHost() const noexcept { return isHost_; }
+    bool sendTurnBundle(const TurnBundlePacket& bundle);
+    bool sendChat(const ChatPacket& chat);
+    bool sendBeacon(const BeaconPacket& beacon);
+    bool sendDesync(const DesyncPacket& desync);
+    bool sendBye(const ByePacket& bye);
+    void sendPingsIfDue(std::uint64_t nowMs, std::uint32_t& pingSeq);
+    void flushAll();
+    PollResult poll(std::uint64_t nowMs);
+
+private:
+    bool allied(std::uint8_t a, std::uint8_t b) const noexcept;
+    bool sendBroadcast(const LockstepPacket& packet);
+
+    bool isHost_{false};
+    std::uint8_t localSeat_{0};
+    std::uint8_t playerCount_{2};
+    std::array<int, 4> playerTeams_{0, 1, 2, 3};
+    std::vector<std::shared_ptr<TcpConnection>> peers_;
+    std::vector<bool> peerDisconnected_;
+    std::vector<int> peerRttMs_;
+    std::uint64_t lastPingSentMs_{0};
+    bool pingSentYet_{false};
 };
 
 } // namespace ss2

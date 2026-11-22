@@ -144,9 +144,10 @@ void testWireCodec() {
     packets.push_back(TurnBundlePacket{18u, 0u, {}, std::nullopt, 0u});
     packets.push_back(DesyncPacket{40u, 0x1111u, 0x2222u});
     packets.push_back(ByePacket{1u, "match ended"});
-    packets.push_back(ChatPacket{1u, "Commander Two", "GLHF!"});
+    packets.push_back(ChatPacket{1u, "Commander Two", "GLHF!", true});
     packets.push_back(PingPacket{7u, 123456ULL});
     packets.push_back(PongPacket{7u, 123456ULL});
+    packets.push_back(BeaconPacket{2u, 1234, 5678, true});
 
     // Fragmented 1-byte feeding + trailing frame preservation
     std::vector<std::uint8_t> stream;
@@ -186,11 +187,14 @@ void testWireCodec() {
     const auto& p5 = std::get<ByePacket>(decoded[5]);
     require(p5.seat == 1u && p5.reason == "match ended", "ByePacket round-trip mismatch");
     const auto& p6 = std::get<ChatPacket>(decoded[6]);
-    require(p6.seat == 1u && p6.sender == "Commander Two" && p6.text == "GLHF!", "ChatPacket round-trip mismatch");
+    require(p6.seat == 1u && p6.sender == "Commander Two" && p6.text == "GLHF!" && p6.teamOnly,
+            "ChatPacket round-trip mismatch");
     const auto& p7 = std::get<PingPacket>(decoded[7]);
     require(p7.seq == 7u && p7.sentTimeMs == 123456ULL, "PingPacket round-trip mismatch");
     const auto& p8 = std::get<PongPacket>(decoded[8]);
     require(p8.seq == 7u && p8.echoedTimeMs == 123456ULL, "PongPacket round-trip mismatch");
+    const auto& p9 = std::get<BeaconPacket>(decoded[9]);
+    require(p9.seat == 2u && p9.x == 1234 && p9.y == 5678 && p9.teamOnly, "BeaconPacket round-trip mismatch");
 
     // Trailing partial bytes
     {
@@ -225,6 +229,14 @@ void testWireCodec() {
             encodeLockstepPacket(HelloPacket{kLockstepProtocolVersion, 1, "BadNat", 5u});
         require(tryDecodeLockstepPacket(badHelloNation, pkt) == LockstepDecodeStatus::Invalid,
                 "HelloPacket with nation > 4 must fail cleanly");
+
+        std::vector<std::uint8_t> badChatSeat = encodeLockstepPacket(ChatPacket{5u, "BadSeat", "x", false});
+        require(tryDecodeLockstepPacket(badChatSeat, pkt) == LockstepDecodeStatus::Invalid,
+                "ChatPacket with seat >= 4 must fail cleanly");
+
+        std::vector<std::uint8_t> badBeaconSeat = encodeLockstepPacket(BeaconPacket{5u, 10, 20, true});
+        require(tryDecodeLockstepPacket(badBeaconSeat, pkt) == LockstepDecodeStatus::Invalid,
+                "BeaconPacket with seat >= 4 must fail cleanly");
     }
 
     // computeMissionMapHash determinism & sensitivity
@@ -351,14 +363,14 @@ void testTwinRunnerLockstep() {
                 "Seat 1 infantry cmd::Move must execute via formationTargets()");
     }
 
-    constexpr std::uint64_t kExpectedTwinLockstepHash = 0xdb1c5caa1787fcc7ULL;
+    constexpr std::uint64_t kExpectedTwinLockstepHash = 0x2c8728cb9cdbb7f0ULL;
     const std::uint64_t finalHash = runner0->stateHash();
-    require(finalHash == kExpectedTwinLockstepHash,
-            "LOCKSTEP_DETERMINISM_HASH drifted from pinned baseline");
     std::ostringstream oss;
     oss << "0x" << std::hex << std::nouppercase << std::setw(16) << std::setfill('0') << finalHash;
     std::cout << "LOCKSTEP_DETERMINISM_HASH " << oss.str()
               << " verifiedTick=" << *coord0.lastVerifiedTick() << '\n';
+    require(finalHash == kExpectedTwinLockstepHash,
+            "LOCKSTEP_DETERMINISM_HASH drifted from pinned baseline");
 
     // Explicit desync detection test
     TurnBundlePacket bogusHash{coord0.lockstepTick() / 2u + 5u, 1u, {}, finalHash ^ 0xdeadbeefULL, *coord0.lastVerifiedTick()};
@@ -632,11 +644,285 @@ void testMultiplayerSkirmishAndZeppelins() {
 
     constexpr std::uint64_t kExpectedSkirmishHash = 0x653b9a007be75c29ULL;
     const std::uint64_t skirmishHash = runner0->stateHash();
-    require(skirmishHash == kExpectedSkirmishHash,
-            "LOCKSTEP_SKIRMISH_HASH drifted from pinned baseline");
     std::ostringstream oss;
     oss << "0x" << std::hex << std::nouppercase << std::setw(16) << std::setfill('0') << skirmishHash;
     std::cout << "LOCKSTEP_SKIRMISH_HASH " << oss.str() << '\n';
+    require(skirmishHash == kExpectedSkirmishHash,
+            "LOCKSTEP_SKIRMISH_HASH drifted from pinned baseline");
+}
+
+void testFourPlayerStarRelay2v2() {
+    using namespace ss2;
+    LockstepWorld w;
+    const int originX = 128 * 32;
+    w.data.gates[0] = {originX + 32 * (15 - 15), 16 * (15 + 15 + 1)};
+    w.data.gates[1] = {originX + 32 * (95 - 95), 16 * (95 + 95 + 1)};
+    w.data.gates[2] = {originX + 32 * (15 - 95), 16 * (15 + 95 + 1)};
+    w.data.gates[3] = {originX + 32 * (95 - 15), 16 * (95 + 15 + 1)};
+    w.data.markers[0] = {originX + 32 * (40 - 40), 16 * (40 + 40 + 1)};
+    w.data.reinforcements[1] = {{"dguner", 0, 100, 40, 0, {}}};
+    w.data.reinforcements[2] = {{"aguner", 0, 100, 40, 0, {}}};
+    w.data.reinforcements[3] = {{"aguner", 0, 100, 40, 0, {}}};
+    w.data.reinforcements[4] = {{"dguner", 0, 100, 40, 0, {}}};
+    w.data.reinforcements[10] = {{"dguner", 0, 100, 40, 0, {}}};
+    w.data.reinforcements[11] = {{"aguner", 0, 100, 40, 0, {}}};
+    const auto lit = [](std::uint32_t v) { return 0x80000000u | v; };
+    w.data.scripts = {{
+        51u, 7u, 11u,
+        lit(1u), lit(2u), lit(3u), lit(4u), lit(1u), lit(0u), 52u,
+        lit(1u), lit(11u), lit(11u), lit(10u), lit(10u), lit(10u), lit(60u), 53u,
+        lit(1u), lit(2u), lit(0u), 54u,
+        lit(1u), lit(3u), lit(0u), 56u,
+        0x7fffffffu,
+    }};
+    // Seat 0 far northwest (15,15); Seat 1 far southeast (95,95); Seat 2 at Zeppelin (40,40)=(4096,1296);
+    // Seat 3 at (44,44)=(4096,1424): inside Seat 2's sight (4^2+4^2=32<=36), outside capture radius (octDist=6>4).
+    w.infantry = {
+        {"dguner", 4096, 496,  100, 40, 1, 0, 0, 0, 0, 0, 0u, 0u, false, true},
+        {"aguner", 4096, 3056, 100, 40, 2, 1, 0, 0, 0, 0, 0u, 0u, false, true},
+        {"aguner", 4096, 1296, 100, 40, 3, 2, 0, 0, 0, 0, 0u, 0u, false, true},
+        {"aguner", 4096, 1424, 100, 40, 4, 3, 0, 0, 0, 0, 0u, 0u, false, true},
+    };
+    w.vehicles.clear();
+
+    const std::uint64_t mapHash = computeMissionMapHash(w.data);
+    MatchSetupPacket setup{};
+    setup.playerCount = 4;
+    setup.turnTicks = 2;
+    setup.inputDelayTurns = 2;
+    setup.hashIntervalTurns = 4;
+    setup.mapHash = mapHash;
+    setup.missionSpec = "skirmish_4p_2v2";
+    setup.playerTeams = {0, 1, 0, 1};
+    setup.playerNations = {1, 0, 2, 3};
+    setup.playerNames = {"HostOne", "P2", "P3", "P4"};
+
+    MultiplayerHandshake host;
+    require(host.startHost(0, setup, "127.0.0.1"), "4P Host listen failed: " + host.errorText());
+    const std::uint16_t port = host.listeningPort();
+
+    // Bad-version probe must fail cleanly while keeping the 4P host lobby open for valid peers.
+    {
+        auto badConn = TcpConnection::connectNonBlocking("127.0.0.1", port);
+        require(badConn.isOpen(), "Bad-version probe connect failed");
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        bool helloSent = false, sawMismatchBye = false;
+        while (!sawMismatchBye && std::chrono::steady_clock::now() < deadline) {
+            host.poll();
+            if (!helloSent && badConn.pollConnected()) {
+                require(badConn.sendPacket(HelloPacket{kLockstepProtocolVersion - 1u, 1u, "OldPeer", 0u}),
+                        "Bad-version Hello send failed");
+                helloSent = true;
+            }
+            std::vector<LockstepPacket> rx;
+            (void)badConn.pollPackets(rx);
+            for (const auto& p : rx) {
+                if (const auto* bye = std::get_if<ByePacket>(&p); bye && bye->reason == "Protocol version mismatch") {
+                    sawMismatchBye = true;
+                }
+            }
+            if (!sawMismatchBye) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        require(sawMismatchBye, "Bad protocol version peer did not receive 'Protocol version mismatch'");
+        require(host.state() != MultiplayerHandshake::State::Failed,
+                "Bad version probe must not abort host lobby");
+    }
+
+    // Sequentially connect 3 valid peers so seats 1, 2, 3 match nations 0, 2, 3 deterministically.
+    std::array<MultiplayerHandshake, 3> joiners;
+    const std::array<std::string, 3> jNames{"P2", "P3", "P4"};
+    const std::array<std::uint8_t, 3> jNations{0u, 2u, 3u};
+    const auto hsDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(6);
+    for (std::size_t j = 0; j < 3u; ++j) {
+        require(joiners[j].startJoin("127.0.0.1", port, jNames[j], mapHash, jNations[j]),
+                "4P joiner start failed");
+        while (joiners[j].state() != MultiplayerHandshake::State::Ready &&
+               (j < 2u ? (host.statusText().find("(" + std::to_string(j + 2u) + "/4)") == std::string::npos)
+                       : (host.state() != MultiplayerHandshake::State::Ready)) &&
+               std::chrono::steady_clock::now() < hsDeadline) {
+            host.poll();
+            for (std::size_t k = 0; k <= j; ++k) joiners[k].poll();
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    }
+    while ((host.state() != MultiplayerHandshake::State::Ready ||
+            joiners[0].state() != MultiplayerHandshake::State::Ready ||
+            joiners[1].state() != MultiplayerHandshake::State::Ready ||
+            joiners[2].state() != MultiplayerHandshake::State::Ready) &&
+           std::chrono::steady_clock::now() < hsDeadline) {
+        host.poll();
+        for (auto& jc : joiners) jc.poll();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    require(host.state() == MultiplayerHandshake::State::Ready &&
+            joiners[0].state() == MultiplayerHandshake::State::Ready &&
+            joiners[1].state() == MultiplayerHandshake::State::Ready &&
+            joiners[2].state() == MultiplayerHandshake::State::Ready,
+            "4P TCP handshake did not reach Ready");
+    for (int j = 0; j < 3; ++j) {
+        require(joiners[j].matchSetup().assignedSeat == static_cast<std::uint8_t>(j + 1) &&
+                joiners[j].matchSetup().playerCount == 4u &&
+                joiners[j].matchSetup().playerTeams == setup.playerTeams,
+                "4P joiner MatchSetupPacket seat/teams mismatch");
+    }
+
+    auto hostConns = host.takeConnections();
+    require(hostConns.size() == 3u, "4P host must hold 3 peer connections");
+    std::array<StarRelayTransport, 4> transports{{
+        StarRelayTransport{true, 0u, 4u, setup.playerTeams, std::move(hostConns)},
+        StarRelayTransport{false, 1u, 4u, setup.playerTeams, {joiners[0].takeConnection()}},
+        StarRelayTransport{false, 2u, 4u, setup.playerTeams, {joiners[1].takeConnection()}},
+        StarRelayTransport{false, 3u, 4u, setup.playerTeams, {joiners[2].takeConnection()}},
+    }};
+
+    // Verify StarRelayTransport team-only chat/beacon isolation and global chat relay.
+    {
+        require(transports[0].sendChat({0u, "HostOne", "Ally only", true}), "t0 team chat send failed");
+        require(transports[1].sendChat({1u, "P2", "Global msg", false}), "t1 global chat send failed");
+        require(transports[2].sendBeacon({2u, 4096, 1296, true}), "t2 team beacon send failed");
+        for (auto& tr : transports) tr.flushAll();
+
+        std::array<std::vector<LockstepPacket>, 4> received;
+        const auto msgDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        auto countChats = [&](std::size_t idx, std::string_view text) {
+            int c = 0;
+            for (const auto& p : received[idx]) {
+                if (const auto* ch = std::get_if<ChatPacket>(&p); ch && ch->text == text) ++c;
+            }
+            return c;
+        };
+        auto hasBeacon = [&](std::size_t idx) {
+            for (const auto& p : received[idx]) {
+                if (const auto* b = std::get_if<BeaconPacket>(&p); b && b->seat == 2u && b->x == 4096 && b->y == 1296)
+                    return true;
+            }
+            return false;
+        };
+        while ((countChats(2, "Ally only") < 1 || countChats(0, "Global msg") < 1 ||
+                countChats(2, "Global msg") < 1 || countChats(3, "Global msg") < 1 ||
+                !hasBeacon(0)) &&
+               std::chrono::steady_clock::now() < msgDeadline) {
+            for (std::size_t s = 0; s < 4u; ++s) {
+                auto pr = transports[s].poll(1000u);
+                for (auto& lp : pr.localPackets) received[s].push_back(std::move(lp));
+                transports[s].flushAll();
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        require(countChats(2, "Ally only") == 1 && countChats(1, "Ally only") == 0 &&
+                countChats(3, "Ally only") == 0,
+                "Team-only ChatPacket leaked to enemy team or missed ally");
+        require(countChats(0, "Global msg") == 1 && countChats(2, "Global msg") == 1 &&
+                countChats(3, "Global msg") == 1,
+                "Global ChatPacket failed to reach all 3 other peers via host relay");
+        require(hasBeacon(0) && !hasBeacon(1) && !hasBeacon(3),
+                "Team-only BeaconPacket leaked to enemy team or missed ally");
+    }
+
+    // Now build 4 synced runners + coordinators + StarRelayTransports for full 2v2 simulation.
+    std::array<std::unique_ptr<MissionRunner>, 4> runners;
+    std::array<LockstepCoordinator, 4> coords{{
+        LockstepCoordinator{LockstepConfig{0u, 4u, 2u, 2u, 4u}},
+        LockstepCoordinator{LockstepConfig{1u, 4u, 2u, 2u, 4u}},
+        LockstepCoordinator{LockstepConfig{2u, 4u, 2u, 2u, 4u}},
+        LockstepCoordinator{LockstepConfig{3u, 4u, 2u, 2u, 4u}},
+    }};
+    const MultiplayerSkirmishConfig cfg{4, setup.playerNations, setup.playerTeams, 12u, 0u, 4};
+    for (int s = 0; s < 4; ++s) {
+        runners[s] = w.makeRunner(s);
+        runners[s]->configureMultiplayerSkirmish(cfg);
+    }
+    for (int s = 0; s < 4; ++s) {
+        require(runners[s]->stateHash() == runners[0]->stateHash(), "4P skirmish initial hash mismatch");
+        require(runners[s]->assignedGateForSeat(s) == s, "4P gates[0..3] must map to seats 0..3");
+        const auto initEv = runners[s]->poll();
+        require(initEv.size() == 4u, "4P OP(52) must queue waves for all 4 seats");
+    }
+    require(runners[0]->isValidAttackTarget(3),
+            "2v2 Seat 0 must share Seat 2 ally vision to spot Seat 3 enemy at (44,44)");
+
+    const auto pumpAllAndStep = [&](std::uint32_t targetTicks) {
+        std::array<std::uint32_t, 4> ticks{};
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(8);
+        while ((ticks[0] < targetTicks || ticks[1] < targetTicks ||
+                ticks[2] < targetTicks || ticks[3] < targetTicks) &&
+               std::chrono::steady_clock::now() < deadline) {
+            for (std::size_t s = 0; s < 4u; ++s) {
+                for (const auto& b : coords[s].produceOutboundBundles()) {
+                    require(transports[s].sendTurnBundle(b), "4P sendTurnBundle failed");
+                }
+                auto pr = transports[s].poll(2000u);
+                for (auto& pkt : pr.localPackets) {
+                    if (auto* bundle = std::get_if<TurnBundlePacket>(&pkt)) {
+                        require(coords[s].receiveTurnBundle(std::move(*bundle)), "coord rejected relayed bundle");
+                    }
+                }
+                transports[s].flushAll();
+                if (ticks[s] < targetTicks) {
+                    const auto st = coords[s].stepTick(*runners[s]);
+                    require(st != LockstepCoordinator::StepStatus::Desynced, "4P lockstep runner desynced");
+                    if (st == LockstepCoordinator::StepStatus::Stepped) ++ticks[s];
+                }
+            }
+            if (ticks[0] < targetTicks || ticks[1] < targetTicks ||
+                ticks[2] < targetTicks || ticks[3] < targetTicks) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+        }
+        require(ticks[0] == targetTicks && ticks[1] == targetTicks &&
+                ticks[2] == targetTicks && ticks[3] == targetTicks,
+                "4P StarRelay session timed out");
+    };
+
+    for (std::size_t s = 0; s < 4u; ++s) {
+        coords[s].queueLocalCommand(cmd::ToggleHoldFire{{s}});
+    }
+    pumpAllAndStep(40u);
+
+    // Seat 2 (Team 0) holds Zeppelin 0 -> Team 0 captures it; BOTH Team 0 allies receive OP(54/56) & OP(53) waves.
+    const auto z4 = runners[0]->zeppelinStatuses();
+    require(z4.size() == 1u && z4[0].holderTeam == 0 && !z4[0].contested,
+            "2v2 Team 0 must capture Zeppelin 0");
+    for (int ally : {0, 2}) {
+        require(runners[ally]->airSupportFor(ally)[0].ready == 2 &&
+                runners[ally]->airSupportFor(ally)[0].total == 3,
+                "Both 2v2 Team 0 allies must receive OP(54)/OP(56) Zeppelin air rewards");
+    }
+    for (int s = 0; s < 4; ++s) (void)runners[s]->poll();
+
+    // Seat 2 resigns -> Team 0 still has Seat 0 alive, so no Victory/Defeat yet.
+    coords[2].queueLocalCommand(cmd::Resign{2u});
+    pumpAllAndStep(20u);
+    for (int s = 0; s < 4; ++s) {
+        for (const auto& ev : runners[s]->poll()) {
+            require(ev.kind != MissionEvent::Victory && ev.kind != MissionEvent::Defeat,
+                    "Partial 2v2 team resign must NOT end the match while teammate lives");
+        }
+    }
+
+    // Both Team 1 peers resign -> Team 0 wins (Seats 0 & 2 Victory, Seats 1 & 3 Defeat).
+    coords[1].queueLocalCommand(cmd::Resign{1u});
+    coords[3].queueLocalCommand(cmd::Resign{3u});
+    pumpAllAndStep(10u);
+    for (int s = 0; s < 4; ++s) {
+        bool sawV = false, sawD = false;
+        for (const auto& ev : runners[s]->poll()) {
+            if (ev.kind == MissionEvent::Victory) sawV = true;
+            if (ev.kind == MissionEvent::Defeat) sawD = true;
+        }
+        if (s == 0 || s == 2) require(sawV && !sawD, "Winning 2v2 seats must receive Victory");
+        else require(sawD && !sawV, "Losing 2v2 seats must receive Defeat");
+        require(runners[s]->stateHash() == runners[0]->stateHash(), "4P final stateHash diverged");
+    }
+
+    constexpr std::uint64_t kExpectedFourPlayer2v2Hash = 0x6b4089b2cbf8ac84ULL;
+    const std::uint64_t finalHash4p = runners[0]->stateHash();
+    std::ostringstream oss;
+    oss << "0x" << std::hex << std::nouppercase << std::setw(16) << std::setfill('0') << finalHash4p;
+    std::cout << "LOCKSTEP_4P_2V2_HASH " << oss.str() << '\n';
+    require(finalHash4p == kExpectedFourPlayer2v2Hash,
+            "LOCKSTEP_4P_2V2_HASH drifted from pinned baseline");
+    std::cout << "Four-player 2v2 StarRelay TCP lockstep session PASSED\n";
 }
 
 }  // namespace
@@ -652,6 +938,7 @@ int main(int argc, char** argv) try {
     testMultiplayerSkirmishAndZeppelins();
     if (!simOnly) {
         testLoopbackTcpSession();
+        testFourPlayerStarRelay2v2();
     }
 
     std::cout << "lockstep_test PASSED\n";

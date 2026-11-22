@@ -12,6 +12,7 @@
 #include "video/movie_player.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <chrono>
 #include <cstdlib>
@@ -258,7 +259,7 @@ std::filesystem::path resolveMultiplayerMissionFromSetup(const std::filesystem::
 }
 
 ss2::MultiplayerSessionConfig makeMultiplayerConfig(const ss2::MultiplayerHandshake& hs,
-                                                    std::shared_ptr<ss2::TcpConnection> peer) {
+                                                    std::vector<std::shared_ptr<ss2::TcpConnection>> peers) {
     ss2::MultiplayerSessionConfig cfg;
     cfg.enabled = true;
     cfg.isHost = hs.isHost();
@@ -268,9 +269,42 @@ ss2::MultiplayerSessionConfig makeMultiplayerConfig(const ss2::MultiplayerHandsh
     cfg.inputDelayTurns = hs.matchSetup().inputDelayTurns;
     cfg.hashIntervalTurns = hs.matchSetup().hashIntervalTurns;
     cfg.playerNations = hs.matchSetup().playerNations;
+    cfg.playerTeams = hs.matchSetup().playerTeams;
     cfg.playerNames = hs.matchSetup().playerNames;
-    cfg.peer = std::move(peer);
+    cfg.peers = std::move(peers);
     return cfg;
+}
+
+std::optional<int> parseMpPlayersArg(std::string_view raw) {
+    if (raw == "2") return 2;
+    if (raw == "3") return 3;
+    if (raw == "4") return 4;
+    return std::nullopt;
+}
+
+std::optional<std::array<int, 4>> parseMpTeamsArg(std::string_view raw) {
+    std::string low;
+    low.reserve(raw.size());
+    for (unsigned char c : raw) low.push_back(static_cast<char>(std::tolower(c)));
+    if (low == "ffa") return std::array<int, 4>{0, 1, 2, 3};
+    if (low == "2v2") return std::array<int, 4>{0, 1, 0, 1};
+    int commaCount = 0;
+    for (char ch : low) {
+        if (ch == ',') ++commaCount;
+    }
+    if (commaCount != 3) return std::nullopt;
+    std::array<int, 4> teams{};
+    std::size_t pos = 0;
+    for (int i = 0; i < 4; ++i) {
+        const std::size_t comma = low.find(',', pos);
+        const std::string_view tok = (comma == std::string_view::npos)
+            ? std::string_view(low).substr(pos)
+            : std::string_view(low).substr(pos, comma - pos);
+        if (tok.size() != 1u || tok[0] < '0' || tok[0] > '3') return std::nullopt;
+        teams[static_cast<std::size_t>(i)] = tok[0] - '0';
+        pos = (comma == std::string_view::npos) ? low.size() : (comma + 1u);
+    }
+    return teams;
 }
 
 std::optional<std::uint8_t> parseMpNationArg(std::string_view raw) {
@@ -459,9 +493,10 @@ std::optional<FrontEndResult> runFrontEnd(SDL_Window* window, ss2::ValidationRep
                     const auto md = ss2::assets::readMissionData(mpMissionPath);
                     ss2::MatchSetupPacket setup;
                     setup.assignedSeat = 1;
-                    setup.playerCount = 2;
+                    setup.playerCount = goldFe.state().mpPlayerCount();
                     setup.mapHash = ss2::computeMissionMapHash(md);
                     setup.missionSpec = mpMissionPath.stem().string();
+                    setup.playerTeams = goldFe.state().mpPlayerTeams();
                     setup.autoEngage = true;
                     setup.playerNations[0] = goldFe.state().mpNation();
                     setup.playerNames[0] = settings.activeProfile.empty() ? std::string("Player 1") : settings.activeProfile;
@@ -512,7 +547,7 @@ std::optional<FrontEndResult> runFrontEnd(SDL_Window* window, ss2::ValidationRep
                         if (!hs.isHost()) {
                             mpMissionPath = resolveMultiplayerMissionFromSetup(gameDir, hs.matchSetup(), {});
                         }
-                        auto mpCfg = makeMultiplayerConfig(hs, hs.takeConnection());
+                        auto mpCfg = makeMultiplayerConfig(hs, hs.takeConnections());
                         return FrontEndResult{std::move(mpMissionPath), std::nullopt, {}, std::nullopt, std::move(mpCfg)};
                     } catch (const std::exception& e) {
                         goldFe.handleKey(SDLK_ESCAPE);
@@ -554,17 +589,21 @@ int main(int argc, char** argv) try {
     std::optional<std::uint16_t> mpHostPort;
     std::optional<std::pair<std::string, std::uint16_t>> mpJoinEndpoint;
     std::optional<std::uint8_t> cliMpNation;
+    std::optional<int> cliMpPlayers;
+    std::optional<std::array<int, 4>> cliMpTeams;
     for (int i = 1; i < argc; ++i) {
         const std::string_view arg(argv[i]);
         if (arg == "--help") {
-            std::cout << "ss2 [--game-dir DIR] [--mission FILE.ssm|NAME|INDEX] [--campaign QUERY] [--overview] [--list-missions] [--list-campaigns] [--list-multiplayer] [--host PORT | --join HOST:PORT] [--mp-nation NATION] [--hd-pack DIR] [--original-infantry] [--no-auto-engage] [--difficulty easy|normal|hard] [--record FILE | --replay FILE | --load-save FILE] [--4k] [--fullscreen | --windowed] [--lang en|fr|es] [--frames N] [--no-movies] [--validate] [--timing]\n"
+            std::cout << "ss2 [--game-dir DIR] [--mission FILE.ssm|NAME|INDEX] [--campaign QUERY] [--overview] [--list-missions] [--list-campaigns] [--list-multiplayer] [--host PORT | --join HOST:PORT] [--mp-nation NATION] [--mp-players 2|3|4] [--mp-teams ffa|2v2|T0,T1,T2,T3] [--hd-pack DIR] [--original-infantry] [--no-auto-engage] [--difficulty easy|normal|hard] [--record FILE | --replay FILE | --load-save FILE] [--4k] [--fullscreen | --windowed] [--lang en|fr|es] [--frames N] [--no-movies] [--validate] [--timing]\n"
                          "--game-dir opens Tutorial I (or --mission) from an extracted Gold 2.2 game directory.\n"
                          "--list-missions lists all installed single-player missions, their map sizes and descriptions.\n"
                          "--list-campaigns lists all installed campaigns and missions.\n"
                          "--list-multiplayer lists all installed multiplayer missions (maps/mplay/*.smm).\n"
-                         "--host PORT hosts a 2-player lockstep TCP match on PORT with --mission.\n"
-                         "--join HOST:PORT joins a 2-player lockstep TCP match at HOST:PORT.\n"
+                         "--host PORT hosts a 2-4 player lockstep TCP match on PORT with --mission.\n"
+                         "--join HOST:PORT joins a lockstep TCP match at HOST:PORT.\n"
                          "--mp-nation NATION selects the multiplayer faction (russian, german, british, us, japanese).\n"
+                         "--mp-players N sets the hosted player count (2, 3 or 4).\n"
+                         "--mp-teams SPEC sets hosted team assignment (ffa, 2v2 or T0,T1,T2,T3 with 0..3).\n"
                          "--mission launches a playable mission (file path, display name or 1-based index), or displays its overview if no game directory is given or --overview is set.\n"
                          "--campaign launches a playable campaign mission (e.g. german:1, british:5, 031000, or unique title substring).\n"
                          "--overview displays only the mission's JPEG overview instead of launching playable.\n"
@@ -597,6 +636,12 @@ int main(int argc, char** argv) try {
         } else if (arg == "--mp-nation" && i + 1 < argc) {
             cliMpNation = parseMpNationArg(argv[++i]);
             if (!cliMpNation) throw std::invalid_argument("--mp-nation requires russian, german, british, us or japanese");
+        } else if (arg == "--mp-players" && i + 1 < argc) {
+            cliMpPlayers = parseMpPlayersArg(argv[++i]);
+            if (!cliMpPlayers) throw std::invalid_argument("--mp-players requires 2, 3 or 4");
+        } else if (arg == "--mp-teams" && i + 1 < argc) {
+            cliMpTeams = parseMpTeamsArg(argv[++i]);
+            if (!cliMpTeams) throw std::invalid_argument("--mp-teams requires ffa, 2v2, or four comma-separated team IDs (0..3)");
         }
         else if (arg == "--overview") overviewOnly = true;
         else if (arg == "--no-movies") noMovies = true;
@@ -647,6 +692,9 @@ int main(int argc, char** argv) try {
     }
     if (mpHostPort && mission.empty()) {
         throw std::invalid_argument("--host requires --mission");
+    }
+    if ((cliMpPlayers || cliMpTeams) && !mpHostPort) {
+        throw std::invalid_argument("--mp-players and --mp-teams can only be used with --host");
     }
     std::optional<ss2::DecodedSaveFile> parsedSave;
     if (!loadSavePath.empty()) {
@@ -866,18 +914,28 @@ int main(int argc, char** argv) try {
         if (mpHostPort) {
             const auto md = ss2::assets::readMissionData(mission);
             ss2::MatchSetupPacket setup;
+            const int hostPlayers = cliMpPlayers.value_or(2);
             setup.assignedSeat = 1;
-            setup.playerCount = 2;
+            setup.playerCount = static_cast<std::uint8_t>(hostPlayers);
             setup.mapHash = ss2::computeMissionMapHash(md);
             setup.missionSpec = mission.stem().string();
+            if (cliMpTeams) {
+                setup.playerTeams = *cliMpTeams;
+            } else if (hostPlayers == 4) {
+                std::string stemLow = setup.missionSpec;
+                for (char& ch : stemLow) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+                setup.playerTeams = stemLow.starts_with("2x2")
+                    ? std::array<int, 4>{0, 1, 0, 1}
+                    : std::array<int, 4>{0, 1, 2, 3};
+            }
             setup.autoEngage = autoEngage;
             setup.playerNations[0] = cliMpNation.value_or(1u);
             setup.playerNames[0] = settings.activeProfile.empty() ? std::string("Player 1") : settings.activeProfile;
             if (!hs.startHost(*mpHostPort, std::move(setup))) {
                 throw std::runtime_error(hs.errorText());
             }
-            std::cout << "Hosting lockstep multiplayer on port " << hs.listeningPort()
-                      << " (" << hs.matchSetup().missionSpec << ")\n";
+            std::cout << "Hosting lockstep multiplayer (" << hostPlayers << " players) on port "
+                      << hs.listeningPort() << " (" << hs.matchSetup().missionSpec << ")\n";
         } else {
             std::uint64_t expectedHash = 0;
             if (!mission.empty()) {
@@ -911,7 +969,7 @@ int main(int argc, char** argv) try {
             mission = resolveMultiplayerMissionFromSetup(gameDir, hs.matchSetup(), mission);
             autoEngage = hs.matchSetup().autoEngage;
         }
-        mpConfig = makeMultiplayerConfig(hs, hs.takeConnection());
+        mpConfig = makeMultiplayerConfig(hs, hs.takeConnections());
     } else if (mission.empty() && !gameDir.empty() && !overviewOnly && !limit && !timing && !parsedReplay && !parsedSave) {
         auto chosen = runFrontEnd(window.get(), validate ? &report : nullptr, gameDir, settings, persistSettings);
         if (!chosen) return 0;

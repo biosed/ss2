@@ -91,22 +91,22 @@ On the original ARM64 development host the Fedora layer was staged privately. To
 
 ### What the suite contains
 
-Fifty-eight tests are registered. Which of them run depends on the configuration:
+Fifty-nine tests are registered. Which of them run depends on the configuration:
 
 | Configuration | Tests | Notes |
 | --- | --- | --- |
-| Default (`--preset release`) | 32 | Asset fixtures, movement, combat, `combat_parity`, `sim_determinism`, `visibility_parity`, `command_replay` (`stateHash()`), `lockstep`, HiDPI/frontend/`save_file`/movie/mission/string fixtures, clock and CLI checks |
-| `-DSS2_PRIVATE_GAME=DIR` | 44 | Adds the twelve private-gated retail tests that need the Gold installation |
-| `-DSS2_TEST_WINDOW=ON` | 43 | Adds the eleven window and WSI tests |
-| `-DSS2_TEST_WINDOW=ON -DSS2_TEST_VALIDATION=ON` (`--preset validation`) | 44 | Adds `missing_validation_layer` as the 12th validation/window check (requires the Khronos layer) |
-| `-DSS2_PRIVATE_GAME=DIR -DSS2_TEST_WINDOW=ON` | 57 | Both sets above plus `gold_cli_record_replay` (`--record` / `--replay` end-to-end check) and `gold_session_input` |
-| All three | 58 | Everything, on a host with the validation layer |
+| Default (`--preset release`) | 33 | Asset fixtures, movement, combat, `combat_parity`, `sim_determinism`, `visibility_parity`, `command_replay` (`stateHash()`), `lockstep`, HiDPI/frontend/`save_file`/movie/mission/string fixtures, clock and CLI checks |
+| `-DSS2_PRIVATE_GAME=DIR` | 45 | Adds the twelve private-gated retail tests that need the Gold installation |
+| `-DSS2_TEST_WINDOW=ON` | 44 | Adds the eleven window and WSI tests |
+| `-DSS2_TEST_WINDOW=ON -DSS2_TEST_VALIDATION=ON` (`--preset validation`) | 45 | Adds `missing_validation_layer` as the 12th validation/window check (requires the Khronos layer) |
+| `-DSS2_PRIVATE_GAME=DIR -DSS2_TEST_WINDOW=ON` | 58 | Both sets above plus `gold_cli_record_replay` (`--record` / `--replay` end-to-end check) and `gold_session_input` |
+| All three | 59 | Everything, on a host with the validation layer |
 
 The twelve private-gated retail tests are skipped without `-DSS2_PRIVATE_GAME` because they need the purchased installation, which is never committed. The eleven window/WSI tests need a Vulkan WSI surface, the 12th validation check (`missing_validation_layer`) needs the Khronos validation layer to be installed, and the two combined session tests (`gold_cli_record_replay`, `gold_session_input`) require both `-DSS2_PRIVATE_GAME` and `-DSS2_TEST_WINDOW`.
 
 ### Hosted CI
 
-`.github/workflows/linux.yml` defines matrix legs across `ubuntu-24.04` (x86-64) and `ubuntu-24.04-arm` (ARM64) for `g++` Release and `clang++` Debug with AddressSanitizer and UndefinedBehaviorSanitizer inside `fedora:44`. It configures `-DSS2_TEST_WINDOW=ON -DSS2_TEST_VALIDATION=ON` with `SDL_VIDEO_DRIVER=offscreen`, covering all 44 tests that need no private game data. The workflow has never been dispatched: no Git remote is configured for this repository. [Validation record](docs/validation.md)
+`.github/workflows/linux.yml` defines matrix legs across `ubuntu-24.04` (x86-64) and `ubuntu-24.04-arm` (ARM64) for `g++` Release and `clang++` Debug with AddressSanitizer and UndefinedBehaviorSanitizer inside `fedora:44`. It configures `-DSS2_TEST_WINDOW=ON -DSS2_TEST_VALIDATION=ON` with `SDL_VIDEO_DRIVER=offscreen`, covering all 45 tests that need no private game data. The workflow has never been dispatched: no Git remote is configured for this repository. [Validation record](docs/validation.md)
 
 ### Coverage of the combat path
 

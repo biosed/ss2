@@ -1154,11 +1154,12 @@ void TutorialUnits::setPlayerTeams(std::array<int, 4> teams) {
 
 bool TutorialUnits::isHostile(int ownerA, int ownerB) const {
     if (ownerA == ownerB) return false;
-    if (ownerA == 3 || ownerB == 3) return false;
+    if (!multiplayerSymmetry_ && (ownerA == 3 || ownerB == 3)) return false;
     if (ownerA >= 0 && ownerA < 4 && ownerB >= 0 && ownerB < 4) {
         const int teamA = playerTeams_[static_cast<std::size_t>(ownerA)];
         const int teamB = playerTeams_[static_cast<std::size_t>(ownerB)];
-        if (teamA == 3 || teamB == 3 || teamA == teamB) return false;
+        if (!multiplayerSymmetry_ && (teamA == 3 || teamB == 3)) return false;
+        if (teamA == teamB) return false;
     }
     return true;
 }
@@ -1166,9 +1167,9 @@ bool TutorialUnits::isHostile(int ownerA, int ownerB) const {
 bool TutorialUnits::isAlliedFor(int viewer, int owner) const {
     if (viewer < 0 || viewer >= 4) return owner == viewer;
     if (owner == viewer) return true;
-    if (owner < 0 || owner >= 4 || owner == 3) return false;
+    if (owner < 0 || owner >= 4 || (!multiplayerSymmetry_ && owner == 3)) return false;
     const int team = playerTeams_[static_cast<std::size_t>(owner)];
-    return team != 3 && team == playerTeams_[static_cast<std::size_t>(viewer)];
+    return (multiplayerSymmetry_ || team != 3) && team == playerTeams_[static_cast<std::size_t>(viewer)];
 }
 
 bool TutorialUnits::isAlliedWithPlayer(int owner) const {
@@ -1544,7 +1545,7 @@ void TutorialUnits::refreshSpotting(std::vector<SoldierPose>* changed, bool emit
     const auto revealWithAllies = [&](int tileX, int tileY, int r, int owner) {
         if (owner < 0 || owner >= 4) return;
         for (int p = 0; p < 4; ++p) {
-            if (p == owner || (!isHostile(owner, p) && playerTeams_[p] != 3)) {
+            if (p == owner || (!isHostile(owner, p) && (multiplayerSymmetry_ || playerTeams_[p] != 3))) {
                 fog_->revealCircle(tileX, tileY, r, p);
             }
         }

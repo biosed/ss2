@@ -19,6 +19,7 @@ enum class PacketTag : std::uint8_t {
     Chat = 6,
     Ping = 7,
     Pong = 8,
+    Beacon = 9,
 };
 
 void writeU8(std::vector<std::uint8_t>& out, std::uint8_t v) { out.push_back(v); }
@@ -158,6 +159,7 @@ std::vector<std::uint8_t> encodeLockstepPacket(const LockstepPacket& packet) {
                 writeU8(out, p.seat);
                 writeString(out, p.sender);
                 writeString(out, p.text);
+                writeU8(out, p.teamOnly ? 1u : 0u);
             } else if constexpr (std::is_same_v<T, PingPacket>) {
                 writeU8(out, static_cast<std::uint8_t>(PacketTag::Ping));
                 writeU32(out, p.seq);
@@ -166,6 +168,12 @@ std::vector<std::uint8_t> encodeLockstepPacket(const LockstepPacket& packet) {
                 writeU8(out, static_cast<std::uint8_t>(PacketTag::Pong));
                 writeU32(out, p.seq);
                 writeU64(out, p.echoedTimeMs);
+            } else if constexpr (std::is_same_v<T, BeaconPacket>) {
+                writeU8(out, static_cast<std::uint8_t>(PacketTag::Beacon));
+                writeU8(out, p.seat);
+                writeU32(out, static_cast<std::uint32_t>(p.x));
+                writeU32(out, static_cast<std::uint32_t>(p.y));
+                writeU8(out, p.teamOnly ? 1u : 0u);
             }
         },
         packet);
@@ -282,7 +290,7 @@ LockstepDecodeStatus tryDecodeLockstepPacket(std::vector<std::uint8_t>& rxBuffer
     }
     case PacketTag::Bye: {
         ByePacket pkt;
-        if (!r.readU8(pkt.seat) || !r.readString(pkt.reason, 1024u) || !r.atEnd()) {
+        if (!r.readU8(pkt.seat) || pkt.seat >= 4u || !r.readString(pkt.reason, 1024u) || !r.atEnd()) {
             return LockstepDecodeStatus::Invalid;
         }
         outPacket = std::move(pkt);
@@ -290,10 +298,12 @@ LockstepDecodeStatus tryDecodeLockstepPacket(std::vector<std::uint8_t>& rxBuffer
     }
     case PacketTag::Chat: {
         ChatPacket pkt;
-        if (!r.readU8(pkt.seat) || !r.readString(pkt.sender, 64u) ||
-            !r.readString(pkt.text, 256u) || !r.atEnd()) {
+        std::uint8_t teamByte = 0u;
+        if (!r.readU8(pkt.seat) || pkt.seat >= 4u || !r.readString(pkt.sender, 64u) ||
+            !r.readString(pkt.text, 256u) || !r.readU8(teamByte) || !r.atEnd()) {
             return LockstepDecodeStatus::Invalid;
         }
+        pkt.teamOnly = (teamByte != 0u);
         outPacket = std::move(pkt);
         return consumeAndReturn();
     }
@@ -310,6 +320,21 @@ LockstepDecodeStatus tryDecodeLockstepPacket(std::vector<std::uint8_t>& rxBuffer
         if (!r.readU32(pkt.seq) || !r.readU64(pkt.echoedTimeMs) || !r.atEnd()) {
             return LockstepDecodeStatus::Invalid;
         }
+        outPacket = std::move(pkt);
+        return consumeAndReturn();
+    }
+    case PacketTag::Beacon: {
+        BeaconPacket pkt;
+        std::uint32_t rawX = 0u;
+        std::uint32_t rawY = 0u;
+        std::uint8_t teamByte = 0u;
+        if (!r.readU8(pkt.seat) || pkt.seat >= 4u || !r.readU32(rawX) || !r.readU32(rawY) ||
+            !r.readU8(teamByte) || !r.atEnd()) {
+            return LockstepDecodeStatus::Invalid;
+        }
+        pkt.x = static_cast<std::int32_t>(rawX);
+        pkt.y = static_cast<std::int32_t>(rawY);
+        pkt.teamOnly = (teamByte != 0u);
         outPacket = std::move(pkt);
         return consumeAndReturn();
     }

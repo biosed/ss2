@@ -1,5 +1,6 @@
 #include "net/tcp_transport.hpp"
 
+#include <algorithm>
 #include <arpa/inet.h>
 #include <cerrno>
 #include <cstring>
@@ -330,6 +331,11 @@ bool MultiplayerHandshake::startHost(std::uint16_t port,
     isHost_ = true;
     setup_ = std::move(matchTemplate);
     if (setup_.playerCount < 2u || setup_.playerCount > 4u) setup_.playerCount = 2u;
+    for (int s = 0; s < static_cast<int>(setup_.playerCount); ++s) {
+        if (setup_.playerNames[s].empty()) {
+            setup_.playerNames[s] = "Player " + std::to_string(s + 1);
+        }
+    }
     if (!listener_.listen(port, bindAddr)) {
         state_ = State::Failed;
         errorText_ = listener_.lastError();
@@ -337,7 +343,9 @@ bool MultiplayerHandshake::startHost(std::uint16_t port,
         return false;
     }
     state_ = State::Listening;
-    statusText_ = "Listening on port " + std::to_string(listener_.boundPort()) + "...";
+    statusText_ = setup_.playerCount > 2u
+        ? ("Waiting for players (1/" + std::to_string(setup_.playerCount) + ")...")
+        : ("Listening on port " + std::to_string(listener_.boundPort()) + "...");
     return true;
 }
 
@@ -369,54 +377,95 @@ MultiplayerHandshake::State MultiplayerHandshake::poll() {
     if (state_ == State::Idle || state_ == State::Ready || state_ == State::Failed) return state_;
 
     if (isHost_) {
-        if (state_ == State::Listening) {
-            if (auto accepted = listener_.pollAccept()) {
-                conn_ = std::make_shared<TcpConnection>(std::move(*accepted));
-                listener_.close();
-                state_ = State::Exchanging;
-                statusText_ = "Peer connected from " + conn_->peerAddress() + "; waiting handshake...";
+        const std::size_t expectedClients = static_cast<std::size_t>(setup_.playerCount - 1u);
+        while (pendingPeers_.size() < expectedClients) {
+            auto accepted = listener_.pollAccept();
+            if (!accepted) break;
+            std::uint8_t nextSeat = 1u;
+            for (; nextSeat < setup_.playerCount; ++nextSeat) {
+                const bool used = std::any_of(pendingPeers_.begin(), pendingPeers_.end(),
+                    [nextSeat](const PendingPeer& p) { return p.seat == nextSeat; });
+                if (!used) break;
             }
-            return state_;
+            if (nextSeat >= setup_.playerCount) break;
+            PendingPeer peer;
+            peer.conn = std::make_shared<TcpConnection>(std::move(*accepted));
+            peer.helloDone = false;
+            peer.seat = nextSeat;
+            pendingPeers_.push_back(std::move(peer));
         }
-        if (state_ == State::Exchanging) {
+
+        if (!pendingPeers_.empty() && state_ == State::Listening) {
+            state_ = State::Exchanging;
+        }
+
+        for (std::size_t i = 0; i < pendingPeers_.size();) {
+            auto& peer = pendingPeers_[i];
             std::vector<LockstepPacket> packets;
-            if (!conn_ || !conn_->pollPackets(packets)) {
-                state_ = State::Failed;
-                errorText_ = conn_ ? conn_->lastError() : "Lost peer connection";
-                statusText_ = "Handshake failed: " + errorText_;
-                return state_;
-            }
+            const bool pollOk = peer.conn && peer.conn->pollPackets(packets);
+            bool dropPeer = !pollOk;
             for (const auto& pkt : packets) {
                 if (const auto* hello = std::get_if<HelloPacket>(&pkt)) {
                     if (hello->protocolVersion != kLockstepProtocolVersion) {
-                        (void)conn_->sendPacket(ByePacket{0u, "Protocol version mismatch"});
-                        state_ = State::Failed;
-                        errorText_ = "Protocol version mismatch";
-                        statusText_ = errorText_;
-                        return state_;
+                        if (peer.conn) {
+                            (void)peer.conn->sendPacket(ByePacket{0u, "Protocol version mismatch"});
+                            (void)peer.conn->flush();
+                        }
+                        dropPeer = true;
+                        break;
                     }
-                    setup_.assignedSeat = 1u;
-                    setup_.playerNations[1] = hello->nation <= 4u ? hello->nation : 0u;
+                    setup_.playerNations[peer.seat] = hello->nation <= 4u ? hello->nation : 0u;
                     if (!hello->playerName.empty()) {
-                        setup_.playerNames[1] = hello->playerName;
+                        setup_.playerNames[peer.seat] = hello->playerName;
                     }
-                    if (!conn_->sendPacket(setup_)) {
-                        state_ = State::Failed;
-                        errorText_ = conn_->lastError();
-                        statusText_ = "Failed sending MatchSetup: " + errorText_;
-                        return state_;
-                    }
-                    state_ = State::Ready;
-                    statusText_ = "Connected (Seat 0 Host)";
-                    return state_;
-                }
-                if (const auto* bye = std::get_if<ByePacket>(&pkt)) {
-                    state_ = State::Failed;
-                    errorText_ = bye->reason.empty() ? "Peer cancelled handshake" : bye->reason;
-                    statusText_ = errorText_;
-                    return state_;
+                    peer.helloDone = true;
+                } else if (std::get_if<ByePacket>(&pkt)) {
+                    dropPeer = true;
+                    break;
                 }
             }
+            if (dropPeer) {
+                pendingPeers_.erase(pendingPeers_.begin() + static_cast<std::ptrdiff_t>(i));
+                continue;
+            }
+            ++i;
+        }
+
+        std::size_t readyCount = 1u;
+        for (const auto& p : pendingPeers_) {
+            if (p.helloDone) ++readyCount;
+        }
+        statusText_ = "Waiting for players (" + std::to_string(readyCount) + "/" +
+                      std::to_string(setup_.playerCount) + ")...";
+
+        if (pendingPeers_.size() == expectedClients && readyCount == setup_.playerCount) {
+            listener_.close();
+            std::sort(pendingPeers_.begin(), pendingPeers_.end(),
+                      [](const PendingPeer& a, const PendingPeer& b) { return a.seat < b.seat; });
+            readyPeers_.clear();
+            readyPeers_.reserve(expectedClients);
+            for (const auto& p : pendingPeers_) {
+                MatchSetupPacket perPeer = setup_;
+                perPeer.assignedSeat = p.seat;
+                if (!p.conn || !p.conn->sendPacket(perPeer)) {
+                    const std::string err = p.conn ? p.conn->lastError() : "Lost peer";
+                    pendingPeers_.clear();
+                    readyPeers_.clear();
+                    state_ = State::Failed;
+                    errorText_ = err;
+                    statusText_ = "Failed sending MatchSetup: " + errorText_;
+                    return state_;
+                }
+                (void)p.conn->flush();
+                readyPeers_.push_back(p.conn);
+            }
+            pendingPeers_.clear();
+            setup_.assignedSeat = 0u;
+            state_ = State::Ready;
+            statusText_ = setup_.playerCount > 2u
+                ? ("Connected (Seat 1/" + std::to_string(setup_.playerCount) + " Host)")
+                : "Connected (Seat 0 Host)";
+            return state_;
         }
         return state_;
     }
@@ -464,7 +513,10 @@ MultiplayerHandshake::State MultiplayerHandshake::poll() {
                 }
                 setup_ = *setup;
                 state_ = State::Ready;
-                statusText_ = "Connected (Seat " + std::to_string(setup_.assignedSeat) + ")";
+                statusText_ = setup_.playerCount > 2u
+                    ? ("Connected (Seat " + std::to_string(setup_.assignedSeat + 1u) + "/" +
+                       std::to_string(setup_.playerCount) + ")")
+                    : ("Connected (Seat " + std::to_string(setup_.assignedSeat) + ")");
                 return state_;
             }
             if (const auto* bye = std::get_if<ByePacket>(&pkt)) {
@@ -487,6 +539,20 @@ void MultiplayerHandshake::cancel() {
         conn_->close();
         conn_.reset();
     }
+    for (auto& p : pendingPeers_) {
+        if (p.conn) {
+            if (p.conn->isConnected()) (void)p.conn->sendPacket(ByePacket{0u, "Cancelled"});
+            p.conn->close();
+        }
+    }
+    pendingPeers_.clear();
+    for (auto& c : readyPeers_) {
+        if (c) {
+            if (c->isConnected()) (void)c->sendPacket(ByePacket{0u, "Cancelled"});
+            c->close();
+        }
+    }
+    readyPeers_.clear();
     helloSent_ = false;
     state_ = State::Idle;
     errorText_.clear();
@@ -497,7 +563,215 @@ std::uint16_t MultiplayerHandshake::listeningPort() const {
 }
 
 std::shared_ptr<TcpConnection> MultiplayerHandshake::takeConnection() {
+    if (isHost_) {
+        if (readyPeers_.empty()) return {};
+        return std::move(readyPeers_.front());
+    }
     return std::move(conn_);
+}
+
+std::vector<std::shared_ptr<TcpConnection>> MultiplayerHandshake::takeConnections() {
+    if (isHost_) {
+        return std::exchange(readyPeers_, {});
+    }
+    std::vector<std::shared_ptr<TcpConnection>> out;
+    if (conn_) out.push_back(std::move(conn_));
+    return out;
+}
+
+StarRelayTransport::StarRelayTransport(bool isHost,
+                                       std::uint8_t localSeat,
+                                       std::uint8_t playerCount,
+                                       std::array<int, 4> playerTeams,
+                                       std::vector<std::shared_ptr<TcpConnection>> peers)
+    : isHost_(isHost),
+      localSeat_(localSeat < 4u ? localSeat : 0u),
+      playerCount_(static_cast<std::uint8_t>(std::clamp<int>(playerCount, 2, 4))),
+      playerTeams_(playerTeams),
+      peers_(std::move(peers)),
+      peerDisconnected_(peers_.size(), false),
+      peerRttMs_(peers_.size(), -1) {}
+
+bool StarRelayTransport::isActive() const noexcept {
+    for (std::size_t i = 0; i < peers_.size(); ++i) {
+        if (!peerDisconnected_[i] && peers_[i] && peers_[i]->isConnected()) return true;
+    }
+    return false;
+}
+
+bool StarRelayTransport::allied(std::uint8_t a, std::uint8_t b) const noexcept {
+    if (a >= 4u || b >= 4u) return false;
+    return playerTeams_[a] == playerTeams_[b];
+}
+
+bool StarRelayTransport::sendBroadcast(const LockstepPacket& packet) {
+    bool any = false;
+    for (std::size_t i = 0; i < peers_.size(); ++i) {
+        if (peerDisconnected_[i] || !peers_[i] || !peers_[i]->isConnected()) continue;
+        if (peers_[i]->sendPacket(packet)) any = true;
+    }
+    return any;
+}
+
+bool StarRelayTransport::sendTurnBundle(const TurnBundlePacket& bundle) {
+    return sendBroadcast(LockstepPacket{bundle});
+}
+
+bool StarRelayTransport::sendChat(const ChatPacket& chat) {
+    if (!isHost_) return sendBroadcast(LockstepPacket{chat});
+    bool any = false;
+    for (std::size_t i = 0; i < peers_.size(); ++i) {
+        if (peerDisconnected_[i] || !peers_[i] || !peers_[i]->isConnected()) continue;
+        const auto targetSeat = static_cast<std::uint8_t>(i + 1u);
+        if (chat.teamOnly && !allied(localSeat_, targetSeat)) continue;
+        if (peers_[i]->sendPacket(LockstepPacket{chat})) any = true;
+    }
+    return any;
+}
+
+bool StarRelayTransport::sendBeacon(const BeaconPacket& beacon) {
+    if (!isHost_) return sendBroadcast(LockstepPacket{beacon});
+    bool any = false;
+    for (std::size_t i = 0; i < peers_.size(); ++i) {
+        if (peerDisconnected_[i] || !peers_[i] || !peers_[i]->isConnected()) continue;
+        const auto targetSeat = static_cast<std::uint8_t>(i + 1u);
+        if (beacon.teamOnly && !allied(localSeat_, targetSeat)) continue;
+        if (peers_[i]->sendPacket(LockstepPacket{beacon})) any = true;
+    }
+    return any;
+}
+
+bool StarRelayTransport::sendDesync(const DesyncPacket& desync) {
+    return sendBroadcast(LockstepPacket{desync});
+}
+
+bool StarRelayTransport::sendBye(const ByePacket& bye) {
+    const bool ok = sendBroadcast(LockstepPacket{bye});
+    flushAll();
+    return ok;
+}
+
+void StarRelayTransport::sendPingsIfDue(std::uint64_t nowMs, std::uint32_t& pingSeq) {
+    if (!isActive()) return;
+    if (!pingSentYet_ || (nowMs >= lastPingSentMs_ && nowMs - lastPingSentMs_ >= 2000u)) {
+        pingSentYet_ = true;
+        lastPingSentMs_ = nowMs;
+        (void)sendBroadcast(LockstepPacket{PingPacket{++pingSeq, nowMs}});
+    }
+}
+
+void StarRelayTransport::flushAll() {
+    for (std::size_t i = 0; i < peers_.size(); ++i) {
+        if (!peerDisconnected_[i] && peers_[i]) (void)peers_[i]->flush();
+    }
+}
+
+StarRelayTransport::PollResult StarRelayTransport::poll(std::uint64_t nowMs) {
+    PollResult res;
+    if (!isHost_) {
+        if (!peers_.empty() && !peerDisconnected_[0] && peers_[0]) {
+            std::vector<LockstepPacket> rx;
+            const bool ok = peers_[0]->pollPackets(rx);
+            for (auto& pkt : rx) {
+                if (const auto* ping = std::get_if<PingPacket>(&pkt)) {
+                    (void)peers_[0]->sendPacket(LockstepPacket{PongPacket{ping->seq, ping->sentTimeMs}});
+                } else if (const auto* pong = std::get_if<PongPacket>(&pkt)) {
+                    if (nowMs >= pong->echoedTimeMs) {
+                        peerRttMs_[0] = static_cast<int>(std::min<std::uint64_t>(nowMs - pong->echoedTimeMs, 9999u));
+                    }
+                } else {
+                    res.localPackets.push_back(std::move(pkt));
+                }
+            }
+            if (!ok) {
+                peerDisconnected_[0] = true;
+                res.disconnectedSeats.push_back(0u);
+            }
+        }
+        if (!peerRttMs_.empty()) res.maxRttMs = peerRttMs_[0];
+        return res;
+    }
+
+    for (std::size_t i = 0; i < peers_.size(); ++i) {
+        if (peerDisconnected_[i] || !peers_[i]) continue;
+        const auto seat = static_cast<std::uint8_t>(i + 1u);
+        std::vector<LockstepPacket> rx;
+        const bool ok = peers_[i]->pollPackets(rx);
+        bool sawBye = false;
+        std::string byeReason = "Peer disconnected";
+
+        for (auto& pkt : rx) {
+            if (const auto* bundle = std::get_if<TurnBundlePacket>(&pkt)) {
+                if (bundle->seat != seat) continue;
+                for (std::size_t j = 0; j < peers_.size(); ++j) {
+                    if (j != i && !peerDisconnected_[j] && peers_[j] && peers_[j]->isConnected()) {
+                        (void)peers_[j]->sendPacket(LockstepPacket{*bundle});
+                    }
+                }
+                res.localPackets.push_back(LockstepPacket{std::move(*bundle)});
+            } else if (auto* chat = std::get_if<ChatPacket>(&pkt)) {
+                chat->seat = seat;
+                for (std::size_t j = 0; j < peers_.size(); ++j) {
+                    if (j == i || peerDisconnected_[j] || !peers_[j] || !peers_[j]->isConnected()) continue;
+                    const auto peerSeat = static_cast<std::uint8_t>(j + 1u);
+                    if (chat->teamOnly && !allied(seat, peerSeat)) continue;
+                    (void)peers_[j]->sendPacket(LockstepPacket{*chat});
+                }
+                if (!chat->teamOnly || allied(localSeat_, seat)) {
+                    res.localPackets.push_back(LockstepPacket{std::move(*chat)});
+                }
+            } else if (auto* beacon = std::get_if<BeaconPacket>(&pkt)) {
+                beacon->seat = seat;
+                for (std::size_t j = 0; j < peers_.size(); ++j) {
+                    if (j == i || peerDisconnected_[j] || !peers_[j] || !peers_[j]->isConnected()) continue;
+                    const auto peerSeat = static_cast<std::uint8_t>(j + 1u);
+                    if (beacon->teamOnly && !allied(seat, peerSeat)) continue;
+                    (void)peers_[j]->sendPacket(LockstepPacket{*beacon});
+                }
+                if (!beacon->teamOnly || allied(localSeat_, seat)) {
+                    res.localPackets.push_back(LockstepPacket{std::move(*beacon)});
+                }
+            } else if (const auto* desync = std::get_if<DesyncPacket>(&pkt)) {
+                for (std::size_t j = 0; j < peers_.size(); ++j) {
+                    if (j != i && !peerDisconnected_[j] && peers_[j] && peers_[j]->isConnected()) {
+                        (void)peers_[j]->sendPacket(LockstepPacket{*desync});
+                    }
+                }
+                res.localPackets.push_back(LockstepPacket{*desync});
+            } else if (const auto* bye = std::get_if<ByePacket>(&pkt)) {
+                sawBye = true;
+                if (!bye->reason.empty()) byeReason = bye->reason;
+            } else if (const auto* ping = std::get_if<PingPacket>(&pkt)) {
+                if (peers_[i]->isConnected()) {
+                    (void)peers_[i]->sendPacket(LockstepPacket{PongPacket{ping->seq, ping->sentTimeMs}});
+                }
+            } else if (const auto* pong = std::get_if<PongPacket>(&pkt)) {
+                if (nowMs >= pong->echoedTimeMs) {
+                    peerRttMs_[i] = static_cast<int>(std::min<std::uint64_t>(nowMs - pong->echoedTimeMs, 9999u));
+                }
+            }
+        }
+
+        if (sawBye || !ok) {
+            peerDisconnected_[i] = true;
+            if (peers_[i]) peers_[i]->close();
+            res.disconnectedSeats.push_back(seat);
+            const ByePacket relayBye{seat, byeReason};
+            for (std::size_t j = 0; j < peers_.size(); ++j) {
+                if (j != i && !peerDisconnected_[j] && peers_[j] && peers_[j]->isConnected()) {
+                    (void)peers_[j]->sendPacket(LockstepPacket{relayBye});
+                }
+            }
+            res.localPackets.push_back(LockstepPacket{relayBye});
+        }
+    }
+
+    int maxRtt = -1;
+    for (std::size_t i = 0; i < peerRttMs_.size(); ++i) {
+        if (!peerDisconnected_[i] && peerRttMs_[i] > maxRtt) maxRtt = peerRttMs_[i];
+    }
+    res.maxRttMs = maxRtt;
+    return res;
 }
 
 } // namespace ss2

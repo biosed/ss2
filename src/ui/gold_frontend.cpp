@@ -180,6 +180,8 @@ constexpr RectD kMpModeRect{438, 136, 330, 34};
 constexpr RectD kMpHostFieldRect{438, 204, 330, 32};
 constexpr RectD kMpPortFieldRect{438, 268, 160, 32};
 constexpr RectD kMpNationRect{608, 268, 160, 32};
+constexpr RectD kMpPlayersRect{438, 308, 160, 28};
+constexpr RectD kMpTeamsRect{608, 308, 160, 28};
 
 const char* mpNationLabel(std::uint8_t nation) {
     switch (nation) {
@@ -1394,6 +1396,8 @@ std::string GoldFrontEnd::hitTestStage(double sx, double sy) const {
                 if (kMpHostFieldRect.contains(sx, sy)) return "mp_host_field";
                 if (kMpPortFieldRect.contains(sx, sy)) return "mp_port_field";
                 if (kMpNationRect.contains(sx, sy)) return "mp_nation";
+                if (fe_.mpIsHost() && kMpPlayersRect.contains(sx, sy)) return "mp_players";
+                if (fe_.mpIsHost() && fe_.mpPlayerCount() == 4 && kMpTeamsRect.contains(sx, sy)) return "mp_teams";
                 if (const auto id = checkButtons(kMultiplayerButtons); !id.empty()) return id;
             } else {
                 if (const auto id = checkButtons(kSingleMissionButtons); !id.empty()) return id;
@@ -1921,7 +1925,8 @@ void GoldFrontEnd::handleKey(SDL_Keycode key) {
                 } else if (fe_.screen() == FrontEnd::Screen::LoadGame) {
                     cycleFocus({"load_start", "load_delete", "cancel"}, step);
                 } else if (fe_.screen() == FrontEnd::Screen::Multiplayer) {
-                    cycleFocus({"mp_mode", "mp_host_field", "mp_port_field", "mp_nation", "mp_start", "cancel"}, step);
+                    cycleFocus({"mp_mode", "mp_host_field", "mp_port_field", "mp_nation",
+                                "mp_players", "mp_teams", "mp_start", "cancel"}, step);
                 } else {
                     cycleFocus({"start", "cancel"}, step);
                 }
@@ -1933,7 +1938,8 @@ void GoldFrontEnd::handleKey(SDL_Keycode key) {
                     else activateId("load_start");
                 } else if (fe_.screen() == FrontEnd::Screen::Multiplayer) {
                     if (focusedId_ == "cancel" || focusedId_ == "mp_mode" ||
-                        focusedId_ == "mp_nation" ||
+                        focusedId_ == "mp_nation" || focusedId_ == "mp_players" ||
+                        focusedId_ == "mp_teams" ||
                         focusedId_ == "mp_host_field" || focusedId_ == "mp_port_field") {
                         activateId(focusedId_);
                     } else {
@@ -3310,6 +3316,27 @@ void GoldFrontEnd::renderToBuffer(int pixelW, int pixelH, std::vector<std::uint8
                                       natHov, natFoc, true, 15.0, true);
             }
 
+            {
+                const bool plEnabled = fe_.mpIsHost();
+                const bool plHov = plEnabled && (hoveredId_ == "mp_players");
+                const bool plFoc = plEnabled && (focusedId_ == "mp_players");
+                drawBronzeBox(cr, kMpPlayersRect.x, kMpPlayersRect.y, kMpPlayersRect.w, kMpPlayersRect.h,
+                              (plHov || plFoc) ? 0.94 : 0.85);
+                drawGoldStencilButton(cr, pangoCtx, kMpPlayersRect,
+                                      tr("Players") + ": " + std::to_string(fe_.mpPlayerCount()), 'P',
+                                      plHov, plFoc, plEnabled, 13.5, true);
+
+                const bool tmEnabled = fe_.mpIsHost() && fe_.mpPlayerCount() == 4;
+                const bool tmHov = tmEnabled && (hoveredId_ == "mp_teams");
+                const bool tmFoc = tmEnabled && (focusedId_ == "mp_teams");
+                drawBronzeBox(cr, kMpTeamsRect.x, kMpTeamsRect.y, kMpTeamsRect.w, kMpTeamsRect.h,
+                              (tmHov || tmFoc) ? 0.94 : 0.85);
+                const std::string tmVal = (fe_.mpPlayerCount() == 4 && fe_.mpTeam2v2()) ? tr("2v2") : tr("FFA");
+                drawGoldStencilButton(cr, pangoCtx, kMpTeamsRect,
+                                      tr("Teams") + ": " + tmVal, 'T',
+                                      tmHov, tmFoc, tmEnabled, 13.5, true);
+            }
+
             if (selectedRow < rowCount) {
                 const auto& m = mpMissions_[selectedRow];
                 ensureOverviewLoaded(m.path);
@@ -3317,16 +3344,16 @@ void GoldFrontEnd::renderToBuffer(int pixelW, int pixelH, std::vector<std::uint8
                 if (const auto it = assets_->overviews.find(m.path); it != assets_->overviews.end()) {
                     overview = it->second.get();
                 }
-                drawDiamondOverview(cr, overview, 492.0, 316.0, 224.0, 117.0, true);
+                drawDiamondOverview(cr, overview, 504.0, 344.0, 200.0, 104.0, true);
                 std::string sizeStr = tr("Size:") + "  " + std::to_string(m.width) + "x" + std::to_string(m.height);
                 if (m.scheme == 2) sizeStr += "  (Beach)";
                 else if (m.width > 0) sizeStr += "  (Summer)";
-                drawHeading(cr, pangoCtx, sizeStr, {464, 442, 280, 20}, 14.0);
+                drawHeading(cr, pangoCtx, sizeStr, {464, 452, 280, 18}, 13.5);
                 if (!m.description.empty()) {
-                    auto desc = makeTextLayout(pangoCtx, m.description, 12.5, false, 324.0, PANGO_ALIGN_CENTER);
+                    auto desc = makeTextLayout(pangoCtx, m.description, 12.0, false, 324.0, PANGO_ALIGN_CENTER);
                     pango_layout_set_height(desc.get(), int(22.0 * PANGO_SCALE));
                     pango_layout_set_ellipsize(desc.get(), PANGO_ELLIPSIZE_END);
-                    cairo_move_to(cr, 442.0, 466.0);
+                    cairo_move_to(cr, 442.0, 472.0);
                     cairo_set_source_rgb(cr, 220.0 / 255.0, 224.0 / 255.0, 206.0 / 255.0);
                     pango_cairo_show_layout(cr, desc.get());
                 }

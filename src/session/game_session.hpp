@@ -52,8 +52,9 @@ struct MultiplayerSessionConfig {
     std::uint32_t inputDelayTurns{kDefaultInputDelayTurns};
     std::uint32_t hashIntervalTurns{kDefaultHashIntervalTurns};
     std::array<std::uint8_t, 4> playerNations{1, 0, 2, 3};
+    std::array<int, 4> playerTeams{0, 1, 2, 3};
     std::array<std::string, 4> playerNames{"Player 1", "Player 2", "", ""};
-    std::shared_ptr<TcpConnection> peer;
+    std::vector<std::shared_ptr<TcpConnection>> peers;
 };
 
 int runGameSession(SDL_Window* window, ValidationReport* report, int limit, bool timing,
@@ -114,6 +115,11 @@ struct GameSession {
         std::chrono::steady_clock::time_point start;
         std::chrono::milliseconds duration{};
     };
+    struct ActiveBeacon {
+        int x{0}, y{0};
+        std::uint8_t seat{0};
+        std::chrono::steady_clock::time_point start{};
+    };
     struct BurningWreck {
         float x{}, y{};
         std::chrono::steady_clock::time_point until;
@@ -165,17 +171,19 @@ struct GameSession {
     std::filesystem::path loadSavePath;
     MultiplayerSessionConfig multiplayer;
     std::optional<LockstepCoordinator> lockstep;
+    std::optional<StarRelayTransport> mpTransport;
     std::chrono::steady_clock::time_point nextLockstepTickAt{};
     std::vector<MissionEvent> deferredLockstepEvents;
     bool lockstepWaitingPeer = false;
     bool lockstepDesyncReported = false;
-    bool lockstepPeerDisconnected = false;
+    std::array<bool, 4> mpSeatDisconnected{};
     bool mpChatActive = false;
+    bool mpChatTeamOnly = false;
     std::string mpChatDraft;
     int mpRttMs = -1;
     std::uint32_t mpPingSeq = 0;
-    std::chrono::steady_clock::time_point lastMpPingAt{};
     std::array<int, 32> lastZeppelinHolder{-2,-2,-2,-2,-2,-2,-2,-2,-2,-2,-2,-2,-2,-2,-2,-2,-2,-2,-2,-2,-2,-2,-2,-2,-2,-2,-2,-2,-2,-2,-2,-2};
+    std::vector<ActiveBeacon> activeBeacons;
 
     float refreshRate = 0.0f;
     VulkanWindow renderer;
@@ -333,6 +341,7 @@ struct GameSession {
         }
     }
     void processLockstepPostTickSpawns();
+    void placeMpBeacon(int simX, int simY);
     void spawnAbandonedCrew(const std::vector<assets::Placement>& spawns);
 
     // Setup, sprites, terrain decals, and reinforcement spawns (session_setup.cpp).

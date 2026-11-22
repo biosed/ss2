@@ -25,7 +25,8 @@ bool TutorialUnits::canSupportVehicle(std::span<const size_t> supporterVehicleId
     if (targetVehicleIdx >= vehicles_.size()) return false;
     const auto& target = vehicles_[targetVehicleIdx];
     if (!target.alive || target.hp <= 0) return false;
-    const bool targetIsAccessibleCrate = target.isCrate && (target.owner == owner || target.owner == 3);
+    const bool targetIsAccessibleCrate =
+        target.isCrate && (target.owner == owner || ((!multiplayerSymmetry_ || !target.hasCrew) && target.owner == 3));
     if (!targetIsAccessibleCrate && target.owner != owner) return false;
 
     const bool targetNeedsRepair = !target.isCrate && target.hp < target.maxHp;
@@ -596,7 +597,7 @@ void TutorialUnits::stepSupplyAndRepair(std::vector<SoldierPose>& changed) {
     for (size_t i = 0; i < vehicles_.size(); ++i) {
         auto& v = vehicles_[i];
         if (!v.alive || v.hp <= 0 || (v.moveTarget && !v.patrolOrigin)) continue;
-        if (v.hasCrew && v.owner != 3 && v.canSelfRepair && !v.isKamikaze && !v.towedBy &&
+        if (v.hasCrew && (multiplayerSymmetry_ || v.owner != 3) && v.canSelfRepair && !v.isKamikaze && !v.towedBy &&
             !v.moveTarget && (v.lastCombatTick == 0u || tick_ >= v.lastCombatTick + 125u)) {
             const int minMobilityHp = v.moveDamageHp > 0 ? std::min(v.maxHp, v.moveDamageHp + 1) : 0;
             const int emergencyCap = std::clamp(std::max(minMobilityHp, (v.maxHp * 35) / 100), 1, v.maxHp);

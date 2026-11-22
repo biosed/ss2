@@ -2,6 +2,7 @@
 
 #include "ui/menu.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -138,6 +139,13 @@ public:
         const int next = (static_cast<int>(mpNation_) + delta % 5 + 5) % 5;
         mpNation_ = static_cast<std::uint8_t>(next);
     }
+    std::uint8_t mpPlayerCount() const { return mpPlayerCount_; }
+    void setMpPlayerCount(int count);
+    void cycleMpPlayerCount(int delta = 1);
+    bool mpTeam2v2() const { return mpTeam2v2_; }
+    void setMpTeam2v2(bool is2v2) { mpTeam2v2_ = is2v2; }
+    void toggleMpTeamMode() { mpTeam2v2_ = !mpTeam2v2_; }
+    std::array<int, 4> mpPlayerTeams() const;
     const std::string& mpStatusText() const { return mpStatusText_; }
     void setMpStatusText(std::string text) { mpStatusText_ = std::move(text); }
 
@@ -171,6 +179,8 @@ private:
     std::string mpHostAddress_ = "127.0.0.1";
     std::uint16_t mpPort_ = 27015;
     std::uint8_t mpNation_ = 1;
+    std::uint8_t mpPlayerCount_ = 2;
+    bool mpTeam2v2_ = false;
     std::string mpStatusText_;
     int difficulty_ = 2;
     RatingsMode ratingsMode_ = RatingsMode::Campaigns;

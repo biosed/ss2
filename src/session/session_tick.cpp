@@ -28,10 +28,24 @@ void GameSession::processLockstepPostTickSpawns() {
 void GameSession::stepSimulationEvents() {
     if (simulation) {
         if (multiplayer.enabled && lockstep) {
-            if (multiplayer.peer) {
-                std::vector<ss2::LockstepPacket> rx;
-                const bool peerOk = multiplayer.peer->pollPackets(rx);
-                for (auto& pkt : rx) {
+            const auto markSeatDisconnected = [&](std::uint8_t seat) {
+                if (seat >= 4u || mpSeatDisconnected[seat]) return;
+                mpSeatDisconnected[seat] = true;
+                const std::string who = !multiplayer.playerNames[seat].empty()
+                    ? multiplayer.playerNames[seat]
+                    : ("Seat " + std::to_string(seat + 1));
+                const std::string msg = ss2::trf("{0} disconnected.", {who});
+                logHud(msg);
+                showNotice(msg, ss2::NoticeKind::blocked);
+            };
+            if (mpTransport) {
+                const auto nowMs = static_cast<std::uint64_t>(
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now().time_since_epoch()).count());
+                mpTransport->sendPingsIfDue(nowMs, mpPingSeq);
+                auto pollRes = mpTransport->poll(nowMs);
+                if (pollRes.maxRttMs >= 0) mpRttMs = pollRes.maxRttMs;
+                for (auto& pkt : pollRes.localPackets) {
                     if (auto* bundle = std::get_if<ss2::TurnBundlePacket>(&pkt)) {
                         (void)lockstep->receiveTurnBundle(std::move(*bundle));
                     } else if (const auto* desyncPkt = std::get_if<ss2::DesyncPacket>(&pkt)) {
@@ -42,52 +56,40 @@ void GameSession::stepSimulationEvents() {
                                       << " expected=0x" << desyncPkt->remoteHash << std::dec << ")\n";
                             showNotice(ss2::tr("Lockstep desync detected!"), ss2::NoticeKind::blocked);
                         }
-                    } else if (std::get_if<ss2::ByePacket>(&pkt)) {
-                        if (!lockstepPeerDisconnected) {
-                            lockstepPeerDisconnected = true;
-                            showNotice(ss2::tr("Peer disconnected."), ss2::NoticeKind::blocked);
-                        }
+                    } else if (const auto* bye = std::get_if<ss2::ByePacket>(&pkt)) {
+                        markSeatDisconnected(bye->seat);
                     } else if (const auto* chat = std::get_if<ss2::ChatPacket>(&pkt)) {
                         const std::string sender = !chat->sender.empty()
                             ? chat->sender
                             : (chat->seat < 4u && !multiplayer.playerNames[chat->seat].empty()
                                 ? multiplayer.playerNames[chat->seat]
                                 : ("Seat " + std::to_string(chat->seat + 1)));
-                        const std::string line = sender + ": " + chat->text;
+                        const std::string line = (chat->teamOnly ? ("[" + ss2::tr("Allies") + "] ") : std::string{}) +
+                                                 sender + ": " + chat->text;
                         logHud(line);
-                        showNotice(ss2::trf("Chat: {0}", {line}), ss2::NoticeKind::accepted);
+                        showNotice(ss2::trf(chat->teamOnly ? "Team Chat: {0}" : "Chat: {0}", {line}),
+                                   ss2::NoticeKind::accepted);
                         if (audio) audio->playGroup("e_telegram", 0.55f);
-                    } else if (const auto* ping = std::get_if<ss2::PingPacket>(&pkt)) {
-                        (void)multiplayer.peer->sendPacket(ss2::PongPacket{ping->seq, ping->sentTimeMs});
-                    } else if (const auto* pong = std::get_if<ss2::PongPacket>(&pkt)) {
-                        const auto nowMs = static_cast<std::uint64_t>(
-                            std::chrono::duration_cast<std::chrono::milliseconds>(
-                                std::chrono::steady_clock::now().time_since_epoch()).count());
-                        if (nowMs >= pong->echoedTimeMs) {
-                            mpRttMs = static_cast<int>(std::min<std::uint64_t>(nowMs - pong->echoedTimeMs, 9999u));
-                        }
+                    } else if (const auto* beacon = std::get_if<ss2::BeaconPacket>(&pkt)) {
+                        const std::string who = (beacon->seat < 4u && !multiplayer.playerNames[beacon->seat].empty())
+                            ? multiplayer.playerNames[beacon->seat]
+                            : ("Seat " + std::to_string(beacon->seat + 1));
+                        if (activeBeacons.size() >= 6u) activeBeacons.erase(activeBeacons.begin());
+                        activeBeacons.push_back({beacon->x, beacon->y, beacon->seat, std::chrono::steady_clock::now()});
+                        pushMinimapPing(beacon->x, beacon->y, false);
+                        const std::string bMsg = ss2::trf("Beacon from {0}!", {who});
+                        logHud(bMsg);
+                        showNotice(bMsg, ss2::NoticeKind::accepted);
+                        if (audio) audio->playGroup("e_telegram", 0.65f);
                     }
                 }
-                {
-                    const auto pingNow = std::chrono::steady_clock::now();
-                    if (multiplayer.peer->isConnected() &&
-                        (lastMpPingAt == std::chrono::steady_clock::time_point{} ||
-                         pingNow - lastMpPingAt >= std::chrono::seconds(2))) {
-                        lastMpPingAt = pingNow;
-                        const auto sentMs = static_cast<std::uint64_t>(
-                            std::chrono::duration_cast<std::chrono::milliseconds>(
-                                pingNow.time_since_epoch()).count());
-                        (void)multiplayer.peer->sendPacket(ss2::PingPacket{++mpPingSeq, sentMs});
-                    }
+                for (const std::uint8_t dseat : pollRes.disconnectedSeats) {
+                    markSeatDisconnected(dseat);
                 }
                 for (const auto& outBundle : lockstep->produceOutboundBundles()) {
-                    (void)multiplayer.peer->sendPacket(outBundle);
+                    (void)mpTransport->sendTurnBundle(outBundle);
                 }
-                (void)multiplayer.peer->flush();
-                if (!peerOk && !lockstepPeerDisconnected) {
-                    lockstepPeerDisconnected = true;
-                    showNotice(ss2::tr("Connection to peer lost."), ss2::NoticeKind::blocked);
-                }
+                mpTransport->flushAll();
             }
 
             const auto now = std::chrono::steady_clock::now();
@@ -105,11 +107,11 @@ void GameSession::stepSimulationEvents() {
                         lockstepWaitingPeer = false;
                         orderNotice.show(ss2::tr("Resumed."), ss2::NoticeKind::accepted);
                     }
-                    if (multiplayer.peer) {
+                    if (mpTransport) {
                         for (const auto& outBundle : lockstep->produceOutboundBundles()) {
-                            (void)multiplayer.peer->sendPacket(outBundle);
+                            (void)mpTransport->sendTurnBundle(outBundle);
                         }
-                        (void)multiplayer.peer->flush();
+                        mpTransport->flushAll();
                     }
                 } else if (status == ss2::LockstepCoordinator::StepStatus::WaitingForPeer) {
                     if (!lockstepWaitingPeer) {
@@ -124,10 +126,10 @@ void GameSession::stepSimulationEvents() {
                             std::cerr << "Lockstep desync at tick " << di->tick
                                       << " (local=0x" << std::hex << di->localHash
                                       << " remote=0x" << di->remoteHash << std::dec << ")\n";
-                            if (multiplayer.peer && multiplayer.peer->isConnected()) {
-                                (void)multiplayer.peer->sendPacket(
+                            if (mpTransport && mpTransport->isActive()) {
+                                (void)mpTransport->sendDesync(
                                     ss2::DesyncPacket{di->tick, di->localHash, di->remoteHash});
-                                (void)multiplayer.peer->flush();
+                                mpTransport->flushAll();
                             }
                         }
                         showNotice(ss2::tr("Lockstep desync detected!"), ss2::NoticeKind::blocked);

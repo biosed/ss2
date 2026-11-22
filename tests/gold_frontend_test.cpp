@@ -158,6 +158,14 @@ void testFallbackInteraction() {
     check(fe.state().mpNation() == 1u, "Gold Multiplayer defaults to German (1)");
     fe.handleMouseDown(688.0, 284.0, 1);  // mp_nation [608,268,160,32]
     check(fe.state().mpNation() == 2u, "clicked mp_nation cycles nation");
+    fe.handleMouseDown(500.0, 322.0, 1);  // mp_players [438,308,160,28]: 2 -> 3
+    check(fe.state().mpPlayerCount() == 3u, "clicked mp_players cycles 2 -> 3");
+    fe.handleMouseDown(500.0, 322.0, 1);  // mp_players: 3 -> 4
+    check(fe.state().mpPlayerCount() == 4u && !fe.state().mpTeam2v2(), "clicked mp_players cycles 3 -> 4 (FFA)");
+    fe.handleMouseDown(688.0, 322.0, 1);  // mp_teams [608,308,160,28]: FFA -> 2v2
+    check(fe.state().mpTeam2v2(), "clicked mp_teams toggles 4P FFA -> 2v2");
+    fe.handleMouseDown(500.0, 322.0, 1);  // mp_players: 4 -> 2
+    check(fe.state().mpPlayerCount() == 2u, "clicked mp_players cycles 4 -> 2");
     fe.setMultiplayerMissions(makeSyntheticMissions(5));
     fe.handleMouseDown(120.0, 168.0, 1);  // row 1
     check(fe.state().selectedMultiplayerMission() == 1, "clicked MP map row 1");

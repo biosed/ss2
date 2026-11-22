@@ -162,7 +162,7 @@ bool GameSession::updateViewTooltipAndPresent() {
                             }
                         } else if (isAllyOwner(u.owner)) {
                             tc.lines.push_back(ss2::tr("Allied"));
-                        } else if (u.owner == 3) {
+                        } else if (!multiplayer.enabled && u.owner == 3) {
                             tc.lines.push_back(ss2::tr("Neutral"));
                         } else {
                             tc.lines.push_back(ss2::tr("Hostile"));
@@ -342,7 +342,7 @@ bool GameSession::updateViewTooltipAndPresent() {
                                 if (vehicleHoldFireUnits.contains(*vHovered)) tc.lines.push_back(ss2::tr("Holding fire"));
                             } else if (isAllyOwner(v.owner)) {
                                 tc.lines.push_back(ss2::tr("Allied"));
-                            } else if (v.owner == 3) {
+                            } else if (v.owner == 3 && (!multiplayer.enabled || (simulation && simulation->canCaptureVehicle(*vHovered)))) {
                                 tc.lines.push_back(ss2::tr("Neutral — right-click with infantry to capture"));
                             } else {
                                 const bool tracksDmg = vSpec && vSpec->moveDamageHp > 0 && v.hp < vSpec->moveDamageHp;
