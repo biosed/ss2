@@ -396,7 +396,7 @@ void testFallbackInteraction() {
           "Empty Replay button stays on Replays with a notice");
     ofe.setReplays({
         {"tutorial1_full", "/tmp/tutorial1_full.ss2rep", "maps/single/--- TUTORIAL I ---.SSM",
-         "0x1627b0e8d45be6ea", 12, 3862, 2, true},
+         "0xeae920846989222f", 12, 3862, 2, true},
         {"russian1_smoke", "/tmp/russian1_smoke.ss2rep", "maps/campaign/000000.ssc",
          "0x1234abcd", 6, 150, 3, false},
     });
@@ -665,7 +665,7 @@ void testRetailGoldAssets(const std::filesystem::path& gameDir) {
     if (!capDir.empty()) writePng(capDir / "screen8_replays_empty.png", 1280, 720, frame);
     fe.setReplays({
         {"tutorial1_p7_full", "/tmp/tutorial1_p7_full.ss2rep", "maps/single/--- TUTORIAL I ---.SSM",
-         "0x1627b0e8d45be6ea", 12, 3862, 2, true},
+         "0xeae920846989222f", 12, 3862, 2, true},
         {"russian1_campaign", "/tmp/russian1_campaign.ss2rep", "maps/campaign/000000.ssc",
          "0x7f13a8c901234567", 4, 150, 3, true},
     });

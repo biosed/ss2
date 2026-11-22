@@ -67,6 +67,18 @@ void Tutorial::initActive(bool fullMission) {
         active_[18] = false; // Reinforcement group 71 spawns via OP(40), not present at start.
         active_[25] = false; // Allied vehicle group 50 destruction requires anti-tank mechanics.
     }
+    if (fullMission && data_.hasInitialGroups) {
+        for (std::size_t g = 0; g < groupAi_.size(); ++g) {
+            const auto& ig = data_.initialGroups[g];
+            groupAi_[g].behavior = ig.behavior;
+            groupAi_[g].aiFlags = ig.aiFlags;
+            groupAi_[g].zone1 = ig.zone1;
+            groupAi_[g].zone2 = ig.zone2;
+            groupAi_[g].aiFlag0 = ig.group1;
+            groupAi_[g].aiFlag1 = ig.group2;
+            groupAi_[g].lastReserveTick = 0u;
+        }
+    }
 }
 
 Tutorial::Tutorial(assets::TutorialData data, unsigned initialZoneCount, unsigned initialEnemyGroup3)
@@ -87,7 +99,27 @@ void Tutorial::step(unsigned inZone, unsigned enemyGroup3Alive) {
 void Tutorial::step(const MissionQueries& queries) {
     ++tick_;
     if (countdown_ > 0) --countdown_;
+    if (data_.hasInitialGroups && (tick_ & 0xfu) == 9u) stepAutoReserve(queries);
     if ((tick_ & 63u) == 3) scan(queries);
+}
+
+void Tutorial::stepAutoReserve(const MissionQueries& queries) {
+    for (unsigned g = 0u; g < groupAi_.size(); ++g) {
+        const auto& cfg = data_.initialGroups[g];
+        if (cfg.reservMinDelayTicks >= 0x7fffffffu) continue;
+        const std::uint32_t elapsed = tick_ - groupAi_[g].lastReserveTick;
+        if (elapsed < cfg.reservMinDelayTicks) continue;
+        const unsigned reserveCount = queries.countByGroupMask ? queries.countByGroupMask(g, 4u) : 0u;
+        if (reserveCount == 0u) continue;
+        const unsigned activeCount = queries.countByGroupMask ? queries.countByGroupMask(g, 1u) : 0u;
+        if (activeCount <= static_cast<unsigned>(cfg.reservMinUnits) || elapsed >= cfg.reservForceDelayTicks) {
+            const std::uint32_t packedStats = packMpFourWaves(
+                cfg.reservHpPct, cfg.reservAmmoPct, cfg.reservExpaPct, cfg.reservMoralePct);
+            const std::uint32_t delaySec = cfg.reservArrivalDelayTicks / 25u;
+            events_.push_back({MissionEvent::DeployReserve, g, packedStats, cfg.reservGate, cfg.reservZone, delaySec});
+            groupAi_[g].lastReserveTick = tick_;
+        }
+    }
 }
 
 std::vector<MissionEvent> Tutorial::takeEvents() { return std::exchange(events_, {}); }
@@ -242,12 +274,15 @@ void Tutorial::evaluate(unsigned script, const MissionQueries& queries, uint64_t
             break;
         }
         case 19: {
-            const auto behavior = pop(), group = pop();
+            const auto packed = pop(), group = pop();
             if (group < groupAi_.size()) {
+                const std::uint32_t behavior = packed & 0x0Fu;
+                const std::uint32_t aiFlags = packed >> 4;
                 groupAi_[group].behavior = behavior;
+                groupAi_[group].aiFlags = aiFlags;
                 const auto z = groupAi_[group].zone1 ? groupAi_[group].zone1 : groupAi_[group].zone2;
-                if (behavior != 0 && z > 0 && z < data_.locations.size()) {
-                    events_.push_back({MissionEvent::GroupOrder, group, behavior, 0u, z, 0u});
+                if (behavior != 0u && z > 0u && z < data_.locations.size()) {
+                    events_.push_back({MissionEvent::GroupOrder, group, behavior, aiFlags, z, 0u});
                 }
             }
             break;
@@ -257,7 +292,7 @@ void Tutorial::evaluate(unsigned script, const MissionQueries& queries, uint64_t
             if (group < groupAi_.size()) {
                 groupAi_[group].zone1 = loc;
                 if (groupAi_[group].behavior != 0 && loc > 0 && loc < data_.locations.size()) {
-                    events_.push_back({MissionEvent::GroupOrder, group, groupAi_[group].behavior, 0u, loc, 0u});
+                    events_.push_back({MissionEvent::GroupOrder, group, groupAi_[group].behavior, groupAi_[group].aiFlags, loc, 0u});
                 }
             }
             break;
@@ -267,7 +302,7 @@ void Tutorial::evaluate(unsigned script, const MissionQueries& queries, uint64_t
             if (group < groupAi_.size()) {
                 groupAi_[group].zone2 = loc;
                 if (groupAi_[group].behavior != 0 && groupAi_[group].zone1 == 0 && loc > 0 && loc < data_.locations.size()) {
-                    events_.push_back({MissionEvent::GroupOrder, group, groupAi_[group].behavior, 0u, loc, 0u});
+                    events_.push_back({MissionEvent::GroupOrder, group, groupAi_[group].behavior, groupAi_[group].aiFlags, loc, 0u});
                 }
             }
             break;
@@ -580,7 +615,7 @@ void Tutorial::evaluate(unsigned script, const MissionQueries& queries, uint64_t
                     const auto z = ai.zone1 ? ai.zone1 : ai.zone2;
                     // Patrol groups carry no OP(19) behavior; the waypoint advance itself is the order.
                     if (z > 0 && z < data_.locations.size()) {
-                        events_.push_back({MissionEvent::GroupOrder, group, ai.behavior, 0u, z, 0u});
+                        events_.push_back({MissionEvent::GroupOrder, group, ai.behavior, ai.aiFlags, z, 0u});
                     }
                 }
             }

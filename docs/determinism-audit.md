@@ -36,4 +36,4 @@ Observed bit-identical outputs on all four targets (and active FMA probe separat
 - `lockstep_test` (skirmish `OP(52/53/54/56)` nation waves, Zeppelin capture/contest, anti-forged `cmd::Resign`): `LOCKSTEP_SKIRMISH_HASH 0x653b9a007be75c29`
 - `lockstep_test` (4-player `2v2` `StarRelayTransport` lockstep session with team-only chat/beacon isolation, shared allied vision, Zeppelin team capture, and partial-resign continuation): `LOCKSTEP_4P_2V2_HASH 0x6b4089b2cbf8ac84`
 - x86-64-v3 FMA negative-control probe: `0x6610475e5345ba17` strict (`-ffp-contract=off` on ARM64 GCC and x86-64-v3) vs `0x5c3022d25bc09199` contracted (`-ffp-contract=fast` on x86-64-v3)
-- Full Tutorial I P[7] route replay (`gold_tutorial_replay`): `10 dialogs, 12 commands, 3862 ticks, stateHash 0x1627b0e8d45be6ea PASSED`
+- Full Tutorial I P[7] route replay (`gold_tutorial_replay`): `10 dialogs, 12 commands, 3862 ticks, stateHash 0xeae920846989222f PASSED` (updated from `0x1627b0e8d45be6ea` after loading Tutorial I's retail `I-GROUPS` Group `13` `behavior=4, aiFlags=1`)

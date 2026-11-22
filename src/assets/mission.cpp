@@ -764,6 +764,30 @@ MissionData readMissionData(const std::filesystem::path& mission) {
         const std::uint32_t rawWeather = little32(*xinf);
         data.weather = (rawWeather < 4u) ? static_cast<WeatherKind>(rawWeather) : WeatherKind::Clear;
     }
+    if (const auto groups = archive.findMissionRecord("I-GROUPS"); groups && groups->size() == 2800u) {
+        for (std::size_t g = 0; g < data.initialGroups.size(); ++g) {
+            const auto rec = groups->subspan(g * 28u, 28u);
+            const std::uint32_t w0 = little32(rec);
+            auto& ig = data.initialGroups[g];
+            ig.behavior = static_cast<std::uint8_t>(w0 & 0x0Fu);
+            ig.aiFlags = w0 >> 4;
+            ig.zone1 = rec[4];
+            ig.zone2 = rec[5];
+            ig.group1 = rec[6];
+            ig.group2 = rec[7];
+            ig.reservGate = rec[8];
+            ig.reservZone = rec[9];
+            ig.reservArrivalDelayTicks = little32(rec.subspan(10u));
+            ig.reservMinDelayTicks = little32(rec.subspan(14u));
+            ig.reservMinUnits = little16(rec.subspan(18u));
+            ig.reservForceDelayTicks = little32(rec.subspan(20u));
+            ig.reservHpPct = std::clamp<std::uint8_t>(rec[24], 1u, 100u);
+            ig.reservAmmoPct = std::min<std::uint8_t>(rec[25], 100u);
+            ig.reservExpaPct = std::min<std::uint8_t>(rec[26], 100u);
+            ig.reservMoralePct = std::min<std::uint8_t>(rec[27], 100u);
+        }
+        data.hasInitialGroups = true;
+    }
     return data;
 }
 

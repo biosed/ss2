@@ -296,10 +296,12 @@ int main() try {
         full.tutorial.timerPeriods[2] = 75u;
         full.tutorial.variables[5] = 99u;
         full.tutorial.groupAi[3].behavior = 11u;
+        full.tutorial.groupAi[3].aiFlags = 0x400001u;
         full.tutorial.groupAi[3].zone1 = 4u;
         full.tutorial.groupAi[3].zone2 = 5u;
         full.tutorial.groupAi[3].waypoints = {{1u, 2u}, {3u, 4u}};
         full.tutorial.groupAi[3].waypointIndex = 1u;
+        full.tutorial.groupAi[3].lastReserveTick = 950u;
         full.tutorial.events.push_back({ss2::MissionEvent::Reinforcement, 9u, 0u, 1u, 2u, 3u});
         full.tutorial.airRouteWaypoints = {{4u, 2u}, {7u, 4u}};
         full.spawnedReinforcementWaves[0] = true;
@@ -332,28 +334,40 @@ int main() try {
 
         const auto rawFull = ss2::MissionRunner::serializeFullSnapshot(full);
         check(rawFull.size() >= 8u &&
-                  std::string_view(reinterpret_cast<const char*>(rawFull.data()), 8u) == "SS2FULL2",
-              "serializeFullSnapshot emits SS2FULL2 header");
-        check(ss2::MissionRunner::deserializeFullSnapshot(rawFull).has_value(), "SS2FULL2 decodes cleanly");
+                  std::string_view(reinterpret_cast<const char*>(rawFull.data()), 8u) == "SS2FULL3",
+              "serializeFullSnapshot emits SS2FULL3 header");
+        check(ss2::MissionRunner::deserializeFullSnapshot(rawFull).has_value(), "SS2FULL3 decodes cleanly");
         check(!ss2::MissionRunner::deserializeFullSnapshot(
                   std::span<const std::uint8_t>(rawFull.data(), rawFull.size() - 1)).has_value(),
-              "SS2FULL2 rejects truncated payload");
+              "SS2FULL3 rejects truncated payload");
         auto badFullMagic = rawFull;
         badFullMagic[7] = '9';
-        check(!ss2::MissionRunner::deserializeFullSnapshot(badFullMagic).has_value(), "SS2FULL2 rejects bad magic");
+        check(!ss2::MissionRunner::deserializeFullSnapshot(badFullMagic).has_value(), "SS2FULL3 rejects bad magic");
         auto extraFullByte = rawFull;
         extraFullByte.push_back(0x55u);
         check(!ss2::MissionRunner::deserializeFullSnapshot(extraFullByte).has_value(),
-              "SS2FULL2 rejects trailing byte");
+              "SS2FULL3 rejects trailing byte");
 
-        // Backward compatibility: SS2FULL1 (without section 5 bridge trailer) still decodes cleanly.
+        // Backward compatibility: SS2FULL2 (without section 6 group aiFlags/lastReserveTick) and SS2FULL1 still decode cleanly.
+        constexpr std::size_t v3GroupAiTrailerBytes = 100u * 8u;
+        std::vector<std::uint8_t> rawFullV2(
+            rawFull.begin(), rawFull.end() - static_cast<std::ptrdiff_t>(v3GroupAiTrailerBytes));
+        rawFullV2[7] = '2';
+        const auto decFullV2 = ss2::MissionRunner::deserializeFullSnapshot(rawFullV2);
+        check(decFullV2.has_value() && decFullV2->unitsExtra.bridges == full.unitsExtra.bridges &&
+                  decFullV2->tutorial.groupAi[3].aiFlags == 0u &&
+                  decFullV2->tutorial.groupAi[3].lastReserveTick == 0u,
+              "SS2FULL2 backward compatibility decodes cleanly");
+
         const std::size_t v2BridgeTrailerBytes = 4u + full.unitsExtra.bridges.size() * 9u;
         std::vector<std::uint8_t> rawFullV1(
-            rawFull.begin(), rawFull.end() - static_cast<std::ptrdiff_t>(v2BridgeTrailerBytes));
+            rawFullV2.begin(), rawFullV2.end() - static_cast<std::ptrdiff_t>(v2BridgeTrailerBytes));
         rawFullV1[7] = '1';
         const auto decFullV1 = ss2::MissionRunner::deserializeFullSnapshot(rawFullV1);
         check(decFullV1.has_value() && decFullV1->unitsExtra.bridges.empty() &&
                   decFullV1->unitsExtra.weather == ss2::assets::WeatherKind::Snow &&
+                  decFullV1->tutorial.groupAi[3].aiFlags == 0u &&
+                  decFullV1->tutorial.groupAi[3].lastReserveTick == 0u &&
                   decFullV1->nextMissionSignal == full.nextMissionSignal,
               "SS2FULL1 backward compatibility decodes cleanly");
 

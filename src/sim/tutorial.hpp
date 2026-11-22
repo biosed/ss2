@@ -41,15 +41,17 @@ struct MissionQueries {
 class Tutorial {
 public:
     struct GroupAiState {
-        uint32_t behavior{0};
-        uint32_t zone1{0};
-        uint32_t zone2{0};
-        uint32_t aiFlag0{0};
-        uint32_t aiFlag1{0};
+        uint32_t behavior{0};        // low 4 bits (0..13: ai_none .. ai_furg_transport)
+        uint32_t aiFlags{0};         // upper 28 bits (24-bit aif_* mask from I-GROUPS / OP 19)
+        uint32_t zone1{0};           // primary zone (I-GROUPS +4 / OP 20)
+        uint32_t zone2{0};           // secondary zone (I-GROUPS +5 / OP 21)
+        uint32_t aiFlag0{0};         // group1 target (I-GROUPS +6 / OP 22)
+        uint32_t aiFlag1{0};         // group2 target (I-GROUPS +7 / OP 23)
         // OP(79) appends patrol waypoints (Gold group AI queue at +0xd5, capped at 16);
         // OP(80) cycles the cursor (+0xf5) and copies the entry into zone1/zone2 (+8/+9).
         std::vector<std::pair<uint32_t, uint32_t>> waypoints{};
         uint32_t waypointIndex{0};
+        uint32_t lastReserveTick{0}; // +0x1e auto-reserve timestamp (0x10091350)
         bool operator==(const GroupAiState&) const = default;
     };
     struct VmState {
@@ -67,6 +69,7 @@ public:
     void step(unsigned playerUnitsInZone2, unsigned enemyGroup3Alive = 5);
     void step(const MissionQueries& queries);
     const assets::TutorialData& data() const { return data_; }
+    const std::array<GroupAiState, 100>& groupAi() const noexcept { return groupAi_; }
     uint32_t tick() const { return tick_; }
     std::vector<MissionEvent> takeEvents();
     VmState takeState() const;
@@ -83,6 +86,7 @@ private:
     std::vector<MissionEvent> events_;
     std::vector<std::pair<uint32_t, uint32_t>> airRouteWaypoints_;
     void initActive(bool fullMission);
+    void stepAutoReserve(const MissionQueries& queries);
     void scan(const MissionQueries& queries);
     void evaluate(unsigned script, const MissionQueries& queries, uint64_t& dynamicWaveMask);
 };

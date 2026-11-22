@@ -296,6 +296,7 @@ private:
     cmd::TogglePause::Result applyLocked(const cmd::TogglePause&);
     cmd::Resign::Result applyLocked(const cmd::Resign&);
     cmd::SupportBridge::Result applyLocked(const cmd::SupportBridge&);
+    void stepGroupAiLocked();
     struct MpZeppelinWave {
         std::uint32_t packed4{0};
         std::uint32_t jpWave{0};

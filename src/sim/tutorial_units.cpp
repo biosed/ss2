@@ -946,6 +946,284 @@ size_t TutorialUnits::orderGroupAttackGround(unsigned group, int mapX, int mapY,
     return accepted;
 }
 
+void TutorialUnits::setGroupHoldFire(unsigned group, bool holdFire, bool onlyNonPlayer) {
+    const int g = int(group);
+    for (auto& s : soldiers_) {
+        if (s.hp <= 0 || s.group != g) continue;
+        if (onlyNonPlayer && s.owner == 0) continue;
+        s.holdFire = holdFire;
+    }
+    for (auto& v : vehicles_) {
+        if (!v.alive || v.hp <= 0 || v.group != g) continue;
+        if (onlyNonPlayer && v.owner == 0) continue;
+        v.holdFire = holdFire;
+    }
+}
+
+std::optional<std::pair<int, int>> TutorialUnits::groupCentroid(unsigned group, bool onlyNonPlayer) const {
+    const int g = int(group);
+    std::int64_t sumX = 0;
+    std::int64_t sumY = 0;
+    std::int64_t n = 0;
+    for (const auto& s : soldiers_) {
+        if (s.hp <= 0 || s.embarked || s.garrisonBuilding || s.group != g) continue;
+        if (onlyNonPlayer && s.owner == 0) continue;
+        const auto [su, sv] = soldierWorld(s);
+        sumX += originX_ + su - sv;
+        sumY += (su + sv) / 2;
+        ++n;
+    }
+    for (const auto& v : vehicles_) {
+        if (!v.alive || v.hp <= 0 || v.group != g) continue;
+        if (onlyNonPlayer && v.owner == 0) continue;
+        sumX += v.x;
+        sumY += v.y;
+        ++n;
+    }
+    if (n == 0) return std::nullopt;
+    return std::pair<int, int>{static_cast<int>(sumX / n), static_cast<int>(sumY / n)};
+}
+
+size_t TutorialUnits::orderGroupZoneBehavior(unsigned group, std::uint32_t behavior, std::uint32_t aiFlags,
+                                             int mapX, int mapY, bool onlyNonPlayer) {
+    const int g = int(group);
+    const int clampedX = std::clamp(mapX, 0, std::max(0, mapPixelW_ - 1));
+    const int clampedY = std::clamp(mapY, 0, std::max(0, mapPixelH_ - 1));
+    const bool holdFire = (aiFlags & (1u << 22)) != 0u;
+    if (holdFire) setGroupHoldFire(group, true, onlyNonPlayer);
+
+    const bool wantGarrison = (behavior == 2u) &&
+        ((aiFlags & (1u << 19)) == 0u) &&
+        ((aiFlags & ((1u << 3) | (1u << 20) | (1u << 21))) != 0u) &&
+        !buildings_.empty();
+
+    std::vector<int> pendingGarrisons;
+    if (wantGarrison) {
+        pendingGarrisons.assign(buildings_.size(), 0);
+        for (const auto& s : soldiers_) {
+            if (s.hp > 0 && s.garrisonTarget && *s.garrisonTarget < buildings_.size()) {
+                ++pendingGarrisons[*s.garrisonTarget];
+            }
+        }
+    }
+
+    auto isEvacSoldier = [&](size_t idx) {
+        return std::ranges::any_of(evacuatingSoldiers_, [&](const auto& eo) { return eo.index == idx; });
+    };
+    auto isEvacVehicle = [&](size_t idx) {
+        return std::ranges::any_of(evacuatingVehicles_, [&](const auto& eo) { return eo.index == idx; });
+    };
+
+    size_t accepted = 0;
+    std::vector<size_t> soldierIds;
+    std::vector<SubCell> soldierSources;
+    for (size_t i = 0; i < soldiers_.size(); ++i) {
+        const auto& s = soldiers_[i];
+        if (s.hp <= 0 || s.embarked || s.garrisonBuilding || s.group != g) continue;
+        if (onlyNonPlayer && s.owner == 0) continue;
+        if (s.motion || s.goal || !s.route.empty() ||
+            s.attackTarget || s.attackVehicleTarget || s.attackBuildingTarget ||
+            s.garrisonTarget || s.boardVehicleTarget || isEvacSoldier(i)) {
+            continue;
+        }
+        if (wantGarrison) {
+            std::optional<size_t> bestBld;
+            double bestDist = 240.0 + 1.0;
+            for (size_t bi = 0; bi < buildings_.size(); ++bi) {
+                const auto& b = buildings_[bi];
+                if (b.destroyed || (b.owner >= 0 && b.owner != s.owner)) continue;
+                if (static_cast<int>(b.occupants.size()) + pendingGarrisons[bi] >= b.capacity) continue;
+                const double d = det::detHypot(static_cast<double>(b.x - clampedX),
+                                               static_cast<double>(b.y - clampedY));
+                if (d <= 240.0 && d < bestDist) {
+                    bestDist = d;
+                    bestBld = bi;
+                }
+            }
+            if (bestBld) {
+                const auto& b = buildings_[*bestBld];
+                if (orderSoldierInternal(i, b.x, b.y)) {
+                    soldiers_[i].garrisonTarget = *bestBld;
+                    ++pendingGarrisons[*bestBld];
+                    ++accepted;
+                    continue;
+                }
+            }
+        }
+        const auto [su, sv] = soldierWorld(s);
+        const int sx = originX_ + su - sv;
+        const int sy = (su + sv) / 2;
+        if (det::detHypot(static_cast<double>(clampedX - sx), static_cast<double>(clampedY - sy)) > 192.0) {
+            soldierIds.push_back(i);
+            soldierSources.push_back(s.cell);
+        }
+    }
+    if (!soldierIds.empty()) {
+        const auto destCell = findSpawnCell(grid_, pointerCell(clampedX, clampedY, originX_));
+        const auto tiles = grid_.formationDestinations(soldierSources, destCell);
+        for (size_t i = 0; i < soldierIds.size(); ++i) {
+            const int tx = tiles[i].x / 2, ty = tiles[i].y / 2;
+            const int px = originX_ + (tx - ty) * 32;
+            const int py = (tx + ty) * 16 + 16;
+            if (orderSoldierInternal(soldierIds[i], px, py)) {
+                soldiers_[soldierIds[i]].attackMove = !holdFire;
+                ++accepted;
+            }
+        }
+    }
+
+    std::vector<size_t> vehIds;
+    for (size_t i = 0; i < vehicles_.size(); ++i) {
+        const auto& v = vehicles_[i];
+        if (!v.alive || v.hp <= 0 || v.speedPx <= 0.0 || v.towedBy || v.group != g) continue;
+        if (onlyNonPlayer && v.owner == 0) continue;
+        if (v.moveTarget || !v.waypoints.empty() || v.attackTarget || v.attackBuildingTarget ||
+            v.attackGround || v.supportTargetVehicle || v.supportTargetBuilding ||
+            v.supportTargetBridge || v.supportTargetSoldier || v.escortVehicleTarget ||
+            v.escortSoldierTarget || isEvacVehicle(i)) {
+            continue;
+        }
+        if (det::detHypot(static_cast<double>(clampedX) - v.fx, static_cast<double>(clampedY) - v.fy) > 192.0) {
+            vehIds.push_back(i);
+        }
+    }
+    for (const auto& [vid, pt] : vehicleFormationTargets(vehIds, clampedX, clampedY)) {
+        auto& v = vehicles_[vid];
+        moveVehicleInternal(v, pt.first, pt.second);
+        v.attackMove = !holdFire;
+        ++accepted;
+    }
+    return accepted;
+}
+
+size_t TutorialUnits::orderGroupSupport(unsigned group, unsigned targetGroup, int fallbackX, int fallbackY,
+                                        bool hasFallback, bool onlyNonPlayer) {
+    const int g = int(group);
+    const int clampedX = std::clamp(fallbackX, 0, std::max(0, mapPixelW_ - 1));
+    const int clampedY = std::clamp(fallbackY, 0, std::max(0, mapPixelH_ - 1));
+    const auto fallbackAnchor = targetGroup > 0u
+        ? groupCentroid(targetGroup, onlyNonPlayer)
+        : (hasFallback ? std::optional<std::pair<int, int>>{std::pair{clampedX, clampedY}} : std::nullopt);
+    size_t accepted = 0;
+
+    for (size_t i = 0; i < vehicles_.size(); ++i) {
+        auto& v = vehicles_[i];
+        if (!v.alive || v.hp <= 0 || v.speedPx <= 0.0 || v.towedBy || v.group != g) continue;
+        if (onlyNonPlayer && v.owner == 0) continue;
+        const bool isSup = v.isSupply && !v.isCrate;
+        if (!isSup && !v.isAmbulance) continue;
+        if (v.moveTarget || !v.waypoints.empty() || v.supportTargetVehicle || v.supportTargetBuilding ||
+            v.supportTargetBridge || v.supportTargetSoldier || v.escortVehicleTarget || v.escortSoldierTarget) {
+            continue;
+        }
+        if (isSup) {
+            std::optional<size_t> bestVeh;
+            double bestDist = 1e18;
+            for (size_t j = 0; j < vehicles_.size(); ++j) {
+                if (j == i) continue;
+                const auto& tv = vehicles_[j];
+                if (!tv.alive || tv.hp <= 0 || tv.owner != v.owner || tv.isCrate) continue;
+                if (targetGroup > 0u) {
+                    if (tv.group != static_cast<int>(targetGroup)) continue;
+                } else if (!hasFallback ||
+                           det::detHypot(tv.fx - static_cast<double>(clampedX),
+                                         tv.fy - static_cast<double>(clampedY)) > 480.0) {
+                    continue;
+                }
+                const bool needsFix = tv.hp < tv.maxHp && (!v.hasFiniteSupply || v.ammo2 > 0);
+                const bool needsAmmo = ((tv.maxAmmo > 0 && tv.ammo < tv.maxAmmo) ||
+                                        (tv.maxAmmo2 > 0 && tv.ammo2 < tv.maxAmmo2)) &&
+                                       (!v.hasFiniteSupply || v.ammo > 0);
+                if (!needsFix && !needsAmmo) continue;
+                const double d = det::detHypot(tv.fx - v.fx, tv.fy - v.fy);
+                if (d < bestDist) {
+                    bestDist = d;
+                    bestVeh = j;
+                }
+            }
+            if (bestVeh) {
+                const auto& tv = vehicles_[*bestVeh];
+                const auto approach = approachPointNear(v.fx, v.fy, tv.fx, tv.fy, 64.0, mapPixelW_, mapPixelH_);
+                moveVehicleInternal(v, approach.first, approach.second);
+                v.supportTargetVehicle = *bestVeh;
+                ++accepted;
+                continue;
+            }
+            if (hasFallback && (!v.hasFiniteSupply || v.ammo2 > 0)) {
+                std::optional<size_t> bestBr;
+                double bestBrDist = 1e18;
+                for (size_t bi = 0; bi < bridges_.size(); ++bi) {
+                    const auto& br = bridges_[bi];
+                    if (br.hp >= br.maxHp) continue;
+                    if (distanceToBridge(br, static_cast<double>(clampedX), static_cast<double>(clampedY)) > 480.0) {
+                        continue;
+                    }
+                    const double d = distanceToBridge(br, v.fx, v.fy);
+                    if (d < bestBrDist) {
+                        bestBrDist = d;
+                        bestBr = bi;
+                    }
+                }
+                if (bestBr) {
+                    const auto approach = bridgeRepairApproachPoint(bridges_[*bestBr], v);
+                    moveVehicleInternal(v, approach.first, approach.second);
+                    v.supportTargetBridge = *bestBr;
+                    ++accepted;
+                    continue;
+                }
+            }
+        } else if (v.isAmbulance) {
+            std::optional<size_t> bestSol;
+            double bestDist = 1e18;
+            int bestTx = 0, bestTy = 0;
+            for (size_t si = 0; si < soldiers_.size(); ++si) {
+                const auto& ts = soldiers_[si];
+                if (ts.owner != v.owner || ts.hp <= 0 || ts.embarked || ts.garrisonBuilding || ts.hp >= ts.maxHp) {
+                    continue;
+                }
+                const auto [tu, tv] = soldierWorld(ts);
+                const int tx = originX_ + tu - tv;
+                const int ty = (tu + tv) / 2;
+                if (targetGroup > 0u) {
+                    if (ts.group != static_cast<int>(targetGroup)) continue;
+                } else if (!hasFallback ||
+                           det::detHypot(static_cast<double>(tx - clampedX),
+                                         static_cast<double>(ty - clampedY)) > 480.0) {
+                    continue;
+                }
+                const double d = det::detHypot(static_cast<double>(tx) - v.fx, static_cast<double>(ty) - v.fy);
+                if (d < bestDist) {
+                    bestDist = d;
+                    bestSol = si;
+                    bestTx = tx;
+                    bestTy = ty;
+                }
+            }
+            if (bestSol) {
+                const auto approach = approachPointNear(
+                    v.fx, v.fy, static_cast<double>(bestTx), static_cast<double>(bestTy),
+                    56.0, mapPixelW_, mapPixelH_);
+                moveVehicleInternal(v, approach.first, approach.second);
+                v.supportTargetSoldier = *bestSol;
+                ++accepted;
+                continue;
+            }
+        }
+        const auto anchor = fallbackAnchor ? fallbackAnchor
+            : (hasFallback ? std::optional<std::pair<int, int>>{std::pair{clampedX, clampedY}} : std::nullopt);
+        if (anchor &&
+            det::detHypot(static_cast<double>(anchor->first) - v.fx,
+                          static_cast<double>(anchor->second) - v.fy) > 180.0) {
+            const auto approach = approachPointNear(
+                v.fx, v.fy, static_cast<double>(anchor->first), static_cast<double>(anchor->second),
+                64.0, mapPixelW_, mapPixelH_);
+            moveVehicleInternal(v, approach.first, approach.second);
+            ++accepted;
+        }
+    }
+    return accepted;
+}
+
 size_t TutorialUnits::transferGroupOwner(unsigned group, int newOwner, std::vector<SoldierPose>* outSoldiers) {
     if (newOwner < 0 || newOwner >= 4) return 0;
     const int g = int(group);

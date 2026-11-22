@@ -5,6 +5,7 @@
 #include "sim/mission_runner.hpp"
 #include "sim/state_hash.hpp"
 #include "sim/tutorial.hpp"
+#include <algorithm>
 #include <mutex>
 
 namespace ss2 {
@@ -32,6 +33,9 @@ std::uint64_t Tutorial::stateHash() const {
     h.each(groupAi_, [&h](const GroupAiState& g) {
         h.all(g.behavior, g.zone1, g.zone2, g.aiFlag0, g.aiFlag1, g.waypoints, g.waypointIndex);
     });
+    if (std::ranges::any_of(groupAi_, [](const GroupAiState& g) { return g.aiFlags != 0u || g.lastReserveTick != 0u; })) {
+        h.each(groupAi_, [&h](const GroupAiState& g) { h.all(g.aiFlags, g.lastReserveTick); });
+    }
     // Events raised but not yet taken by the runner still drive it on its next collect().
     h.add(events_);
     if (!airRouteWaypoints_.empty()) h.add(airRouteWaypoints_);

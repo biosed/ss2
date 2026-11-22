@@ -379,6 +379,12 @@ public:
     std::size_t orderGroupEvacuate(unsigned group, int mapX, int mapY);
     std::size_t orderZoneEvacuate(std::span<const std::uint8_t> zones, unsigned zone, int mapX, int mapY);
     std::size_t orderGroupMoveLimited(unsigned group, unsigned maxCount, int mapX, int mapY);
+    void setGroupHoldFire(unsigned group, bool holdFire, bool onlyNonPlayer = true);
+    std::optional<std::pair<int, int>> groupCentroid(unsigned group, bool onlyNonPlayer = true) const;
+    size_t orderGroupZoneBehavior(unsigned group, std::uint32_t behavior, std::uint32_t aiFlags,
+                                  int mapX, int mapY, bool onlyNonPlayer = true);
+    size_t orderGroupSupport(unsigned group, unsigned targetGroup, int fallbackX, int fallbackY,
+                             bool hasFallback, bool onlyNonPlayer = true);
     size_t orderAttackGroundVehicles(std::span<const size_t> indices, int mapX, int mapY);
     size_t orderAttackGroundSoldiers(std::span<const size_t> indices, int mapX, int mapY);
     std::optional<unsigned> lastHitTick(unsigned player) const;

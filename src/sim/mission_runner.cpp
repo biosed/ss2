@@ -135,6 +135,9 @@ void MissionRunner::collect() {
             if (e.index < 64u) spawnedReinforcementWaves_[e.index] = true;
         }
         if (e.kind == MissionEvent::GroupOrder) {
+            if ((e.gate & (1u << 22)) != 0u) {
+                units_.setGroupHoldFire(e.index, true, true);
+            }
             const auto& locs = tutorial_.data().locations;
             if (e.destZone < locs.size()) {
                 const auto [gx, gy] = locs[e.destZone];
@@ -771,6 +774,47 @@ void MissionRunner::run(std::stop_token stop, unsigned delayMs) {
     } catch (...) { error_ = std::current_exception(); }
 }
 
+void MissionRunner::stepGroupAiLocked() {
+    const auto& locs = tutorial_.data().locations;
+    const auto& groups = tutorial_.groupAi();
+    const unsigned tick = simTick_.load(std::memory_order_relaxed);
+    for (unsigned g = 0u; g < groups.size(); ++g) {
+        const auto& ai = groups[g];
+        if (ai.behavior == 0u) continue;
+        if ((ai.aiFlags & (1u << 22)) != 0u) {
+            units_.setGroupHoldFire(g, true, true);
+        }
+        std::uint32_t z = 0u;
+        if (ai.zone1 > 0u && ai.zone1 < locs.size() &&
+            ai.zone2 > 0u && ai.zone2 < locs.size() &&
+            ai.zone1 != ai.zone2 && (ai.aiFlags & 1u) != 0u) {
+            z = ((tick / 128u) & 1u) ? ai.zone2 : ai.zone1;
+        } else if (ai.zone1 > 0u && ai.zone1 < locs.size()) {
+            z = ai.zone1;
+        } else if (ai.zone2 > 0u && ai.zone2 < locs.size()) {
+            z = ai.zone2;
+        }
+        const bool hasZone = (z > 0u && z < locs.size());
+        const int zx = hasZone ? locs[z].first : 0;
+        const int zy = hasZone ? locs[z].second : 0;
+        const unsigned targetGrp = ai.aiFlag0 > 0u ? ai.aiFlag0 : ai.aiFlag1;
+        if (ai.behavior == 7u || ai.behavior == 9u) {
+            if (targetGrp > 0u || hasZone) {
+                (void)units_.orderGroupSupport(g, targetGrp, zx, zy, hasZone, true);
+            }
+        } else if (ai.behavior == 3u || ai.behavior == 6u || ai.behavior == 13u) {
+            std::optional<std::pair<int, int>> target;
+            if (targetGrp > 0u) target = units_.groupCentroid(targetGrp, true);
+            if (!target && hasZone) target = std::pair<int, int>{zx, zy};
+            if (target) {
+                (void)units_.orderGroupZoneBehavior(g, ai.behavior, ai.aiFlags, target->first, target->second, true);
+            }
+        } else if (hasZone) {
+            (void)units_.orderGroupZoneBehavior(g, ai.behavior, ai.aiFlags, zx, zy, true);
+        }
+    }
+}
+
 void MissionRunner::stepIfRunningLocked() {
     if (!modal_ && !paused_) stepTickLocked();
 }
@@ -796,6 +840,9 @@ void MissionRunner::stepTickLocked() {
     collect();
     flushScheduledReinforcements();
     if (mpSkirmish_) stepMpSkirmishLocked();
+    if (!mpSkirmish_ && (simTick_ == 1u || (simTick_ & 63u) == 19u)) {
+        stepGroupAiLocked();
+    }
 }
 
 void MissionRunner::advanceTicks(unsigned n) {

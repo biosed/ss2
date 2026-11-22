@@ -773,7 +773,159 @@ void runCaofCompleteOpcodes() {
               "Expected restored repaired bridge to allow crossing");
     }
 
-    std::cout << "CAOF complete 17-opcode + air-route + pool-carryover + bridges checks PASSED\n";
+    // 5. Retail I-GROUPS initial AI: garrisoning, zone movement + aif_holdfire, follow, supply support,
+    //    16-tick auto-reserve, OP(19) packed flags, and SS2FULL3 round-trip.
+    {
+        ss2::assets::MissionData igData{};
+        igData.width = 128;
+        igData.height = 128;
+        igData.flags = emptyFlags128();
+        igData.obstacles = emptyObstacles128();
+        igData.zones.assign(128u * 128u, 0u);
+        igData.phrases.resize(1);
+        const auto [z1x, z1y] = tc(24, 20);
+        const auto [z2x, z2y] = tc(28, 20);
+        const auto [z3x, z3y] = tc(36, 20);
+        const auto [z4x, z4y] = tc(16, 20);
+        igData.locations[1] = {z1x, z1y};
+        igData.locations[2] = {z2x, z2y};
+        igData.locations[3] = {z3x, z3y};
+        igData.locations[4] = {z4x, z4y};
+        igData.gates[0] = tc(16, 20);
+        igData.gateTargets[0] = tc(18, 20);
+        igData.hasInitialGroups = true;
+        // Group 1: ai_sold_guard (2) with aif_useobjects (1<<3) in zone 1 -> garrisons house in zone 1.
+        igData.initialGroups[1].behavior = 2u;
+        igData.initialGroups[1].aiFlags = (1u << 3);
+        igData.initialGroups[1].zone1 = 1u;
+        // Group 2: ai_tank_guard (5) with aif_holdfire (1<<22) in zone 2 -> moves & holds fire.
+        igData.initialGroups[2].behavior = 5u;
+        igData.initialGroups[2].aiFlags = (1u << 22);
+        igData.initialGroups[2].zone1 = 2u;
+        // Group 3: ai_tank_guard (5) advancing to zone 3 (leader for group 4).
+        igData.initialGroups[3].behavior = 5u;
+        igData.initialGroups[3].zone1 = 3u;
+        // Group 4: ai_tank_follow (6) following group 3.
+        igData.initialGroups[4].behavior = 6u;
+        igData.initialGroups[4].group1 = 3u;
+        // Group 5: ai_gruz_reload (9) supporting group 2's damaged tank.
+        igData.initialGroups[5].behavior = 9u;
+        igData.initialGroups[5].group1 = 2u;
+        // Group 6: periodic auto-reserve trigger at tick 25 ((25 & 0xf) == 9).
+        igData.initialGroups[6].reservGate = 0u;
+        igData.initialGroups[6].reservZone = 4u;
+        igData.initialGroups[6].reservArrivalDelayTicks = 0u;
+        igData.initialGroups[6].reservMinDelayTicks = 25u;
+        igData.initialGroups[6].reservMinUnits = 0u;
+        igData.initialGroups[6].reservForceDelayTicks = 0x7fffffffu;
+        igData.initialGroups[6].reservHpPct = 80u;
+        igData.initialGroups[6].reservAmmoPct = 90u;
+        igData.initialGroups[6].reservExpaPct = 30u;
+        igData.initialGroups[6].reservMoralePct = 60u;
+
+        // Script tests OP(19) with packed word (behavior=2 | ((1<<22 | 1)<<4) = 0x04000012u).
+        igData.scripts.push_back({
+            lit(7u), lit(0x04000012u), 19u, 11u, 0x7fffffffu
+        });
+
+        ss2::assets::UnitSpec rifle{};
+        rifle.id = "dguner";
+        rifle.isVehicle = false;
+        rifle.health = 100;
+        rifle.ammo1 = 40;
+        rifle.moveSpeed = 1.6;
+        rifle.sight = 10;
+
+        ss2::assets::UnitSpec tank{};
+        tank.id = "t34";
+        tank.isVehicle = true;
+        tank.health = 600;
+        tank.ammo1 = 30;
+        tank.moveSpeed = 2.0;
+        tank.sight = 12;
+        tank.roleClass = "tank";
+        tank.shot1 = {"ap76", ss2::assets::HitType::Pierce, 100, 100, 350, 350, 0, 20, 1, 20, "tankgun"};
+
+        ss2::assets::UnitSpec sup{};
+        sup.id = "ss";
+        sup.isVehicle = true;
+        sup.selType = "sappers";
+        sup.ammoRegenDelay = 8;
+        sup.health = 240;
+        sup.ammo1 = 5000;
+        sup.ammo2 = 5000;
+        sup.moveSpeed = 2.2;
+        sup.sight = 10;
+        sup.stock = 44;
+
+        const auto igCat = ss2::assets::UnitCatalog::fromSpecs({rifle, tank, sup});
+        const auto [s1x, s1y] = tc(21, 20);
+        const auto [p0x, p0y] = tc(27, 20);
+        const auto [t2x, t2y] = tc(20, 22);
+        const auto [t3x, t3y] = tc(24, 24);
+        const auto [t4x, t4y] = tc(24, 26);
+        const auto [supStartX, supStartY] = tc(20, 24);
+
+        std::vector<ss2::assets::Infantry> inf{
+            {"dguner", s1x, s1y, 100, 40, 1, 1}, // group 1 garrisoner
+            {"dguner", p0x, p0y, 100, 40, 0, 0}, // nearby player enemy to verify group 2 holdfire
+        };
+        std::vector<ss2::assets::Placement> veh{
+            {"t34", t2x, t2y, 0, 50, 100, 2, 1},        // idx 0: damaged tank in group 2 (ai_tank_guard + holdfire)
+            {"t34", t3x, t3y, 0, 100, 100, 3, 1},       // idx 1: group 3 leader tank moving to zone 3
+            {"t34", t4x, t4y, 0, 100, 100, 4, 1},       // idx 2: group 4 follower tank (group1 = 3)
+            {"ss", supStartX, supStartY, 0, 100, 100, 5, 1}, // idx 3: group 5 supply truck (ai_gruz_reload for group 2)
+        };
+        auto igGrid = ss2::InfantryPathGrid::fromSubCellMasks(igData.width, igData.height, igData.flags, igData.obstacles);
+        ss2::FogGrid igFog(igData.width, igData.height, igData.flags);
+        ss2::TutorialUnits igUnits(std::move(igGrid), inf, veh, std::move(igFog), 2, false, {}, igCat);
+        ss2::assets::BuildingPlacement house{};
+        house.x = z1x;
+        house.y = z1y;
+        house.left = z1x - 24;
+        house.top = z1y - 24;
+        house.width = 48;
+        house.height = 48;
+        house.capacity = 4;
+        house.maxHp = 400;
+        igUnits.setBuildings({house});
+        igUnits.addReserveUnit({"dguner", 1, 6, 100, 100, 10, 0});
+
+        ss2::MissionRunner igRunner(ss2::MissionRunner::ManualClock{}, std::move(igData), std::move(igUnits));
+        bool sawReserveDeploy = false;
+        for (unsigned t = 0u; t < 200u; ++t) {
+            igRunner.advanceTicks(1u);
+            for (const auto& ev : igRunner.poll()) {
+                if (ev.kind == ss2::MissionEvent::Reinforcement &&
+                    ev.owner == 1u && ev.gate == 0u && ev.destZone == 4u) {
+                    sawReserveDeploy = true;
+                }
+            }
+        }
+        const auto igSnap = igRunner.takeFullSnapshot();
+        check(igSnap.units.soldiers[0].garrisonBuilding == 0,
+              "Expected I-GROUPS ai_sold_guard with aif_useobjects to garrison building in zone 1");
+        check(igSnap.units.vehicles[0].holdFire,
+              "Expected I-GROUPS aif_holdfire on group 2 to enforce holdFire=true");
+        check(igSnap.units.vehicles[0].x > t2x,
+              "Expected I-GROUPS ai_tank_guard to move group 2 toward zone 2");
+        check(igSnap.units.vehicles[0].hp > 300,
+              "Expected I-GROUPS ai_gruz_reload group 5 supply truck to repair group 2 tank");
+        check(igSnap.units.vehicles[1].x > t3x && igSnap.units.vehicles[2].x > t4x,
+              "Expected I-GROUPS ai_tank_follow group 4 to follow group 3 leader");
+        check(sawReserveDeploy && igSnap.tutorial.groupAi[6].lastReserveTick == 25u,
+              "Expected I-GROUPS 16-tick auto-reserve to deploy group 6 at tick 25");
+        check(igSnap.tutorial.groupAi[7].behavior == 2u &&
+                  igSnap.tutorial.groupAi[7].aiFlags == 0x00400001u,
+              "Expected OP(19) to split packed behavior and aiFlags bits 4..31");
+
+        const auto ser3 = ss2::MissionRunner::serializeFullSnapshot(igSnap);
+        const auto dec3 = ss2::MissionRunner::deserializeFullSnapshot(ser3);
+        check(dec3.has_value() && *dec3 == igSnap,
+              "Expected SS2FULL3 round-trip to preserve group aiFlags and lastReserveTick");
+    }
+
+    std::cout << "CAOF complete 17-opcode + air-route + pool-carryover + bridges + I-GROUPS checks PASSED\n";
 }
 
 void runRetailCaofCorpusCheck(const std::filesystem::path& gameDir) {
@@ -819,6 +971,9 @@ void runRetailCaofCorpusCheck(const std::filesystem::path& gameDir) {
                 }
             }
         }
+        if (lowerAscii(mp.extension().string()) != ".smm") {
+            check(md.hasInitialGroups, "Expected SP/campaign mission to carry 2800-byte I-GROUPS");
+        }
         if (!md.scripts.empty()) {
             ss2::MissionQueries zeroQ{};
             try {
@@ -836,6 +991,32 @@ void runRetailCaofCorpusCheck(const std::filesystem::path& gameDir) {
                                  std::to_string(*unknownOps.begin()) + ")");
     }
     check(evaluatedMissions == 136u, "Expected 136 retail VM evaluations");
+
+    // Verify exact retail I-GROUPS values on Tutorial I, campaign/001000.ssc, and campaign/010007.ssc.
+    {
+        const auto tutMd = ss2::assets::readMissionData(gameDir / "maps/single/--- TUTORIAL I ---.SSM");
+        check(tutMd.hasInitialGroups &&
+                  tutMd.initialGroups[13].behavior == 4u &&
+                  tutMd.initialGroups[13].aiFlags == 1u &&
+                  tutMd.initialGroups[13].zone1 == 0u,
+              "Expected Tutorial I group 13 I-GROUPS behavior=4, aiFlags=1");
+
+        const auto c001Md = ss2::assets::readMissionData(gameDir / "maps/campaign/001000.ssc");
+        check(c001Md.hasInitialGroups &&
+                  c001Md.initialGroups[1].behavior == 12u &&
+                  c001Md.initialGroups[1].aiFlags == 1u &&
+                  c001Md.initialGroups[1].zone1 == 1u &&
+                  c001Md.initialGroups[1].zone2 == 1u,
+              "Expected campaign/001000.ssc group 1 I-GROUPS behavior=12, aiFlags=1, zone1=zone2=1");
+
+        const auto c010Md = ss2::assets::readMissionData(gameDir / "maps/campaign/010007.ssc");
+        check(c010Md.hasInitialGroups &&
+                  c010Md.initialGroups[70].reservMinDelayTicks == 0u &&
+                  c010Md.initialGroups[70].reservArrivalDelayTicks == 22500u &&
+                  c010Md.initialGroups[70].reservMinUnits == 20u &&
+                  c010Md.initialGroups[70].reservExpaPct == 30u,
+              "Expected campaign/010007.ssc group 70 I-GROUPS reserve configuration");
+    }
 
     // Smoke-step representative retail missions exercising OP(8/9/31/33/39/46/62/63/71/72/75/83/84/85/86/90/91).
     const auto catalog = ss2::assets::UnitCatalog::load(gameDir);

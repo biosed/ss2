@@ -81,6 +81,19 @@ enum class WeatherKind : std::uint8_t {
     Snow = 3
 };
 
+struct InitialGroupConfig {
+    std::uint8_t behavior{0};
+    std::uint32_t aiFlags{0};
+    std::uint8_t zone1{0}, zone2{0}, group1{0}, group2{0};
+    std::uint8_t reservGate{16}, reservZone{100};
+    std::uint32_t reservArrivalDelayTicks{0};
+    std::uint32_t reservMinDelayTicks{0x7fffffffu};
+    std::uint16_t reservMinUnits{0};
+    std::uint32_t reservForceDelayTicks{0x7fffffffu};
+    std::uint8_t reservHpPct{100}, reservAmmoPct{100}, reservExpaPct{0}, reservMoralePct{50};
+    bool operator==(const InitialGroupConfig&) const = default;
+};
+
 struct MissionData {
     unsigned scheme{0};
     unsigned width{128}, height{128};
@@ -103,6 +116,8 @@ struct MissionData {
     std::vector<std::uint8_t> mines;
     std::vector<AmbientWoofer> woofers;
     WeatherKind weather{WeatherKind::Clear};
+    std::array<InitialGroupConfig, 100> initialGroups{};
+    bool hasInitialGroups{false};
 };
 
 using TutorialData = MissionData;

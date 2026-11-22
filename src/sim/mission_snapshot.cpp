@@ -6,6 +6,7 @@ namespace ss2 {
 namespace {
 constexpr std::array<std::uint8_t, 8> kFullMagicV1{'S', 'S', '2', 'F', 'U', 'L', 'L', '1'};
 constexpr std::array<std::uint8_t, 8> kFullMagicV2{'S', 'S', '2', 'F', 'U', 'L', 'L', '2'};
+constexpr std::array<std::uint8_t, 8> kFullMagicV3{'S', 'S', '2', 'F', 'U', 'L', 'L', '3'};
 constexpr std::uint32_t kMaxStringBytes = 4096u;
 
 void appendU8(std::vector<std::uint8_t>& out, std::uint8_t v) {
@@ -172,7 +173,7 @@ std::vector<std::uint8_t> MissionRunner::serializeFullSnapshot(const FullSnapsho
     const std::vector<std::uint8_t> unitBytes = TutorialUnits::serializeSnapshot(snap.units);
     std::vector<std::uint8_t> out;
     out.reserve(unitBytes.size() + 4096u);
-    out.insert(out.end(), kFullMagicV2.begin(), kFullMagicV2.end());
+    out.insert(out.end(), kFullMagicV3.begin(), kFullMagicV3.end());
 
     // 1. Core TutorialUnits snapshot.
     appendU32(out, static_cast<std::uint32_t>(unitBytes.size()));
@@ -283,13 +284,22 @@ std::vector<std::uint8_t> MissionRunner::serializeFullSnapshot(const FullSnapsho
         appendI32(out, bs.stage);
         appendU8(out, bs.destroyed ? 1u : 0u);
     }
+
+    // 6. SS2FULL3 extension: packed group aiFlags and auto-reserve timestamps.
+    for (const auto& g : vm.groupAi) {
+        appendU32(out, g.aiFlags);
+        appendU32(out, g.lastReserveTick);
+    }
     return out;
 }
 
 std::optional<MissionRunner::FullSnapshot> MissionRunner::deserializeFullSnapshot(std::span<const std::uint8_t> bytes) {
     int version = 0;
-    if (bytes.size() >= kFullMagicV2.size() &&
-        std::equal(kFullMagicV2.begin(), kFullMagicV2.end(), bytes.begin())) {
+    if (bytes.size() >= kFullMagicV3.size() &&
+        std::equal(kFullMagicV3.begin(), kFullMagicV3.end(), bytes.begin())) {
+        version = 3;
+    } else if (bytes.size() >= kFullMagicV2.size() &&
+               std::equal(kFullMagicV2.begin(), kFullMagicV2.end(), bytes.begin())) {
         version = 2;
     } else if (bytes.size() >= kFullMagicV1.size() &&
                std::equal(kFullMagicV1.begin(), kFullMagicV1.end(), bytes.begin())) {
@@ -473,6 +483,11 @@ std::optional<MissionRunner::FullSnapshot> MissionRunner::deserializeFullSnapsho
             bs.hp = hp;
             bs.stage = stage;
             bs.destroyed = destroyed;
+        }
+    }
+    if (version >= 3) {
+        for (auto& g : vm.groupAi) {
+            if (!r.readU32(g.aiFlags) || !r.readU32(g.lastReserveTick)) return std::nullopt;
         }
     }
 
