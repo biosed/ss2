@@ -43,7 +43,7 @@ target_link_libraries(ss2 PRIVATE ss2_gold_frontend)
 find_package(ZLIB 1.2.9 REQUIRED)
 find_package(JPEG REQUIRED)
 find_package(PNG 1.6 REQUIRED)
-add_library(ss2_assets STATIC src/assets/sprite.cpp src/assets/mission.cpp src/assets/terrain.cpp
+add_library(ss2_assets STATIC src/assets/sprite.cpp src/assets/mission.cpp src/assets/briefing_media.cpp src/assets/terrain.cpp
     src/assets/scenery.cpp src/assets/indexed.cpp src/assets/infantry.cpp src/assets/vehicles.cpp src/assets/placement.cpp
     src/assets/hd_pack.cpp src/assets/infantry_scale.cpp src/assets/infantry_atlas.cpp src/assets/sound_bank.cpp
     src/assets/unit_catalog.cpp)

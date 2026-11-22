@@ -111,12 +111,25 @@ public:
     bool hasMenuAssets() const;
     bool hasCreditsArt() const;
     std::size_t creditsLineCount() const;
+    bool hasBriefingMedia() const;
+    std::size_t briefingPartCount() const;
+    int briefingActivePart() const { return briefActivePart_; }
+    std::size_t briefingCurrentFrame() const { return briefFrameIndex_; }
+    bool briefingPaused() const { return briefPaused_; }
+    std::string briefingDisplayedText() const;
     std::string activeNotice() const { return noticeText_; }
 
 private:
     struct Assets;
     void loadAssets(std::optional<int> fixedBgIndex);
     void loadCreditsText();
+    void loadBriefingMedia(const std::string& path);
+    void clearBriefingMedia();
+    void startBriefingVoice(const std::vector<std::int16_t>& pcm);
+    void stopBriefingVoice();
+    void setBriefingVoicePaused(bool paused);
+    void selectBriefingPart(int part);
+    void renderBriefingOverlayIfNeeded();
     void ensureFocusedValid();
     void syncNoticeFromState();
     void onScreenChanged(FrontEnd::Screen previous);
@@ -167,6 +180,14 @@ private:
     int scrollOffset_{0};
     int ratingsScroll_{0};
     double briefScroll_{0.0};
+    std::string briefMediaPath_;
+    int briefActivePart_{0};
+    std::size_t briefLoopPart_{0};
+    std::size_t briefFrameIndex_{0};
+    double briefAccumMs_{0.0};
+    double briefHoldMs_{0.0};
+    bool briefPaused_{false};
+    bool briefOverlayDirty_{false};
     double creditsScroll_{0.0};
     double creditsContentHeight_{0.0};
     bool creditsPaused_{false};

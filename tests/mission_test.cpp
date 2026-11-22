@@ -1,3 +1,4 @@
+#include "assets/briefing_media.hpp"
 #include "assets/infantry.hpp"
 #include "assets/mission.hpp"
 #include "assets/placement.hpp"
@@ -2137,6 +2138,128 @@ void testUnitCatalogPhase4A() {
     check(amb.isAmbulance(), "synthetic ambulance healdelay flag match");
 }
 
+void testBriefingMedia() {
+    {
+        const auto paras = ss2::assets::splitBriefingParagraphs("  Overview line.\r\n~1. First step\r\n~2. Second step ");
+        check(paras.size() == 3u && paras[0] == "Overview line." &&
+                  paras[1] == "1. First step" && paras[2] == "2. Second step",
+              "splitBriefingParagraphs splits and trims on '~'");
+        const auto plain = ss2::assets::splitBriefingParagraphs("  Single block\n ");
+        check(plain.size() == 1u && plain[0] == "Single block", "splitBriefingParagraphs single block");
+        check(ss2::assets::splitBriefingParagraphs("  \r\n\t ").empty(), "splitBriefingParagraphs blank is empty");
+    }
+
+    {
+        // Synthetic "2D" Dialogic OKI ADPCM stream (2 bytes -> 4 samples)
+        const std::array<std::uint8_t, 8> apm{{'2', 'D', 2u, 0u, 0u, 0u, 0x7Fu, 0x80u}};
+        const auto pcm = ss2::assets::decodeApmAudio(apm);
+        check(pcm.size() == 4u && pcm[0] == 28 && pcm[1] == -31,
+              "decodeApmAudio decodes synthetic OKI ADPCM nibbles cleanly");
+        const std::array<std::uint8_t, 6> badApm{{'R', 'I', 0u, 0u, 0u, 0u}};
+        check(ss2::assets::decodeApmAudio(badApm).empty(), "decodeApmAudio rejects bad magic");
+    }
+
+    {
+        // Synthetic 0xA1 compact RLE sprite (left=2, top=1, w=4, h=2) layered red (alpha 255) + blue (alpha 128)
+        std::vector<std::uint8_t> dat{
+            2u, 0u, 1u, 0u, 4u, 0u, 2u, 0u, 0xA1u,
+            5u, 0u, 0x82u, 255u, 0x02u, 128u, 0u,
+            0u, 0u,
+        };
+        const std::string offStr = "0 0 255 255\r\n1 0 16711680 128\r\n";
+        std::vector<ss2::assets::BriefingLayer> layers;
+        std::vector<ss2::assets::BriefingFrame> frames;
+        check(ss2::assets::parseBriefingOff(
+                  std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(offStr.data()), offStr.size()),
+                  dat.size(), layers, frames),
+              "parseBriefingOff parses synthetic 2-layer frame");
+        check(layers.size() == 2u && frames.size() == 1u && frames[0].layerCount == 2u,
+              "synthetic .off grouped into 1 frame with 2 layers");
+
+        ss2::assets::BriefingPart part;
+        part.dat = std::move(dat);
+        part.layers = std::move(layers);
+        part.frames = std::move(frames);
+
+        std::vector<std::uint32_t> canvas(16u * 8u, 0xFFFFFFFFu);
+        ss2::assets::renderBriefingFrameArgb32(part, 0u, canvas.data(), 16, 8, 16);
+        check(canvas[0] == 0u, "renderBriefingFrameArgb32 clears transparent pixels");
+        // (x=2, y=1): layer 0 writes opaque red (255,0,0), layer 1 (alpha=128) composites blue over it
+        const std::uint32_t px = canvas[1u * 16u + 2u];
+        const std::uint32_t a = px >> 24;
+        const std::uint32_t r = (px >> 16) & 0xFFu;
+        const std::uint32_t b = px & 0xFFu;
+        check(a == 255u && r == 127u && b == 128u,
+              "renderBriefingFrameArgb32 premultiplied SRC_OVER blend matches");
+        check(canvas[1u * 16u + 5u] == 0u, "transparent index 0 leaves pixel transparent");
+    }
+
+    if (const char* env = std::getenv("SS2_PRIVATE_GAME"); env && *env) {
+        const std::filesystem::path gameDir(env);
+        if (std::filesystem::is_directory(gameDir)) {
+            const auto camp001 = ss2::assets::findCampaignMission(gameDir, "001000");
+            check(camp001.has_value(), "001000.ssc found for briefing_media check");
+            const auto bm001 = ss2::assets::readMissionBriefingMedia(camp001->path);
+            check(bm001.parts.size() == 3u && bm001.paragraphs.size() == 4u &&
+                      !bm001.overviewVoicePcm.empty() &&
+                      !bm001.parts[0].frames.empty() && !bm001.parts[0].voicePcm.empty(),
+                  "retail 001000.ssc loads 3 animated parts, 4 ~ paragraphs, and 4 ADPCM voiceovers");
+            std::vector<std::uint32_t> frameBuf(
+                std::size_t(ss2::assets::kBriefingOverlayWidth) * ss2::assets::kBriefingOverlayHeight, 0u);
+            ss2::assets::renderBriefingFrameArgb32(
+                bm001.parts[0], 0u, frameBuf.data(),
+                ss2::assets::kBriefingOverlayWidth, ss2::assets::kBriefingOverlayHeight,
+                ss2::assets::kBriefingOverlayWidth);
+            check(std::ranges::any_of(frameBuf, [](std::uint32_t c) { return c != 0u; }),
+                  "retail 001000.ssc renders non-empty briefing overlay pixels");
+
+            const auto camp002 = ss2::assets::findCampaignMission(gameDir, "002000");
+            check(camp002.has_value(), "002000.ssc found for 4-part briefing_media check");
+            const auto bm002 = ss2::assets::readMissionBriefingMedia(camp002->path);
+            check(bm002.parts.size() == 4u && bm002.paragraphs.size() == 5u && bm002.hasVoice(),
+                  "retail 002000.ssc loads 4 parts and 5 paragraphs");
+
+            const auto tut = ss2::assets::findSinglePlayerMission(gameDir, "tutorial i");
+            check(tut.has_value(), "Tutorial I found for non-animated briefing_media check");
+            const auto bmTut = ss2::assets::readMissionBriefingMedia(tut->path);
+            check(bmTut.empty() && !bmTut.hasAnimation() && !bmTut.hasVoice(),
+                  "Tutorial I reports empty animated/voice briefing media");
+
+            std::size_t animatedMissions = 0;
+            std::size_t voicedMissions = 0;
+            std::size_t totalFrames = 0;
+            for (const auto& c : ss2::assets::listCampaigns(gameDir)) {
+                for (const auto& m : c.missions) {
+                    const auto bm = ss2::assets::readMissionBriefingMedia(m.path);
+                    if (bm.hasAnimation()) ++animatedMissions;
+                    if (bm.hasVoice()) ++voicedMissions;
+                    for (const auto& pt : bm.parts) {
+                        totalFrames += pt.frames.size();
+                        ss2::assets::renderBriefingFrameArgb32(
+                            pt, 0u, frameBuf.data(),
+                            ss2::assets::kBriefingOverlayWidth, ss2::assets::kBriefingOverlayHeight,
+                            ss2::assets::kBriefingOverlayWidth);
+                    }
+                }
+            }
+            for (const auto& m : ss2::assets::listSinglePlayerMissions(gameDir)) {
+                const auto bm = ss2::assets::readMissionBriefingMedia(m.path);
+                if (bm.hasAnimation()) ++animatedMissions;
+                if (bm.hasVoice()) ++voicedMissions;
+                for (const auto& pt : bm.parts) {
+                    totalFrames += pt.frames.size();
+                    ss2::assets::renderBriefingFrameArgb32(
+                        pt, 0u, frameBuf.data(),
+                        ss2::assets::kBriefingOverlayWidth, ss2::assets::kBriefingOverlayHeight,
+                        ss2::assets::kBriefingOverlayWidth);
+                }
+            }
+            check(animatedMissions >= 50u && voicedMissions >= 30u && totalFrames >= 3000u,
+                  "retail SP/campaign sweep decoded all animated briefing streams");
+        }
+    }
+}
+
 } // namespace
 
 int main() {
@@ -2145,6 +2268,7 @@ int main() {
         testSyntheticMissions();
         testSueAndPaths();
         testUnitCatalogPhase4A();
+        testBriefingMedia();
         testOptionalRetailSweep();
     } catch (const std::exception& e) {
         std::cerr << "mission_test failed: " << e.what() << '\n';

@@ -591,12 +591,46 @@ void testRetailGoldAssets(const std::filesystem::path& gameDir) {
     check(fe.state().launchPath() == campList[0].missions[0].easyPath.string(),
           "Easy routes launchPath to EASY/023000.ssc");
 
-    // Screen 4b: Campaign Briefing
+    // Screen 4b: Campaign Briefing (with retail animated overlay & live controls)
     fe.handleMouseDown(188.0, 529.0, 1);  // Start -> Briefing
     check(fe.state().screen() == ss2::FrontEnd::Screen::Briefing &&
           fe.state().briefingFromCampaign(), "retail Campaign Briefing");
+    check(fe.hasBriefingMedia() && fe.briefingPartCount() == 4u &&
+          fe.briefingActivePart() == 0 && !fe.briefingPaused(),
+          "023000.ssc loads 4 animated briefing parts on entering Briefing");
+    const std::string overviewText = fe.briefingDisplayedText();
+    check(!overviewText.empty() && overviewText.find('~') == std::string::npos,
+          "briefingDisplayedText shows overview paragraph without '~'");
+
     fe.renderToBuffer(1280, 720, frame);
     if (!capDir.empty()) writePng(capDir / "screen4b_campaign_briefing.png", 1280, 720, frame);
+    const auto frame0 = frame;
+    fe.advance(std::chrono::milliseconds(500));
+    check(fe.briefingCurrentFrame() >= 14u, "animated briefing advances frame over time");
+    fe.renderToBuffer(1280, 720, frame);
+    check(frame != frame0, "animated briefing updates rendered pixels");
+
+    fe.handleKey(SDLK_P);  // Pause
+    check(fe.briefingPaused(), "P toggles briefing pause on");
+    const std::size_t pausedFrame = fe.briefingCurrentFrame();
+    fe.advance(std::chrono::milliseconds(200));
+    check(fe.briefingCurrentFrame() == pausedFrame, "paused briefing freezes animation frame");
+    fe.handleKey(SDLK_P);  // Resume
+    check(!fe.briefingPaused(), "P toggles briefing pause off");
+
+    fe.handleKey(SDLK_1);  // Select Part 1
+    check(fe.briefingActivePart() == 1 && fe.briefingCurrentFrame() == 0u,
+          "key 1 selects Part 1 from frame 0");
+    const std::string part1Text = fe.briefingDisplayedText();
+    check(!part1Text.empty() && part1Text != overviewText && part1Text.find('~') == std::string::npos,
+          "selecting Part 1 switches displayed paragraph");
+    fe.advance(std::chrono::milliseconds(150));
+    check(fe.briefingCurrentFrame() > 0u, "selected Part 1 advances frames");
+
+    fe.handleKey(SDLK_R);  // Restart overview
+    check(fe.briefingActivePart() == 0 && fe.briefingCurrentFrame() == 0u && !fe.briefingPaused() &&
+          fe.briefingDisplayedText() == overviewText,
+          "R restarts briefing back to overview");
 
     // Walk back up to Single Player -> Single Missions -> Tutorial Briefing
     fe.handleKey(SDLK_ESCAPE);  // Briefing -> CampaignMissions
@@ -619,6 +653,12 @@ void testRetailGoldAssets(const std::filesystem::path& gameDir) {
     // Screen 4: Mission Briefing
     fe.handleMouseDown(188.0, 529.0, 1);
     check(fe.state().screen() == ss2::FrontEnd::Screen::Briefing, "retail Briefing");
+    check(!fe.hasBriefingMedia() && fe.briefingPartCount() == 0u && !fe.briefingPaused(),
+          "Tutorial I has no animated briefing media");
+    fe.handleKey(SDLK_R);
+    fe.handleKey(SDLK_P);
+    check(!fe.briefingPaused() && fe.briefingActivePart() == 0,
+          "R/P are safe no-ops on non-animated briefing");
     fe.renderToBuffer(1280, 720, frame);
     if (!capDir.empty()) writePng(capDir / "screen4_briefing.png", 1280, 720, frame);
     fe.renderToBuffer(3840, 2160, frame);

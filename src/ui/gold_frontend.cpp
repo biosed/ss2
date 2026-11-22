@@ -1,5 +1,6 @@
 #include "ui/gold_frontend.hpp"
 
+#include "assets/briefing_media.hpp"
 #include "assets/mission.hpp"
 #include "assets/sprite.hpp"
 #include "render/window.hpp"
@@ -668,7 +669,22 @@ struct GoldFrontEnd::Assets {
     std::array<PckSurface, 3> scrollTrack;    // scrollbar_sp[0..2]
     std::unordered_map<std::string, Surface> overviews;
     std::vector<std::string> creditsLines;
+    assets::MissionBriefingMedia briefMedia;
+    Surface briefOverlay = makeNullSurface();
+    SDL_AudioDeviceID briefAudioDev{0};
+    SDL_AudioStream* briefAudioStream{nullptr};
     bool loadedMenuSue{false};
+
+    ~Assets() {
+        if (briefAudioStream) {
+            SDL_DestroyAudioStream(briefAudioStream);
+            briefAudioStream = nullptr;
+        }
+        if (briefAudioDev) {
+            SDL_CloseAudioDevice(briefAudioDev);
+            briefAudioDev = 0;
+        }
+    }
 };
 
 GoldFrontEnd::GoldFrontEnd(SDL_Window* window, const std::filesystem::path& gameDir,
@@ -1199,6 +1215,9 @@ void GoldFrontEnd::showNotice(std::string text) {
 
 void GoldFrontEnd::onScreenChanged(FrontEnd::Screen previous) {
     if (fe_.screen() != previous) {
+        if (previous == FrontEnd::Screen::Briefing) {
+            clearBriefingMedia();
+        }
         hoveredId_.clear();
         draggingThumb_ = false;
         briefScroll_ = 0.0;
@@ -1274,6 +1293,7 @@ void GoldFrontEnd::onScreenChanged(FrontEnd::Screen previous) {
             beginOptionsEdit();
         } else if (fe_.screen() == FrontEnd::Screen::Briefing) {
             ensureOverviewLoaded(fe_.launchPath());
+            loadBriefingMedia(fe_.launchPath());
         }
         if (fe_.screen() != FrontEnd::Screen::Options) {
             settings_.difficulty = fe_.difficulty();
@@ -1334,6 +1354,158 @@ void GoldFrontEnd::ensureOverviewLoaded(const std::string& path) {
     } catch (...) {
         assets_->overviews.emplace(path, makeNullSurface());
     }
+}
+
+bool GoldFrontEnd::hasBriefingMedia() const {
+    return assets_ && (assets_->briefMedia.hasAnimation() || assets_->briefMedia.hasVoice());
+}
+
+std::size_t GoldFrontEnd::briefingPartCount() const {
+    return assets_ ? assets_->briefMedia.parts.size() : 0u;
+}
+
+std::string GoldFrontEnd::briefingDisplayedText() const {
+    if (assets_ && !assets_->briefMedia.paragraphs.empty()) {
+        if (briefActivePart_ > 0 &&
+            std::size_t(briefActivePart_) < assets_->briefMedia.paragraphs.size() &&
+            !assets_->briefMedia.paragraphs[std::size_t(briefActivePart_)].empty()) {
+            return assets_->briefMedia.paragraphs[std::size_t(briefActivePart_)];
+        }
+        return assets_->briefMedia.paragraphs[0];
+    }
+    const std::string raw = fe_.briefingText();
+    const auto paras = assets::splitBriefingParagraphs(raw);
+    return paras.empty() ? raw : paras[0];
+}
+
+void GoldFrontEnd::stopBriefingVoice() {
+    if (assets_ && assets_->briefAudioStream) {
+        SDL_ClearAudioStream(assets_->briefAudioStream);
+    }
+}
+
+void GoldFrontEnd::setBriefingVoicePaused(bool paused) {
+    if (!assets_ || !assets_->briefAudioDev) return;
+    if (paused) SDL_PauseAudioDevice(assets_->briefAudioDev);
+    else SDL_ResumeAudioDevice(assets_->briefAudioDev);
+}
+
+void GoldFrontEnd::startBriefingVoice(const std::vector<std::int16_t>& pcm) {
+    stopBriefingVoice();
+    if (!assets_ || !window_ || pcm.empty() || settings_.sfxVolume <= 0.001f) return;
+    if (!SDL_WasInit(SDL_INIT_AUDIO)) {
+        if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) return;
+    }
+    SDL_AudioSpec spec{};
+    spec.format = SDL_AUDIO_S16;
+    spec.channels = 1;
+    spec.freq = assets::kBriefingVoiceSampleRate;
+    if (!assets_->briefAudioDev) {
+        assets_->briefAudioDev = SDL_OpenAudioDevice(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec);
+        if (!assets_->briefAudioDev) return;
+    }
+    if (!assets_->briefAudioStream) {
+        assets_->briefAudioStream = SDL_CreateAudioStream(&spec, &spec);
+        if (!assets_->briefAudioStream ||
+            !SDL_BindAudioStream(assets_->briefAudioDev, assets_->briefAudioStream)) {
+            if (assets_->briefAudioStream) {
+                SDL_DestroyAudioStream(assets_->briefAudioStream);
+                assets_->briefAudioStream = nullptr;
+            }
+            return;
+        }
+    }
+    SDL_SetAudioStreamGain(assets_->briefAudioStream, std::clamp(settings_.sfxVolume, 0.0f, 1.0f));
+    SDL_ClearAudioStream(assets_->briefAudioStream);
+    SDL_ResumeAudioDevice(assets_->briefAudioDev);
+    SDL_PutAudioStreamData(assets_->briefAudioStream, pcm.data(),
+                           static_cast<int>(pcm.size() * sizeof(std::int16_t)));
+}
+
+void GoldFrontEnd::clearBriefingMedia() {
+    stopBriefingVoice();
+    if (assets_) {
+        assets_->briefMedia = {};
+    }
+    briefMediaPath_.clear();
+    briefActivePart_ = 0;
+    briefLoopPart_ = 0;
+    briefFrameIndex_ = 0;
+    briefAccumMs_ = 0.0;
+    briefHoldMs_ = 0.0;
+    briefPaused_ = false;
+    briefOverlayDirty_ = false;
+}
+
+void GoldFrontEnd::loadBriefingMedia(const std::string& path) {
+    clearBriefingMedia();
+    briefScroll_ = 0.0;
+    briefMediaPath_ = path;
+    if (!path.empty()) {
+        std::error_code ec;
+        if (std::filesystem::is_regular_file(path, ec)) {
+            try {
+                assets_->briefMedia = assets::readMissionBriefingMedia(path);
+            } catch (...) {
+                assets_->briefMedia = {};
+            }
+        }
+    }
+    briefOverlayDirty_ = assets_ && assets_->briefMedia.hasAnimation();
+    if (assets_ && !assets_->briefMedia.overviewVoicePcm.empty()) {
+        startBriefingVoice(assets_->briefMedia.overviewVoicePcm);
+    }
+    dirty_ = true;
+}
+
+void GoldFrontEnd::selectBriefingPart(int part) {
+    if (!assets_) return;
+    const int clamped = (part <= 0 || std::size_t(part) > assets_->briefMedia.parts.size()) ? 0 : part;
+    briefActivePart_ = clamped;
+    briefLoopPart_ = (clamped == 0) ? 0u : static_cast<std::size_t>(clamped - 1);
+    briefFrameIndex_ = 0u;
+    briefAccumMs_ = 0.0;
+    briefHoldMs_ = 0.0;
+    briefPaused_ = false;
+    briefScroll_ = 0.0;
+    briefOverlayDirty_ = assets_->briefMedia.hasAnimation();
+    dirty_ = true;
+    if (clamped == 0) {
+        startBriefingVoice(assets_->briefMedia.overviewVoicePcm);
+    } else {
+        startBriefingVoice(assets_->briefMedia.parts[static_cast<std::size_t>(clamped - 1)].voicePcm);
+    }
+}
+
+void GoldFrontEnd::renderBriefingOverlayIfNeeded() {
+    if (!assets_ || !assets_->briefMedia.hasAnimation()) return;
+    const std::size_t curPart = (briefActivePart_ > 0)
+        ? static_cast<std::size_t>(briefActivePart_ - 1)
+        : briefLoopPart_;
+    if (curPart >= assets_->briefMedia.parts.size() ||
+        assets_->briefMedia.parts[curPart].frames.empty()) {
+        return;
+    }
+    if (!assets_->briefOverlay) {
+        assets_->briefOverlay = Surface(
+            cairo_image_surface_create(CAIRO_FORMAT_ARGB32,
+                                       assets::kBriefingOverlayWidth,
+                                       assets::kBriefingOverlayHeight),
+            cairo_surface_destroy);
+    }
+    if (!assets_->briefOverlay ||
+        cairo_surface_status(assets_->briefOverlay.get()) != CAIRO_STATUS_SUCCESS) {
+        return;
+    }
+    if (!briefOverlayDirty_) return;
+    cairo_surface_flush(assets_->briefOverlay.get());
+    auto* dst = reinterpret_cast<std::uint32_t*>(cairo_image_surface_get_data(assets_->briefOverlay.get()));
+    const int stridePx = cairo_image_surface_get_stride(assets_->briefOverlay.get()) / static_cast<int>(sizeof(std::uint32_t));
+    assets::renderBriefingFrameArgb32(assets_->briefMedia.parts[curPart], briefFrameIndex_, dst,
+                                      assets::kBriefingOverlayWidth, assets::kBriefingOverlayHeight,
+                                      stridePx);
+    cairo_surface_mark_dirty(assets_->briefOverlay.get());
+    briefOverlayDirty_ = false;
 }
 
 std::string GoldFrontEnd::hitTestStage(double sx, double sy) const {
@@ -1434,8 +1606,15 @@ std::string GoldFrontEnd::hitTestStage(double sx, double sy) const {
             return {};
         }
         case FrontEnd::Screen::Briefing: {
-            if (const auto id = checkButtons(kBriefingButtons); !id.empty()) return id;
-            for (std::size_t s = 0; s < 4; ++s) {
+            for (const auto& b : kBriefingButtons) {
+                const bool enabled = (std::string_view(b.id) == "brief_restart" ||
+                                      std::string_view(b.id) == "brief_pause")
+                    ? hasBriefingMedia()
+                    : b.enabled;
+                if (enabled && b.rect.contains(sx, sy)) return b.id;
+            }
+            const std::size_t partCount = briefingPartCount();
+            for (std::size_t s = 0; s < 4 && s < partCount; ++s) {
                 const auto& slot = assets_->slotButtons[s * 3];
                 if (slot.surface && RectD{double(slot.x), double(slot.y), double(slot.w), double(slot.h)}.contains(sx, sy)) {
                     return "slot_" + std::to_string(s + 1);
@@ -1535,7 +1714,24 @@ void GoldFrontEnd::activateId(const std::string& id) {
         dirty_ = true;
         return;
     }
-    if (id == "brief_restart" || id == "brief_pause" || id.rfind("slot_", 0) == 0) {
+    if (id == "brief_restart") {
+        if (prev == FrontEnd::Screen::Briefing && hasBriefingMedia()) {
+            selectBriefingPart(0);
+        }
+        return;
+    }
+    if (id == "brief_pause") {
+        if (prev == FrontEnd::Screen::Briefing && hasBriefingMedia()) {
+            briefPaused_ = !briefPaused_;
+            setBriefingVoicePaused(briefPaused_);
+            dirty_ = true;
+        }
+        return;
+    }
+    if (std::size_t slotIdx = 0; parseIndexAfter(id, "slot_", slotIdx)) {
+        if (prev == FrontEnd::Screen::Briefing && slotIdx >= 1u && slotIdx <= briefingPartCount()) {
+            selectBriefingPart(static_cast<int>(slotIdx));
+        }
         return;
     }
 
@@ -1980,8 +2176,20 @@ void GoldFrontEnd::handleKey(SDL_Keycode key) {
             } else if (key == SDLK_DOWN) {
                 briefScroll_ += 28.0;
                 dirty_ = true;
+            } else if (key == SDLK_0) {
+                if (hasBriefingMedia()) activateId("brief_restart");
+            } else if (key >= SDLK_1 && key <= SDLK_4) {
+                const std::size_t part = static_cast<std::size_t>(key - SDLK_1 + 1);
+                if (part <= briefingPartCount()) {
+                    activateId("slot_" + std::to_string(part));
+                }
             } else if (key == SDLK_LEFT || key == SDLK_RIGHT || key == SDLK_TAB) {
-                cycleFocus({"start", "cancel"}, 1);
+                if (hasBriefingMedia()) {
+                    cycleFocus({"brief_restart", "brief_pause", "start", "cancel"},
+                               key == SDLK_LEFT ? -1 : 1);
+                } else {
+                    cycleFocus({"start", "cancel"}, 1);
+                }
             } else if (key == SDLK_RETURN || key == SDLK_KP_ENTER || key == SDLK_SPACE) {
                 activateId(focusedId_.empty() ? "start" : focusedId_);
             }
@@ -2274,6 +2482,57 @@ void GoldFrontEnd::advance(std::chrono::nanoseconds dt) {
             noticeRemaining_ -= dt;
         }
     }
+    if (fe_.screen() == FrontEnd::Screen::Briefing && !briefPaused_ &&
+        assets_ && assets_->briefMedia.hasAnimation()) {
+        constexpr double kFrameMs = 33.0;
+        constexpr double kPartHoldMs = 1000.0;
+        double dtMs = std::clamp(std::chrono::duration<double, std::milli>(dt).count(), 0.0, 2000.0);
+        const std::size_t nParts = assets_->briefMedia.parts.size();
+        if (nParts > 0u) {
+            std::size_t curPart = (briefActivePart_ > 0)
+                ? static_cast<std::size_t>(briefActivePart_ - 1)
+                : briefLoopPart_;
+            if (curPart >= nParts) {
+                curPart = 0u;
+                briefLoopPart_ = 0u;
+            }
+            if (briefHoldMs_ > 0.0) {
+                briefHoldMs_ -= dtMs;
+                if (briefHoldMs_ <= 0.0) {
+                    dtMs = -briefHoldMs_;
+                    briefHoldMs_ = 0.0;
+                    briefFrameIndex_ = 0u;
+                    briefOverlayDirty_ = true;
+                    dirty_ = true;
+                } else {
+                    dtMs = 0.0;
+                }
+            }
+            briefAccumMs_ += dtMs;
+            int steps = 0;
+            while (briefAccumMs_ >= kFrameMs && steps < 64) {
+                briefAccumMs_ -= kFrameMs;
+                ++steps;
+                const auto& frames = assets_->briefMedia.parts[curPart].frames;
+                if (frames.empty()) break;
+                if (briefFrameIndex_ + 1u < frames.size()) {
+                    ++briefFrameIndex_;
+                } else if (briefActivePart_ == 0) {
+                    briefLoopPart_ = (briefLoopPart_ + 1u) % nParts;
+                    curPart = briefLoopPart_;
+                    briefFrameIndex_ = 0u;
+                } else {
+                    briefHoldMs_ = kPartHoldMs;
+                    briefAccumMs_ = 0.0;
+                    briefOverlayDirty_ = true;
+                    dirty_ = true;
+                    break;
+                }
+                briefOverlayDirty_ = true;
+                dirty_ = true;
+            }
+        }
+    }
     if (fe_.screen() == FrontEnd::Screen::Credits && !creditsPaused_) {
         const double dtSec = std::clamp(std::chrono::duration<double>(dt).count(), 0.0, 0.25);
         if (dtSec > 0.0) {
@@ -2378,7 +2637,7 @@ void GoldFrontEnd::renderToBuffer(int pixelW, int pixelH, std::vector<std::uint8
             const double padX = 14.0, padY = 10.0;
             const double innerW = kBriefBoxW - 2.0 * padX;
             const double innerH = kBriefBoxH - 2.0 * padY;
-            auto layout = makeTextLayout(pangoCtx, fe_.briefingText(), 13.5, false, innerW);
+            auto layout = makeTextLayout(pangoCtx, briefingDisplayedText(), 13.5, false, innerW);
             int tw = 0, th = 0;
             pango_layout_get_pixel_size(layout.get(), &tw, &th);
             const double maxScroll = std::max(0.0, th - innerH);
@@ -2399,7 +2658,48 @@ void GoldFrontEnd::renderToBuffer(int pixelW, int pixelH, std::vector<std::uint8
         if (const auto it = assets_->overviews.find(overviewPath); it != assets_->overviews.end()) {
             overview = it->second.get();
         }
-        drawDiamondOverview(cr, overview, 15.0, 187.0, 764.0, 380.0, assets_->nbramkaFrame.surface == nullptr);
+        if (assets_->briefMedia.hasAnimation()) {
+            renderBriefingOverlayIfNeeded();
+            constexpr double kDx = 15.0, kDy = 187.0, kDw = 764.0, kDh = 380.0;
+            const double cx = kDx + kDw * 0.5;
+            const double cy = kDy + kDh * 0.5;
+            const bool drawStroke = (assets_->nbramkaFrame.surface == nullptr);
+            cairo_save(cr);
+            cairo_new_path(cr);
+            cairo_move_to(cr, cx, kDy);
+            cairo_line_to(cr, kDx + kDw, cy);
+            cairo_line_to(cr, cx, kDy + kDh);
+            cairo_line_to(cr, kDx, cy);
+            cairo_close_path(cr);
+            if (drawStroke) {
+                cairo_save(cr);
+                cairo_clip_preserve(cr);
+            } else {
+                cairo_clip(cr);
+            }
+            cairo_set_source_rgb(cr, 8.0 / 255.0, 10.0 / 255.0, 6.0 / 255.0);
+            cairo_paint(cr);
+            if (overview) {
+                drawSurfaceStretched(cr, overview, 12.0, 184.0,
+                                     double(assets::kBriefingOverlayWidth),
+                                     double(assets::kBriefingOverlayHeight));
+            }
+            if (assets_->briefOverlay) {
+                cairo_set_source_surface(cr, assets_->briefOverlay.get(), 12.0, 184.0);
+                cairo_paint(cr);
+            }
+            if (drawStroke) {
+                cairo_restore(cr);
+                cairo_set_line_width(cr, 1.8);
+                cairo_set_source_rgb(cr, 170.0 / 255.0, 162.0 / 255.0, 134.0 / 255.0);
+                cairo_stroke(cr);
+            } else {
+                cairo_restore(cr);
+            }
+        } else {
+            drawDiamondOverview(cr, overview, 15.0, 187.0, 764.0, 380.0,
+                                assets_->nbramkaFrame.surface == nullptr);
+        }
 
         if (assets_->nbramkaFrame.surface) {
             cairo_save(cr);
@@ -2409,20 +2709,40 @@ void GoldFrontEnd::renderToBuffer(int pixelW, int pixelH, std::vector<std::uint8
             cairo_restore(cr);
         }
 
+        const std::size_t partCount = briefingPartCount();
         for (std::size_t s = 0; s < 4; ++s) {
             const std::string slotId = "slot_" + std::to_string(s + 1);
-            const std::size_t frameOff = s * 3 + (hoveredId_ == slotId ? 1 : 0);
-            const auto& slot = assets_->slotButtons[frameOff];
-            if (slot.surface) {
-                cairo_set_source_surface(cr, slot.surface.get(), slot.x, slot.y);
-                cairo_paint(cr);
+            const bool available = (s < partCount);
+            const bool selected = available && (briefActivePart_ == int(s + 1));
+            const bool hovered = available && (hoveredId_ == slotId);
+            const std::size_t wantedOff = s * 3 + (selected ? 2u : (hovered ? 1u : 0u));
+            const auto* slot = &assets_->slotButtons[wantedOff];
+            if (!slot->surface) slot = &assets_->slotButtons[s * 3 + (hovered ? 1u : 0u)];
+            if (!slot->surface) slot = &assets_->slotButtons[s * 3];
+            if (slot->surface) {
+                cairo_set_source_surface(cr, slot->surface.get(), slot->x, slot->y);
+                if (available) cairo_paint(cr);
+                else cairo_paint_with_alpha(cr, 0.35);
+                if (selected) {
+                    cairo_save(cr);
+                    cairo_set_source_rgba(cr, 250.0 / 255.0, 212.0 / 255.0, 112.0 / 255.0, 0.90);
+                    cairo_set_line_width(cr, 2.0);
+                    cairo_rectangle(cr, slot->x - 1.0, slot->y - 1.0, slot->w + 2.0, slot->h + 2.0);
+                    cairo_stroke(cr);
+                    cairo_restore(cr);
+                }
             }
         }
 
         drawHeading(cr, pangoCtx, tr("Mission Briefing"), {565, 161, 192, 26}, 16.0);
+        const bool mediaAvail = hasBriefingMedia();
         for (const auto& b : kBriefingButtons) {
-            drawGoldStencilButton(cr, pangoCtx, b.rect, tr(b.enLabel), b.shortcut,
-                                  hoveredId_ == b.id, focusedId_ == b.id, b.enabled, 22.5);
+            const bool isPause = (std::string_view(b.id) == "brief_pause");
+            const bool isRestart = (std::string_view(b.id) == "brief_restart");
+            const bool enabled = (isPause || isRestart) ? mediaAvail : b.enabled;
+            const char* labelKey = (isPause && briefPaused_) ? "Resume" : b.enLabel;
+            drawGoldStencilButton(cr, pangoCtx, b.rect, tr(labelKey), b.shortcut,
+                                  hoveredId_ == b.id, focusedId_ == b.id, enabled, 22.5);
         }
     } else {
         if (assets_->mainBg) drawSurfaceStretched(cr, assets_->mainBg.get(), 0, 0, kStageW, kStageH);
@@ -2533,7 +2853,9 @@ void GoldFrontEnd::renderToBuffer(int pixelW, int pixelH, std::vector<std::uint8
                 cairo_fill(cr);
                 cairo_restore(cr);
                 {
-                    auto desc = makeTextLayout(pangoCtx, m.description, 13.5, false, 316.0);
+                    const auto paras = assets::splitBriefingParagraphs(m.description);
+                    const std::string& previewDesc = paras.empty() ? m.description : paras[0];
+                    auto desc = makeTextLayout(pangoCtx, previewDesc, 13.5, false, 316.0);
                     pango_layout_set_height(desc.get(), int(172.0 * PANGO_SCALE));
                     pango_layout_set_ellipsize(desc.get(), PANGO_ELLIPSIZE_END);
                     cairo_move_to(cr, 445, 142);

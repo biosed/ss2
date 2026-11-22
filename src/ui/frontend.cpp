@@ -661,6 +661,8 @@ std::string FrontEnd::shortcutId(char letter) const {
             break;
         case Screen::Briefing:
             if (c == 's') return "start";
+            if (c == 'r') return "brief_restart";
+            if (c == 'p') return "brief_pause";
             break;
         case Screen::Ratings:
             if (c == 'c') return "ratings_campaigns";
