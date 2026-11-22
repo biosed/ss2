@@ -568,7 +568,7 @@ int main(int argc, char** argv) {
 
             // Phase 4S: Interactive HUD command-bar tooltips & cancelMinimapDrag.
             auto p4sState = p4jState;
-            p4sState.airReady = {2, 0, 1, 0, 0};
+            p4sState.airReady = {2, 1, 1, 1, 1};
             hud.update(p4sState);
             const auto tipAtRect = [&](ss2::Hud::Rect r) {
                 const auto pt = mouse.at(centreX(r), centreY(r));
@@ -579,10 +579,22 @@ int main(int argc, char** argv) {
                   "Phase 4S stop button tooltip mismatch");
             const auto scTip = tipAtRect(hud.buttonRect(HudAction::scatter));
             check(scTip && scTip->title == "Scatter (D)", "Phase 4S scatter button tooltip mismatch");
-            const auto airTip = tipAtRect(hud.airButtonRect(0));
-            check(airTip && airTip->title.find("Recon Plane") != std::string::npos &&
-                  !airTip->lines.empty() && airTip->lines[0].find("2") != std::string::npos,
-                  "Phase 4S air support tooltip mismatch");
+            const auto airTip0 = tipAtRect(hud.airButtonRect(0));
+            check(airTip0 && airTip0->title.find("Bomber Strike") != std::string::npos &&
+                  !airTip0->lines.empty() && airTip0->lines[0].find("2") != std::string::npos,
+                  "Phase 4S air support slot 0 tooltip matches Bomber Strike");
+            const auto airTip1 = tipAtRect(hud.airButtonRect(1));
+            check(airTip1 && airTip1->title.find("Recon Plane") != std::string::npos,
+                  "Phase 4S air support slot 1 tooltip matches Recon Plane");
+            const auto airTip2 = tipAtRect(hud.airButtonRect(2));
+            check(airTip2 && airTip2->title.find("Paratroopers") != std::string::npos,
+                  "Phase 4S air support slot 2 tooltip matches Paratroopers");
+            const auto airTip3 = tipAtRect(hud.airButtonRect(3));
+            check(airTip3 && airTip3->title.find("Supply Drop") != std::string::npos,
+                  "Phase 4S air support slot 3 tooltip matches Supply Drop");
+            const auto airTip4 = tipAtRect(hud.airButtonRect(4));
+            check(airTip4 && airTip4->title.find("Fighter Strafe") != std::string::npos,
+                  "Phase 4S air support slot 4 tooltip matches Fighter Strafe");
             const auto grpTip = tipAtRect(hud.groupChipRect(1));
             check(grpTip && grpTip->title == "Control Group 1" &&
                   !grpTip->lines.empty() && grpTip->lines[0].find("8") != std::string::npos,
@@ -768,6 +780,47 @@ int main(int argc, char** argv) {
                           retailHud.airSmokeFrameCount() >= 45u,
                           "game_common.sue AIRFIRE.ANI and AIRSMOKE.ANI decoded into sprite sheet");
 
+                    // Blank unit-order slot must stay clean recessed dark steel (never stamped with checkmark recs[35]).
+                    ss2::HudState emptyRs;
+                    retailHud.update(emptyRs);
+                    const auto emptyStop = retailHud.buttonRect(HudAction::stop);
+                    std::uint8_t emptyMaxLuma = 0u;
+                    for (int y = emptyStop.y + 3; y < emptyStop.y + emptyStop.height - 3; ++y) {
+                        for (int x = emptyStop.x + 3; x < emptyStop.x + emptyStop.width - 3; ++x) {
+                            const auto* p = &retailHud.rgba()[(std::size_t(y) * retailHud.width() + std::size_t(x)) * 4u];
+                            emptyMaxLuma = std::max({emptyMaxLuma, p[0], p[1], p[2]});
+                        }
+                    }
+                    check(emptyMaxLuma < 110u, "empty unit-order slot has clean recessed backing (no checkmark bleed)");
+
+                    // Retail Medic/Special icons in row 3 visibly differ from procedural fallback.
+                    ss2::HudState specRs;
+                    specRs.hasSelection = true;
+                    specRs.hasInfantry = true;
+                    specRs.selection = {{"medic", 1, 1.f, 1.f}, {"flamer", 1, 1.f, 1.f}};
+                    procHud.update(specRs);
+                    retailHud.update(specRs);
+                    const auto atkR = retailHud.buttonRect(HudAction::attackMove);
+                    const int slotY = atkR.y;
+                    const int col1X = atkR.x + atkR.width + 2;
+                    const int col2X = col1X + atkR.width + 2;
+                    auto sliceDiffers = [&](int rx) {
+                        for (int y = slotY + 2; y < slotY + atkR.height - 2; ++y) {
+                            for (int x = rx + 2; x < rx + atkR.width - 2; ++x) {
+                                const std::size_t idx = (std::size_t(y) * retailHud.width() + std::size_t(x)) * 4u;
+                                if (retailHud.rgba()[idx] != procHud.rgba()[idx] ||
+                                    retailHud.rgba()[idx + 1] != procHud.rgba()[idx + 1] ||
+                                    retailHud.rgba()[idx + 2] != procHud.rgba()[idx + 2]) {
+                                    return true;
+                                }
+                            }
+                        }
+                        return false;
+                    };
+                    check(sliceDiffers(col1X) && sliceDiffers(col2X),
+                          "retail Medic (recs[111]) and Special (recs[67]) icons render in row 3");
+
+                    procHud.update(rs);
                     retailHud.update(rs);
                     check(retailHud.rgba() != procHud.rgba(),
                           "retail panel.dat + pdrop.dat skin visibly skins the HUD vs procedural fallback");

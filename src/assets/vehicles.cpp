@@ -158,7 +158,7 @@ struct FrameLayer {
 };
 
 struct LayerList {
-    std::array<FrameLayer, 3> items{};
+    std::array<FrameLayer, 4> items{};
     std::size_t count{0};
 
     void push(View frame, int ox, int oy) {
@@ -166,6 +166,11 @@ struct LayerList {
             items[count++] = {frame, ox, oy};
         }
     }
+};
+
+struct WreckLayers {
+    LayerList layers;
+    bool dedicated{false};
 };
 
 struct ShadowLayerList {
@@ -194,26 +199,53 @@ std::optional<MissionVehicleAsset> tryLoadVehicleStemAsset(const std::filesystem
 }
 
 LayerList collectVehicleLayers(View pck, View hot, std::size_t frameCount,
-                               int x, int y, unsigned hullDir, unsigned turretDir) {
+                               int x, int y, unsigned hullDir, unsigned turretDir,
+                               unsigned trackPhase = 0u) {
     const unsigned hull = hullDir & 31u;
     const unsigned turret = turretDir & 31u;
+    const unsigned phase = trackPhase & 1u;
     LayerList layers;
+    const auto pushWithPhase = [&](std::size_t base0, std::size_t base1) {
+        const auto fr = pckFrame(pck, (phase ? base1 : base0) + hull);
+        if (isRenderableFrame(fr)) {
+            layers.push(fr, x, y);
+        } else if (phase) {
+            layers.push(pckFrame(pck, base0 + hull), x, y);
+        }
+    };
     switch (frameCount) {
     case 7u:
         layers.push(pckFrame(pck, 0u), x, y);
         layers.push(pckFrame(pck, 1u), x, y);
         break;
+    case 160u:
+        pushWithPhase(0u, 32u);
+        break;
+    case 192u:
+        layers.push(pckFrame(pck, hull), x, y);
+        pushWithPhase(32u, 64u);
+        break;
+    case 256u:
+        if (frameTag(pckFrame(pck, 160u + hull)) == 0xa2u) {
+            pushWithPhase(32u, 96u);
+            pushWithPhase(0u, 64u);
+        } else {
+            layers.push(pckFrame(pck, 32u + hull), x, y);
+            layers.push(pckFrame(pck, hull), x, y);
+        }
+        break;
     case 288u: {
         const auto block6 = pckFrame(pck, 192u + turret);
         if (frameTag(block6) == 0xa2u) {
             layers.push(pckFrame(pck, hull), x, y);
+            pushWithPhase(32u, 64u);
             if (isRenderableFrame(block6) && hot.size() >= 32u * 8u) {
                 const auto [hotDx, hotDy] = readHotOffset(hot, hull);
                 layers.push(block6, x + hotDx, y + hotDy);
             }
         } else {
-            layers.push(pckFrame(pck, 32u + hull), x, y);
-            layers.push(pckFrame(pck, hull), x, y);
+            pushWithPhase(32u, 96u);
+            pushWithPhase(0u, 64u);
         }
         break;
     }
@@ -231,10 +263,6 @@ LayerList collectVehicleLayers(View pck, View hot, std::size_t frameCount,
         layers.push(pckFrame(pck, 32u + hull), x, y);
         layers.push(pckFrame(pck, 128u + turret), x, y);
         break;
-    case 256u:
-        layers.push(pckFrame(pck, 32u + hull), x, y);
-        layers.push(pckFrame(pck, hull), x, y);
-        break;
     default:
         if (frameCount < 96u) {
             const auto block0 = pckFrame(pck, hull);
@@ -251,36 +279,136 @@ LayerList collectVehicleLayers(View pck, View hot, std::size_t frameCount,
     return layers;
 }
 
-LayerList collectWreckLayers(View pck, std::size_t frameCount, int x, int y, unsigned hullDir) {
-    LayerList layers;
-    if (frameCount == 7u) {
-        layers.push(pckFrame(pck, 4u), x, y);
-        layers.push(pckFrame(pck, 5u), x, y);
-        if (layers.count == 0u) {
-            layers.push(pckFrame(pck, 0u), x, y);
-            layers.push(pckFrame(pck, 1u), x, y);
-        }
-        return layers;
-    }
+WreckLayers collectWreckLayers(View pck, View hot, std::size_t frameCount,
+                               int x, int y, unsigned hullDir, unsigned turretDir) {
     const unsigned hull = hullDir & 31u;
-    const auto tryBlock = [&](std::size_t base) -> bool {
-        if (base + hull < frameCount) {
-            const auto fr = pckFrame(pck, base + hull);
-            if (isRenderableFrame(fr)) {
-                layers.push(fr, x, y);
-                return true;
+    const unsigned turret = turretDir & 31u;
+    WreckLayers out;
+    switch (frameCount) {
+    case 7u:
+        out.layers.push(pckFrame(pck, 4u), x, y);
+        out.layers.push(pckFrame(pck, 5u), x, y);
+        if (out.layers.count > 0u) {
+            out.dedicated = true;
+        } else {
+            out.layers.push(pckFrame(pck, 0u), x, y);
+            out.layers.push(pckFrame(pck, 1u), x, y);
+        }
+        break;
+    case 66u:
+        out.layers.push(pckFrame(pck, 32u), x, y);
+        if (out.layers.count > 0u) {
+            out.dedicated = true;
+        } else {
+            out.layers.push(pckFrame(pck, hull), x, y);
+        }
+        break;
+    case 128u:
+        if (frameTag(pckFrame(pck, 32u + hull)) == 0xa3u) {
+            out.layers.push(pckFrame(pck, 64u + hull), x, y);
+        } else {
+            out.layers.push(pckFrame(pck, 32u + hull), x, y);
+        }
+        if (out.layers.count > 0u) {
+            out.dedicated = true;
+        } else {
+            out.layers.push(pckFrame(pck, hull), x, y);
+        }
+        break;
+    case 160u:
+        out.layers.push(pckFrame(pck, 64u + hull), x, y);
+        if (out.layers.count > 0u) {
+            out.dedicated = true;
+        } else {
+            out.layers.push(pckFrame(pck, hull), x, y);
+        }
+        break;
+    case 192u:
+        out.layers.push(pckFrame(pck, 96u + hull), x, y);
+        out.layers.push(pckFrame(pck, 128u + hull), x, y);
+        if (out.layers.count > 0u) {
+            out.dedicated = true;
+        } else {
+            out.layers.push(pckFrame(pck, hull), x, y);
+            out.layers.push(pckFrame(pck, 32u + hull), x, y);
+        }
+        break;
+    case 256u:
+        if (frameTag(pckFrame(pck, 160u + hull)) == 0xa2u) {
+            out.layers.push(pckFrame(pck, 160u + hull), x, y);
+            out.layers.push(pckFrame(pck, 128u + hull), x, y);
+        } else {
+            out.layers.push(pckFrame(pck, 128u + hull), x, y);
+        }
+        if (out.layers.count > 0u) {
+            out.dedicated = true;
+        } else {
+            out.layers.push(pckFrame(pck, 32u + hull), x, y);
+            out.layers.push(pckFrame(pck, hull), x, y);
+        }
+        break;
+    case 288u:
+        if (frameTag(pckFrame(pck, 192u + turret)) == 0xa2u) {
+            out.layers.push(pckFrame(pck, 96u + hull), x, y);
+            out.layers.push(pckFrame(pck, 128u + hull), x, y);
+            if (hot.size() >= 32u * 8u) {
+                const auto wt = pckFrame(pck, 224u + turret);
+                if (isRenderableFrame(wt)) {
+                    const auto [hotDx, hotDy] = readHotOffset(hot, hull);
+                    out.layers.push(wt, x + hotDx, y + hotDy);
+                }
+            }
+            if (out.layers.count > 0u) {
+                out.dedicated = true;
+            } else {
+                out.layers.push(pckFrame(pck, hull), x, y);
+                out.layers.push(pckFrame(pck, 32u + hull), x, y);
+            }
+        } else {
+            out.layers.push(pckFrame(pck, 160u + hull), x, y);
+            out.layers.push(pckFrame(pck, 128u + hull), x, y);
+            if (out.layers.count > 0u) {
+                out.dedicated = true;
+            } else {
+                out.layers.push(pckFrame(pck, 32u + hull), x, y);
+                out.layers.push(pckFrame(pck, hull), x, y);
             }
         }
-        return false;
-    };
-    if (frameCount == 288u) {
-        if (!tryBlock(96u) && !tryBlock(32u)) (void)tryBlock(0u);
-    } else if (frameCount == 128u || frameCount == 160u || frameCount == 352u) {
-        if (!tryBlock(64u) && !tryBlock(32u)) (void)tryBlock(0u);
-    } else {
-        if (!tryBlock(32u)) (void)tryBlock(0u);
+        break;
+    case 352u:
+        out.layers.push(pckFrame(pck, 288u + hull), x, y);
+        if (out.layers.count > 0u) {
+            out.dedicated = true;
+        } else {
+            out.layers = collectVehicleLayers(pck, hot, frameCount, x, y, hullDir, turretDir);
+        }
+        break;
+    case 448u:
+        out.layers.push(pckFrame(pck, 384u + hull), x, y);
+        if (out.layers.count > 0u) {
+            out.dedicated = true;
+        } else {
+            out.layers = collectVehicleLayers(pck, hot, frameCount, x, y, hullDir, turretDir);
+        }
+        break;
+    case 512u:
+        out.layers.push(pckFrame(pck, 128u + hull), x, y);
+        if (out.layers.count > 0u) {
+            out.dedicated = true;
+        } else {
+            out.layers.push(pckFrame(pck, hull), x, y);
+        }
+        break;
+    default:
+        if (32u + hull < frameCount && isRenderableFrame(pckFrame(pck, 32u + hull))) {
+            out.layers.push(pckFrame(pck, 32u + hull), x, y);
+            out.dedicated = true;
+        } else if (hull < frameCount) {
+            out.layers.push(pckFrame(pck, hull), x, y);
+        }
+        break;
     }
-    return layers;
+    return out;
 }
 
 ShadowLayerList collectVehicleShadowLayers(View pck, View hot, std::size_t frameCount,
@@ -296,7 +424,11 @@ ShadowLayerList collectVehicleShadowLayers(View pck, View hot, std::size_t frame
         shadows.push(pckFrame(pck, alive ? 64u : 65u), x, y);
         break;
     case 128u:
-        shadows.push(pckFrame(pck, (alive ? 32u : 96u) + hull), x, y);
+        if (frameTag(pckFrame(pck, 32u + hull)) == 0xa3u) {
+            shadows.push(pckFrame(pck, (alive ? 32u : 96u) + hull), x, y);
+        } else {
+            shadows.push(pckFrame(pck, (alive ? 64u : 96u) + hull), x, y);
+        }
         break;
     case 160u:
         shadows.push(pckFrame(pck, (alive ? 96u : 128u) + hull), x, y);
@@ -315,7 +447,10 @@ ShadowLayerList collectVehicleShadowLayers(View pck, View hot, std::size_t frame
         const auto block6 = pckFrame(pck, 192u + turret);
         if (frameTag(block6) == 0xa2u) {
             shadows.push(pckFrame(pck, 160u + hull), x, y);
-            if (alive && isRenderableFrame(block6) && hot.size() >= 32u * 8u) {
+            const bool showTurretShadow = alive
+                ? isRenderableFrame(block6)
+                : isRenderableFrame(pckFrame(pck, 224u + turret));
+            if (showTurretShadow && hot.size() >= 32u * 8u) {
                 const auto [hotDx, hotDy] = readHotOffset(hot, hull);
                 shadows.push(pckFrame(pck, 256u + turret), x + hotDx, y + hotDy);
             }
@@ -345,7 +480,7 @@ ShadowLayerList collectVehicleShadowLayers(View pck, View hot, std::size_t frame
         }
         break;
     case 512u:
-        shadows.push(pckFrame(pck, (alive ? 192u : 448u) + hull), x, y);
+        shadows.push(pckFrame(pck, (alive ? 192u : 224u) + hull), x, y);
         break;
     default:
         break;
@@ -367,11 +502,11 @@ Bytes makeWreckPalette(View col) {
     return out;
 }
 
-void updateVehicleBounds(VehicleUnit& unit, View pck, View hot, std::size_t frameCount) {
+void updateVehicleBounds(VehicleUnit& unit, View pck, View hot, std::size_t frameCount, unsigned trackPhase) {
     const bool alive = unit.alive && unit.hp > 0;
     const auto layers = alive
-        ? collectVehicleLayers(pck, hot, frameCount, unit.x, unit.y, unit.hullDir, unit.turretDir)
-        : collectWreckLayers(pck, frameCount, unit.x, unit.y, unit.hullDir);
+        ? collectVehicleLayers(pck, hot, frameCount, unit.x, unit.y, unit.hullDir, unit.turretDir, trackPhase)
+        : collectWreckLayers(pck, hot, frameCount, unit.x, unit.y, unit.hullDir, unit.turretDir).layers;
     const auto shadows = collectVehicleShadowLayers(
         pck, hot, frameCount, unit.x, unit.y, unit.hullDir, unit.turretDir, alive);
     bool hasRect = false;
@@ -599,11 +734,15 @@ std::optional<std::size_t> VehicleScene::spawn(const Placement& p) {
         (p.owner != 3) || !p.passengers.empty(),
         p.expa,
     };
-    updateVehicleBounds(vu, asset.pck, asset.hot, asset.frameCount);
+    updateVehicleBounds(vu, asset.pck, asset.hot, asset.frameCount, 0u);
     const std::size_t index = units_.size();
     unitAsset_.reserve(index + 1u);
+    unitTrackPhase_.reserve(index + 1u);
+    unitMoveAccum_.reserve(index + 1u);
     units_.push_back(std::move(vu));
     unitAsset_.push_back(*assetIndex);
+    unitTrackPhase_.push_back(0u);
+    unitMoveAccum_.push_back(0);
     return index;
 }
 
@@ -663,14 +802,22 @@ void VehicleScene::drawRegion(MapImage& patch, int patchX, int patchY, const Sce
         const auto& unit = units_[idx];
         const auto& asset = assets_[unitAsset_[idx]];
         const bool alive = unit.alive && unit.hp > 0;
-        const auto layers = alive
-            ? collectVehicleLayers(asset.pck, asset.hot, asset.frameCount,
-                                   unit.x, unit.y, unit.hullDir, unit.turretDir)
-            : collectWreckLayers(asset.pck, asset.frameCount, unit.x, unit.y, unit.hullDir);
-        const auto& pal = alive ? asset.col : asset.wreckCol;
-        for (std::size_t i = 0; i < layers.count; ++i) {
-            drawFrameWithDepth(patch, patchX, patchY, layers.items[i].ox, layers.items[i].oy,
-                               layers.items[i].frame, pal, unit.y, depth);
+        if (alive) {
+            const unsigned trackPhase = idx < unitTrackPhase_.size() ? unitTrackPhase_[idx] : 0u;
+            const auto layers = collectVehicleLayers(
+                asset.pck, asset.hot, asset.frameCount, unit.x, unit.y, unit.hullDir, unit.turretDir, trackPhase);
+            for (std::size_t i = 0; i < layers.count; ++i) {
+                drawFrameWithDepth(patch, patchX, patchY, layers.items[i].ox, layers.items[i].oy,
+                                   layers.items[i].frame, asset.col, unit.y, depth);
+            }
+        } else {
+            const auto wreck = collectWreckLayers(
+                asset.pck, asset.hot, asset.frameCount, unit.x, unit.y, unit.hullDir, unit.turretDir);
+            const auto& pal = wreck.dedicated ? asset.col : asset.wreckCol;
+            for (std::size_t i = 0; i < wreck.layers.count; ++i) {
+                drawFrameWithDepth(patch, patchX, patchY, wreck.layers.items[i].ox, wreck.layers.items[i].oy,
+                                   wreck.layers.items[i].frame, pal, unit.y, depth);
+            }
         }
     }
 }
@@ -699,8 +846,18 @@ DirtyRect VehicleScene::update(std::size_t index, int x, int y, unsigned hullDir
     if (ammo >= 0) {
         next.ammo = ammo;
     }
+    unsigned trackPhase = index < unitTrackPhase_.size() ? unitTrackPhase_[index] : 0u;
+    if (next.alive && next.hp > 0 && (x != unit.x || y != unit.y) &&
+        index < unitTrackPhase_.size() && index < unitMoveAccum_.size()) {
+        unitMoveAccum_[index] += std::abs(x - unit.x) + std::abs(y - unit.y);
+        if (unitMoveAccum_[index] >= 4) {
+            unitTrackPhase_[index] ^= 1u;
+            unitMoveAccum_[index] %= 4;
+            trackPhase = unitTrackPhase_[index];
+        }
+    }
     const auto& asset = assets_[unitAsset_[index]];
-    updateVehicleBounds(next, asset.pck, asset.hot, asset.frameCount);
+    updateVehicleBounds(next, asset.pck, asset.hot, asset.frameCount, trackPhase);
 
     const int newLeft = next.left;
     const int newTop = next.top;
@@ -795,8 +952,9 @@ std::vector<Placement> drawTutorialVehicles(MapImage& map, const std::filesystem
         const auto& a = *p.asset;
         switch (a.kind) {
         case Kind::Tank: {
-            // Block 0: intact hull (0..31); Block 6: intact turret (192..223) offset by hot0[dir].
+            // Block 0: intact hull (0..31); Block 1: tracks/wheels (32..63); Block 6: turret (192..223) offset by hot0[dir].
             drawIndexedFrame(map, p.x, p.y, pckFrame(a.pck, p.dir), a.col);
+            drawIndexedFrame(map, p.x, p.y, pckFrame(a.pck, 32u + p.dir), a.col);
             const auto [hotDx, hotDy] = readHotOffset(a.hot, p.dir);
             drawIndexedFrame(map, p.x + hotDx, p.y + hotDy, pckFrame(a.pck, 192u + p.dir), a.col);
             break;

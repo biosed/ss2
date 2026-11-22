@@ -69,6 +69,8 @@ private:
     std::vector<Asset> assets_;
     std::vector<VehicleUnit> units_;
     std::vector<std::size_t> unitAsset_;
+    std::vector<unsigned> unitTrackPhase_;
+    std::vector<int> unitMoveAccum_;
 };
 
 std::vector<Placement> drawTutorialVehicles(MapImage&, const std::filesystem::path& gameDir, std::span<const Placement>);

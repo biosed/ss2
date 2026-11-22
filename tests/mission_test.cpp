@@ -2407,6 +2407,48 @@ void testVehiclesAndShadows() {
         tankScene.drawAll(fullRedraw);
         check(patched.rgba == fullRedraw.rgba,
               "DirtyRect region redraw clears old shadow and matches full drawAll");
+
+        // Retail track/wheel layers across fc=288 & fc=192 + walking-track animation on motion.
+        auto trackLive0 = makeFlat(256u, 256u);
+        ss2::assets::VehicleScene phaseScene(gameDir, std::span<const ss2::assets::Placement>(&tankPl, 1u));
+        phaseScene.drawAll(trackLive0);
+        const auto [pBody0, pSh0] = countBodyAndShadow(trackLive0);
+        check(pBody0 > 1400u && pSh0 > 200u,
+              "Panther intact render draws hull, tracks (block 32), and turret");
+
+        (void)phaseScene.update(0u, 134, 128, 6u, 6u);
+        auto trackLive1 = makeFlat(256u, 256u);
+        phaseScene.drawRegion(trackLive1, 6, 0);
+        check(trackLive1.rgba != trackLive0.rgba,
+              "Moving panther toggles retail track animation phase (block 64 vs 32)");
+
+        const ss2::assets::Placement ferdPl{"ferdinand", 128, 128, 12, 100, 50, 1, 0};
+        ss2::assets::VehicleScene ferdScene(gameDir, std::span<const ss2::assets::Placement>(&ferdPl, 1u));
+        auto ferdImg = makeFlat(256u, 256u);
+        ferdScene.drawAll(ferdImg);
+        const auto [fBody, fSh] = countBodyAndShadow(ferdImg);
+        check(fBody > 1600u && fSh > 200u,
+              "fc=192 SPG (ferdinand) draws both upper hull (block 0) and tracks (block 32/64)");
+
+        // Dedicated retail charred wrecks & shadows across all remaining vehicle frameCount shapes.
+        for (const char* wid : {"ds39", "horch", "ferdinand", "bmw.r-75", "gmc.cckw.353", "hummel", "panther", "17p", "88mmflak", "us.landing"}) {
+            const ss2::assets::Placement wpl{wid, 160, 160, 6, 100, 50, 1, 0};
+            ss2::assets::VehicleScene wScene(gameDir, std::span<const ss2::assets::Placement>(&wpl, 1u));
+            auto intactW = makeFlat(320u, 320u);
+            wScene.drawAll(intactW);
+            (void)wScene.update(0u, 160, 160, 6u, 6u, 0);
+            auto wreckW = makeFlat(320u, 320u);
+            wScene.drawAll(wreckW);
+            const auto [wbPx, wsPx] = countBodyAndShadow(wreckW);
+            std::uint8_t maxChan = 0u;
+            for (std::size_t p = 0; p < wreckW.rgba.size(); p += 4u) {
+                const auto r = wreckW.rgba[p], g = wreckW.rgba[p + 1u], b = wreckW.rgba[p + 2u];
+                if ((r == 140u && g == 130u && b == 110u) || (r == 70u && g == 81u && b == 81u)) continue;
+                maxChan = std::max({maxChan, r, g, b});
+            }
+            check(wbPx > 10u && wsPx > 10u && wreckW.rgba != intactW.rgba && maxChan > 70u,
+                  std::string("Dedicated retail charred wreck body & shadow rendered with true palette: ") + wid);
+        }
     }
 
     // 3. Retail Tutorial I scenery draws 0xa3 shadows onto ground pixels matching n2Cad800 formula.
