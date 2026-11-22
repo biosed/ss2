@@ -202,6 +202,7 @@ bool TutorialUnits::loadSnapshot(const Snapshot& snap, std::vector<SoldierPose>*
         s.route.clear();
         s.cursor = 0;
         s.motion.reset();
+        s.movingSightPenalty = false;
         s.goal.reset();
         s.planning = {};
         s.needsRoute = false;

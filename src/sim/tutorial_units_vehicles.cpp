@@ -477,6 +477,7 @@ bool TutorialUnits::embarkImmediate(size_t soldierIdx, size_t vehicleIdx) {
     const SubCell oldCell = s.cell;
     s.embarked = true;
     s.motion.reset();
+    clearMovingSightPenalty(s);
     s.goal.reset();
     s.route.clear();
     s.cursor = 0;
@@ -546,6 +547,7 @@ size_t TutorialUnits::unloadVehicles(std::span<const size_t> vehicleIds, std::ve
             s.embarked = false;
             s.cell = spot;
             s.motion.reset();
+            clearMovingSightPenalty(s);
             s.goal.reset();
             s.route.clear();
             s.cursor = 0;
@@ -822,6 +824,7 @@ void TutorialUnits::destroyVehicle(size_t vehicleIdx, std::vector<SoldierPose>& 
             } else {
                 if (!vehicleAtCell(ss.cell)) grid_.setOccupied(ss.cell, false);
                 ss.motion.reset();
+                clearMovingSightPenalty(ss);
                 ss.goal.reset();
                 ss.route.clear();
                 ss.cursor = 0;
@@ -1133,6 +1136,7 @@ void TutorialUnits::bailoutPassengers(size_t vehicleIdx, std::vector<SoldierPose
         ps.cell = spot;
         ps.hp = std::max(1, (ps.hp * 60) / 100);
         ps.motion.reset();
+        clearMovingSightPenalty(ps);
         ps.goal.reset();
         ps.route.clear();
         ps.cursor = 0;
@@ -1537,6 +1541,7 @@ void TutorialUnits::stepVehicles(std::vector<SoldierPose>& changed) {
                 recordHit(ss.owner, ss.group);
                 if (!vehicleAtCell(ss.cell)) grid_.setOccupied(ss.cell, false);
                 ss.motion.reset();
+                clearMovingSightPenalty(ss);
                 ss.goal.reset();
                 ss.route.clear();
                 ss.cursor = 0;
@@ -1910,6 +1915,7 @@ void TutorialUnits::stepVehicleCombat(std::vector<SoldierPose>& changed) {
                     v.expa = std::min(0x8000, v.expa + 1500);
                     if (!vehicleAtCell(ss.cell)) grid_.setOccupied(ss.cell, false);
                     ss.motion.reset();
+                    clearMovingSightPenalty(ss);
                     ss.goal.reset();
                     ss.route.clear();
                     ss.cursor = 0;
@@ -2267,6 +2273,7 @@ void TutorialUnits::stepVehicleCombat(std::vector<SoldierPose>& changed) {
                 v.expa = std::min(0x8000, v.expa + 1500);
                 if (!vehicleAtCell(ts.cell)) grid_.setOccupied(ts.cell, false);
                 ts.motion.reset();
+                clearMovingSightPenalty(ts);
                 ts.goal.reset();
                 ts.route.clear();
                 ts.cursor = 0;

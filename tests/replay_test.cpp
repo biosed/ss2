@@ -459,6 +459,7 @@ void testGoldTutorialFullRoute(const std::filesystem::path& game) {
 
     const auto makeFullRunner = [&] {
         ss2::FogGrid fog(data.width, data.height, data.flags);
+        fog.applyMapPerimeterFlags();
         require(fog.loadCirc64FromGame(game), "CIRC64.DAT must load for Tutorial I full route test");
         ss2::TutorialUnits units(ss2::InfantryPathGrid::loadTutorial(game), infantry, vehicles,
                                  std::move(fog), 2, true, {}, catalog);

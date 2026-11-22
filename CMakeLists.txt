@@ -149,6 +149,10 @@ if(BUILD_TESTING)
   target_link_libraries(sim_determinism_test PRIVATE ss2_sim)
   target_compile_options(sim_determinism_test PRIVATE ${SS2_WARNINGS} ${SS2_STRICT_FP} ${SS2_ENABLE_ASSERTIONS})
   add_test(NAME sim_determinism COMMAND sim_determinism_test)
+  add_executable(visibility_parity_test tests/visibility_parity_test.cpp)
+  target_link_libraries(visibility_parity_test PRIVATE ss2_sim ss2_assets ZLIB::ZLIB)
+  target_compile_options(visibility_parity_test PRIVATE ${SS2_WARNINGS} ${SS2_STRICT_FP} ${SS2_ENABLE_ASSERTIONS})
+  add_test(NAME visibility_parity COMMAND visibility_parity_test)
   add_executable(tutorial_vm_test
     tests/tutorial_vm_test.cpp
     tests/tutorial_vm_test_core.cpp
@@ -182,6 +186,7 @@ if(BUILD_TESTING)
     add_test(NAME gold_infantry_combat COMMAND infantry_combat_test ${SS2_PRIVATE_GAME})
     add_test(NAME gold_sound_bank COMMAND sound_bank_test ${SS2_PRIVATE_GAME})
     add_test(NAME gold_movie_decode COMMAND movie_test ${SS2_PRIVATE_GAME})
+    add_test(NAME gold_visibility_parity COMMAND visibility_parity_test ${SS2_PRIVATE_GAME})
     set_tests_properties(mission_archive gold_frontend PROPERTIES ENVIRONMENT "SS2_PRIVATE_GAME=${SS2_PRIVATE_GAME}")
   endif()
   add_executable(clock_test tests/clock_test.cpp)

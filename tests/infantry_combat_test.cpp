@@ -34,6 +34,10 @@ void testSightAndLosControls() {
     assert(effectiveSightRadius(smg, 0, false, 0, 1) == 14);
     assert(effectiveSightRadius(dg, 0, false, 0, 1) == 15);
     assert(effectiveSightRadius(off, 0, false, 0, 1) == 16);
+    // Gold CSoldier::GetSightRadius (0x100212c0): moving -1 before weather before Easy 1.3x.
+    assert(effectiveSightRadius(dg, 0, false, 0, 2, true, 100) == 11);
+    assert(effectiveSightRadius(off, 0, false, 0, 1, false, 50) == 7);
+    assert(effectiveSightRadius(off, 0, false, 0, 1, true, 50) == 7);
     // Gold CSoldier::GetSightRadius (0x100213a7: cmp eax, 0x1f) caps sight at 31 tiles.
     auto maxSightDesc = dg;
     maxSightDesc.sightBase = 30;

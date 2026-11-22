@@ -396,6 +396,7 @@ void GameSession::initializeMission() {
                       << drawnVehicles << " vehicle placements\n";
         }
         ss2::FogGrid fog(data.width, data.height, data.flags);
+        fog.applyMapPerimeterFlags();
         if (!fog.loadCirc64FromGame(gameDir)) {
             std::cerr << "Warning: failed to load CIRC64 visibility table from "
                       << gameDir << "; falling back to approximate fog sight rings.\n";
@@ -595,9 +596,9 @@ void GameSession::persistNow() {
 float GameSession::fogBrightnessAt(int mx, int my) const {
     if (latestFog.size() != std::size_t(fogGridW) * std::size_t(fogGridH)) return 1.0f;
     const int originX = int(fogGridH) * 32;
-    const int d = mx - originX;
-    const int tx = std::clamp((my + d / 2) / 32, 0, int(fogGridW) - 1);
-    const int ty = std::clamp((my - d / 2) / 32, 0, int(fogGridH) - 1);
+    const int halfX = (mx - originX) >> 1;
+    const int tx = std::clamp((my + halfX) >> 5, 0, int(fogGridW) - 1);
+    const int ty = std::clamp((my - halfX) >> 5, 0, int(fogGridH) - 1);
     const std::uint8_t f = latestFog[std::size_t(ty) * std::size_t(fogGridW) + std::size_t(tx)];
     if (f & 0x01u) return 1.0f;
     return (f & 0x10u) ? 0.70f : 0.44f;
@@ -1005,14 +1006,11 @@ void GameSession::updateMinimapFog(const std::vector<std::uint8_t>& fogGrid, boo
     const std::uint64_t mapH = hudMapH;
     for (unsigned py = 0; py < masked.height; ++py) {
         const int my = static_cast<int>((std::uint64_t(py) * mapH) / masked.height);
-        const int my2 = 2 * my;
         for (unsigned px = 0; px < masked.width; ++px) {
             const int mx = static_cast<int>((std::uint64_t(px) * mapW) / masked.width);
-            const int d = mx - originX;
-            const int u = (d + my2) / 2;
-            const int v = (my2 - d) / 2;
-            const int tx = u >> 5;
-            const int ty = v >> 5;
+            const int halfX = (mx - originX) >> 1;
+            const int tx = (my + halfX) >> 5;
+            const int ty = (my - halfX) >> 5;
             int num = 38;
             if (tx >= 0 && ty >= 0 && tx < int(fogGridW) && ty < int(fogGridH)) {
                 const std::uint8_t f = fogGrid[std::size_t(ty) * fogGridW + std::size_t(tx)];
@@ -1332,8 +1330,8 @@ bool GameSession::isBuildingPointVisible(int simX, int simY) const {
     if (latestFog.empty() || fogGridW == 0 || fogGridH == 0) return true;
     const int originX = static_cast<int>(fogGridH) * 32;
     const auto [u, v] = ss2::tutorialFootWorld(simX, simY, originX);
-    const int tx = std::clamp(u / 32, 0, static_cast<int>(fogGridW) - 1);
-    const int ty = std::clamp(v / 32, 0, static_cast<int>(fogGridH) - 1);
+    const int tx = std::clamp(u >> 5, 0, static_cast<int>(fogGridW) - 1);
+    const int ty = std::clamp(v >> 5, 0, static_cast<int>(fogGridH) - 1);
     const std::size_t idx = static_cast<std::size_t>(ty) * fogGridW + static_cast<std::size_t>(tx);
     return idx < latestFog.size() && (latestFog[idx] & 1u) != 0;
 }

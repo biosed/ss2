@@ -130,6 +130,7 @@ size_t TutorialUnits::evacuateBuilding(size_t buildingIdx, std::vector<SoldierPo
         s.garrisonTarget.reset();
         s.cell = spot;
         s.motion.reset();
+        clearMovingSightPenalty(s);
         s.goal.reset();
         s.route.clear();
         s.cursor = 0;
@@ -309,6 +310,7 @@ void TutorialUnits::stepGarrisons(std::vector<SoldierPose>& changed) {
             s.garrisonBuilding = bIdx;
             s.garrisonTarget.reset();
             s.motion.reset();
+            clearMovingSightPenalty(s);
             s.goal.reset();
             s.route.clear();
             s.cursor = 0;

@@ -365,8 +365,12 @@ size_t TutorialUnits::stopSelection(std::span<const size_t> ids) {
         s.escortSoldierTarget.reset();
         s.disarmMineTarget.reset();
         s.disarmWorkTicks = 0;
+        if (!s.motion) {
+            clearMovingSightPenalty(s);
+        }
         ++stopped;
     }
+    if (fog_ && fogDirty_) refreshSpotting();
     return stopped;
 }
 
@@ -919,6 +923,7 @@ size_t TutorialUnits::orderGroupAttackGround(unsigned group, int mapX, int mapY,
             s.patrolDest.reset();
             s.queuedGoals.clear();
             s.motion.reset();
+            clearMovingSightPenalty(s);
             s.goal.reset();
             s.route.clear();
             s.cursor = 0;
@@ -943,6 +948,7 @@ size_t TutorialUnits::transferGroupOwner(unsigned group, int newOwner, std::vect
         if (s.hp <= 0 || s.group != g || s.owner == newOwner) continue;
         s.owner = newOwner;
         s.motion.reset();
+        clearMovingSightPenalty(s);
         s.goal.reset();
         s.route.clear();
         s.cursor = 0;
@@ -1038,6 +1044,7 @@ size_t TutorialUnits::reassignGroupInZone(std::span<const std::uint8_t> zones, u
         if (!inside(locCell)) continue;
         s.group = ng;
         s.motion.reset();
+        clearMovingSightPenalty(s);
         s.goal.reset();
         s.route.clear();
         s.cursor = 0;
@@ -1494,26 +1501,29 @@ void TutorialUnits::refreshSpotting(std::vector<SoldierPose>* changed, bool emit
         }
     };
     const int visPct = weatherVisibilityPct();
-    const auto applyWeatherSight = [visPct](int r) {
-        return visPct >= 100 ? r : std::max(1, (r * visPct) / 100);
-    };
     for (const auto& s : soldiers_) {
         if (s.hp <= 0 || s.embarked) continue;
-        int r = effectiveSightRadius(s.desc, s.expa, s.crouched, s.owner, difficulty_);
+        const bool movingPenalty = !s.garrisonBuilding && s.movingSightPenalty;
+        int r = effectiveSightRadius(s.desc, s.expa, s.crouched, s.owner, difficulty_, movingPenalty, visPct);
         if (s.garrisonBuilding) {
-            r = std::min(31, r + 3 + (s.hasBinoculars && s.binoculars ? s.binoSightBonus : 0));
+            const int garBonus = 3 + (s.hasBinoculars && s.binoculars ? s.binoSightBonus : 0);
+            r = std::min(31, r + (visPct >= 100 ? garBonus : (garBonus * visPct) / 100));
             const auto& b = buildings_[*s.garrisonBuilding];
-            revealWithAllies(b.entryCell.x / 2, b.entryCell.y / 2, applyWeatherSight(r), s.owner);
+            revealWithAllies(b.entryCell.x / 2, b.entryCell.y / 2, r, s.owner);
             continue;
         }
         if (s.hasBinoculars && s.binoculars && !s.motion && s.route.empty()) {
-            r = std::min(31, r + s.binoSightBonus);
+            const int bino = visPct >= 100 ? s.binoSightBonus : (s.binoSightBonus * visPct) / 100;
+            r = std::min(31, r + bino);
         }
         if (fog_->isElevated(s.cell.x / 2, s.cell.y / 2)) {
             r = std::min(31, r + 2);
         }
-        revealWithAllies(s.cell.x / 2, s.cell.y / 2, applyWeatherSight(r), s.owner);
+        revealWithAllies(s.cell.x / 2, s.cell.y / 2, r, s.owner);
     }
+    const auto applyWeatherSight = [visPct](int r) {
+        return visPct >= 100 ? r : std::max(1, (r * visPct) / 100);
+    };
     for (const auto& v : vehicles_) {
         if (!v.alive || v.hp <= 0 || !v.hasCrew) continue;
         const bool buttonedUp = !v.hatchOpen || v.suppressionTicks > 0 ||
@@ -1676,14 +1686,25 @@ void TutorialUnits::refreshRoutes() {
                 s.goal.reset();
                 s.route.clear();
                 s.cursor = 0;
+                if (!s.motion) {
+                    clearMovingSightPenalty(s);
+                }
             }
         }
+    }
+}
+
+void TutorialUnits::clearMovingSightPenalty(Soldier& s) {
+    if (s.movingSightPenalty) {
+        s.movingSightPenalty = false;
+        fogDirty_ = true;
     }
 }
 
 bool TutorialUnits::startNext(Soldier& soldier) {
     if (soldier.hp <= 0 || !soldier.goal || soldier.needsRoute) return false;
     if (soldier.cursor == soldier.route.size()) {
+        clearMovingSightPenalty(soldier);
         if (sameTile(soldier.cell, *soldier.goal)) {
             soldier.goal.reset();
             soldier.route.clear();
@@ -1696,6 +1717,7 @@ bool TutorialUnits::startNext(Soldier& soldier) {
     const auto next = grid_.acceptStep(soldier.cell,soldier.route[soldier.cursor]);
     if (!next) {
         if (sameTile(soldier.cell, *soldier.goal)) {
+            clearMovingSightPenalty(soldier);
             soldier.goal.reset();
             soldier.route.clear();
             soldier.cursor = 0;
@@ -1716,6 +1738,10 @@ bool TutorialUnits::startNext(Soldier& soldier) {
     soldier.direction = next->direction;
     soldier.motion = InfantryStep{next->cell.x/2, next->cell.y/2,
         unsigned(next->cell.x%2 + 2*(next->cell.y%2)), next->direction};
+    if (!soldier.movingSightPenalty) {
+        soldier.movingSightPenalty = true;
+        fogDirty_ = true;
+    }
     if (soldier.binoculars) {
         soldier.binoculars = false;
         fogDirty_ = true;
@@ -1742,6 +1768,9 @@ std::vector<SoldierPose> TutorialUnits::step() {
         changed.push_back({i,originX_+u-v,(u+v)/2,motion.direction,motion.progress,motion.running,soldier.hp,true,soldier.owner,soldier.group});
         if (!motion.running) {
             soldier.motion.reset();
+            if (soldier.autoTarget || soldier.route.empty()) {
+                clearMovingSightPenalty(soldier);
+            }
             if (soldier.cursor >= soldier.route.size()) {
                 soldier.route.clear();
                 soldier.cursor = 0;

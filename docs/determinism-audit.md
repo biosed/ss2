@@ -27,7 +27,7 @@ Tested after hardening across three compiler/libc/ISA triples (`-ffp-contract=of
 - **ARM64 Clang 22.1.8** (`clang++ -O2`, glibc aarch64)
 - **x86-64 Zig / Clang** (`zig c++ -target x86_64-linux-musl -O2`, musl libc, executed under `qemu-x86_64-static`)
 
-Observed bit-identical outputs on all three:
+Observed bit-identical outputs on all three (after `gold-visibility-parity` `movingSightPenalty` hashing):
 - `combat_parity_test`: `combat_parity: PASS (120 ticks x 13 fields, 21 events, final_rng=0xe06870c1, 550 regression rows)`
-- `sim_determinism_test`: `SIM_DETERMINISM_HASHES t0=0xe8ec69fe9ef2f3d5 t125=0x1c957edf9fac66ef t250=0x5386e9986a328979`
-- Full Tutorial I P[7] route replay (`gold_tutorial_replay`): `10 dialogs, 12 commands, 3734 ticks, stateHash 0xa596a2f447164378 PASSED`
+- `sim_determinism_test`: `SIM_DETERMINISM_HASHES t0=0x30877be0aac2d46d t125=0x68bbbf2d7f830c31 t250=0x890bb188bb2b3a64`
+- Full Tutorial I P[7] route replay (`gold_tutorial_replay`): `10 dialogs, 12 commands, 3862 ticks, stateHash 0x1627b0e8d45be6ea PASSED`

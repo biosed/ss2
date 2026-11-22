@@ -209,6 +209,7 @@ void TutorialUnits::stepAirSupport(std::vector<SoldierPose>& changed) {
             if (ss.hp == 0) {
                 if (!vehicleAtCell(ss.cell)) grid_.setOccupied(ss.cell, false);
                 ss.motion.reset();
+                clearMovingSightPenalty(ss);
                 ss.goal.reset();
                 ss.route.clear();
                 ss.cursor = 0;

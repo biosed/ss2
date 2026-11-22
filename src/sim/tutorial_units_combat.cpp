@@ -310,6 +310,7 @@ void TutorialUnits::detonateKamikazeSoldier(size_t index, int impactX, int impac
     s.hp = 0;
     s.ammo = 0;
     s.motion.reset();
+    clearMovingSightPenalty(s);
     s.goal.reset();
     s.route.clear();
     s.cursor = 0;
@@ -393,6 +394,7 @@ void TutorialUnits::damageTankDesantRiders(size_t vehicleIdx, int rawDamage, ass
         ps.embarked = false;
         ps.cell = tv.cell;
         ps.motion.reset();
+        clearMovingSightPenalty(ps);
         ps.goal.reset();
         ps.route.clear();
         ps.cursor = 0;
@@ -755,6 +757,7 @@ void TutorialUnits::applyFlameSplash(int impactX, int impactY, int rawDamage, in
             }
             if (!vehicleAtCell(ss.cell)) grid_.setOccupied(ss.cell, false);
             ss.motion.reset();
+            clearMovingSightPenalty(ss);
             ss.goal.reset();
             ss.route.clear();
             ss.cursor = 0;
@@ -845,6 +848,7 @@ void TutorialUnits::applyMortarSplash(int impactX, int impactY, int rawDamage, i
             }
             if (!vehicleAtCell(ss.cell)) grid_.setOccupied(ss.cell, false);
             ss.motion.reset();
+            clearMovingSightPenalty(ss);
             ss.goal.reset();
             ss.route.clear();
             ss.cursor = 0;
@@ -1339,6 +1343,7 @@ void TutorialUnits::stepCombat(std::vector<SoldierPose>& changed) {
                     }
                     if (!vehicleAtCell(tgt.cell)) grid_.setOccupied(tgt.cell, false);
                     tgt.motion.reset();
+                    clearMovingSightPenalty(tgt);
                     tgt.goal.reset();
                     tgt.route.clear();
                     tgt.cursor = 0;

@@ -94,7 +94,7 @@ std::uint64_t TutorialUnits::stateHash() const {
         h.all(s.attackPref, s.hasAttackPref, s.suppressionTicks, s.wasSuppressed);
         h.all(s.officerAuraRadius, s.moraleRallyRate, s.moraleResist, s.fearless, s.resupplyCost, s.canBeCrew,
               s.unitRadius, s.canFireFromInside, s.crouchToFire, s.expaOnHit, s.canGrenadeGround);
-        h.all(s.canLayMines, s.maxMineAmmo, s.getMineTime, s.getMineTimeMax, s.disarmWorkTicks);
+        h.all(s.canLayMines, s.movingSightPenalty, s.maxMineAmmo, s.getMineTime, s.getMineTimeMax, s.disarmWorkTicks);
         h.all(s.standStepBase, s.standStepMax, s.crouchStepBase, s.crouchStepMax);
     });
 

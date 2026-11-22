@@ -430,6 +430,7 @@ private:
         int expaOnHit{0};
         bool canGrenadeGround{false};
         bool canLayMines{false};
+        bool movingSightPenalty{false};
         int maxMineAmmo{0};
         int getMineTime{0};
         int getMineTimeMax{0};
@@ -711,6 +712,7 @@ private:
     void refreshRoutes();
     void refreshSpotting(std::vector<SoldierPose>* changed = nullptr, bool emitVehiclePoses = true);
     bool startNext(Soldier&);
+    void clearMovingSightPenalty(Soldier&);
     std::uint32_t nextCombatRandom(std::uint32_t mask);
     int scaleVehicleDamageForDifficulty(int targetOwner, int rawDamage) const;
     std::pair<int, int> soldierWorld(const Soldier&) const;

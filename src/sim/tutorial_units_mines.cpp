@@ -250,6 +250,7 @@ void TutorialUnits::triggerMineAtTile(int tx, int ty, std::vector<SoldierPose>& 
         } else {
             if (!vehicleAtCell(ss.cell)) grid_.setOccupied(ss.cell, false);
             ss.motion.reset();
+            clearMovingSightPenalty(ss);
             ss.goal.reset();
             ss.route.clear();
             ss.cursor = 0;

@@ -100,6 +100,31 @@ void FogGrid::buildFallbackCirc64() {
     hasCirc64_ = true;
 }
 
+void FogGrid::applyMapPerimeterFlags() {
+    if (tileWidth_ < 8 || tileHeight_ < 8) return;
+    // Matches n2Game_Dll.dll 0x1006b2ec..0x1006b448 map-load 4-tile perimeter flags.
+    for (int y = 0; y < tileHeight_; ++y) {
+        const std::size_t row = static_cast<std::size_t>(y) * static_cast<std::size_t>(tileWidth_);
+        for (int d = 0; d < 4; ++d) {
+            const std::uint32_t losBlock = (d <= 2 || y <= 2) ? 0x0800u : 0u;
+            const std::size_t lx = static_cast<std::size_t>(d);
+            const std::size_t rx = static_cast<std::size_t>(tileWidth_ - 1 - d);
+            flags_[row + lx] = (flags_[row + lx] & 0xc0001fffu) | losBlock | 0x4000000fu;
+            flags_[row + rx] = (flags_[row + rx] & 0xc0001fffu) | losBlock | 0x4000000fu;
+        }
+    }
+    for (int x = 0; x < tileWidth_; ++x) {
+        const std::size_t ux = static_cast<std::size_t>(x);
+        for (int d = 0; d < 4; ++d) {
+            const std::uint32_t losBlock = (x <= 2 || d <= 2) ? 0x0800u : 0u;
+            const std::size_t ty = static_cast<std::size_t>(d) * static_cast<std::size_t>(tileWidth_) + ux;
+            const std::size_t by = static_cast<std::size_t>(tileHeight_ - 1 - d) * static_cast<std::size_t>(tileWidth_) + ux;
+            flags_[ty] = (flags_[ty] & 0xc0001fffu) | losBlock | 0x4000000fu;
+            flags_[by] = (flags_[by] & 0xc0001fffu) | losBlock | 0x4000000fu;
+        }
+    }
+}
+
 void FogGrid::clearAll() {
     std::fill(fog_.begin(), fog_.end(), 0);
 }
@@ -275,12 +300,19 @@ InfantryCombatDesc InfantryCombatDesc::forUnitId(const std::string& id) {
     return dguner();
 }
 
-int effectiveSightRadius(const InfantryCombatDesc& desc, int expa, bool crouched, int owner, int difficulty) {
+int effectiveSightRadius(const InfantryCombatDesc& desc, int expa, bool crouched, int owner,
+                         int difficulty, bool moving, int weatherVisPct) {
     const int base = crouched ? desc.crouchSightBase : desc.sightBase;
     const int delta = crouched ? desc.crouchSightDelta : desc.sightDelta;
     int r = scaleByExpa(base, delta, expa);
+    if (moving && r > 1) {
+        --r;
+    }
+    if (weatherVisPct < 100) {
+        r = std::max(1, (r * weatherVisPct) / 100);
+    }
     if (difficulty == 1 && owner == 0) {
-        r = (r * 130) / 100;
+        r = (r * 13) / 10;
     } else if (difficulty == 3 && owner != 0 && owner != 3) {
         r = (r * 115) / 100;
     }

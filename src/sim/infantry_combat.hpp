@@ -19,6 +19,7 @@ public:
     bool loadCirc64(std::span<const std::uint8_t> data);
     bool loadCirc64FromGame(const std::filesystem::path& gameDir);
     void buildFallbackCirc64();
+    void applyMapPerimeterFlags();
 
     void clearAll();
     void clearCurrentVisibility();
@@ -77,7 +78,8 @@ struct InfantryCombatDesc {
 };
 
 // Effective sight radius matching CSoldier::GetSightRadius (0x100212c0).
-int effectiveSightRadius(const InfantryCombatDesc& desc, int expa, bool crouched, int owner, int difficulty = 2);
+int effectiveSightRadius(const InfantryCombatDesc& desc, int expa, bool crouched, int owner,
+                         int difficulty = 2, bool moving = false, int weatherVisPct = 100);
 
 struct CombatUnit {
     std::uint32_t uid{};
