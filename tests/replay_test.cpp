@@ -99,6 +99,7 @@ std::vector<cmd::Command> everyCommand() {
         cmd::LoadSnapshot{snap},
         cmd::Acknowledge{},
         cmd::TogglePause{},
+        cmd::Resign{0},
     };
 }
 

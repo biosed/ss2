@@ -344,11 +344,13 @@ bool MultiplayerHandshake::startHost(std::uint16_t port,
 bool MultiplayerHandshake::startJoin(const std::string& host,
                                      std::uint16_t port,
                                      std::string playerName,
-                                     std::uint64_t expectedMapHash) {
+                                     std::uint64_t expectedMapHash,
+                                     std::uint8_t nation) {
     cancel();
     isHost_ = false;
     playerName_ = std::move(playerName);
     expectedMapHash_ = expectedMapHash;
+    nation_ = nation <= 4u ? nation : 0u;
     helloSent_ = false;
     auto c = TcpConnection::connectNonBlocking(host, port);
     if (!c.isOpen()) {
@@ -394,6 +396,10 @@ MultiplayerHandshake::State MultiplayerHandshake::poll() {
                         return state_;
                     }
                     setup_.assignedSeat = 1u;
+                    setup_.playerNations[1] = hello->nation <= 4u ? hello->nation : 0u;
+                    if (!hello->playerName.empty()) {
+                        setup_.playerNames[1] = hello->playerName;
+                    }
                     if (!conn_->sendPacket(setup_)) {
                         state_ = State::Failed;
                         errorText_ = conn_->lastError();
@@ -432,7 +438,7 @@ MultiplayerHandshake::State MultiplayerHandshake::poll() {
 
     if (state_ == State::Exchanging) {
         if (!helloSent_) {
-            if (!conn_ || !conn_->sendPacket(HelloPacket{kLockstepProtocolVersion, 1u, playerName_})) {
+            if (!conn_ || !conn_->sendPacket(HelloPacket{kLockstepProtocolVersion, 1u, playerName_, nation_})) {
                 state_ = State::Failed;
                 errorText_ = conn_ ? conn_->lastError() : "Send failed";
                 statusText_ = "Handshake failed: " + errorText_;

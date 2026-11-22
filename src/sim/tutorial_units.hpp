@@ -17,6 +17,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -280,6 +281,8 @@ public:
     bool multiplayerSymmetry() const noexcept { return multiplayerSymmetry_; }
     bool isVisibleToViewer(int owner, std::uint8_t spottedMask) const;
     int actorOwner() const noexcept { return commandActor_; }
+    bool commandActorActive() const noexcept { return commandActorActive_; }
+    int originX() const noexcept { return originX_; }
     int effectiveQueryOwner() const noexcept { return commandActorActive_ ? commandActor_ : viewerOwner_; }
     struct ScopedCommandActor {
         TutorialUnits& units;
@@ -366,6 +369,7 @@ public:
     unsigned countByGroupMask(unsigned group, unsigned mask) const;
     unsigned countByGroupTeamMask(unsigned group, int team, unsigned mask) const;
     unsigned countByPlayerMask(int owner, unsigned mask) const;
+    void collectUnitTilePositions(std::vector<std::tuple<int, int, int>>& out) const;
 
     std::vector<SoldierPose> step();
     std::optional<std::vector<std::uint8_t>> takeFogSnapshot();

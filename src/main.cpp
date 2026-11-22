@@ -267,8 +267,22 @@ ss2::MultiplayerSessionConfig makeMultiplayerConfig(const ss2::MultiplayerHandsh
     cfg.turnTicks = hs.matchSetup().turnTicks;
     cfg.inputDelayTurns = hs.matchSetup().inputDelayTurns;
     cfg.hashIntervalTurns = hs.matchSetup().hashIntervalTurns;
+    cfg.playerNations = hs.matchSetup().playerNations;
+    cfg.playerNames = hs.matchSetup().playerNames;
     cfg.peer = std::move(peer);
     return cfg;
+}
+
+std::optional<std::uint8_t> parseMpNationArg(std::string_view raw) {
+    std::string low;
+    low.reserve(raw.size());
+    for (unsigned char c : raw) low.push_back(static_cast<char>(std::tolower(c)));
+    if (low == "russian" || low == "ru" || low == "ussr" || low == "soviet" || low == "0") return 0u;
+    if (low == "german" || low == "de" || low == "germany" || low == "1") return 1u;
+    if (low == "british" || low == "gb" || low == "uk" || low == "2") return 2u;
+    if (low == "us" || low == "usa" || low == "american" || low == "3") return 3u;
+    if (low == "japanese" || low == "jp" || low == "japan" || low == "4") return 4u;
+    return std::nullopt;
 }
 
 struct FrontEndResult {
@@ -449,11 +463,14 @@ std::optional<FrontEndResult> runFrontEnd(SDL_Window* window, ss2::ValidationRep
                     setup.mapHash = ss2::computeMissionMapHash(md);
                     setup.missionSpec = mpMissionPath.stem().string();
                     setup.autoEngage = true;
+                    setup.playerNations[0] = goldFe.state().mpNation();
+                    setup.playerNames[0] = settings.activeProfile.empty() ? std::string("Player 1") : settings.activeProfile;
                     started = hs.startHost(goldFe.state().mpPort(), std::move(setup));
                 } else {
                     const std::string playerName = settings.activeProfile.empty()
                         ? std::string("Player 2") : settings.activeProfile;
-                    started = hs.startJoin(goldFe.state().mpHostAddress(), goldFe.state().mpPort(), playerName);
+                    started = hs.startJoin(goldFe.state().mpHostAddress(), goldFe.state().mpPort(),
+                                           playerName, 0u, goldFe.state().mpNation());
                 }
             } catch (const std::exception& e) {
                 goldFe.handleKey(SDLK_ESCAPE);
@@ -536,16 +553,18 @@ int main(int argc, char** argv) try {
     std::optional<int> cliDifficulty;
     std::optional<std::uint16_t> mpHostPort;
     std::optional<std::pair<std::string, std::uint16_t>> mpJoinEndpoint;
+    std::optional<std::uint8_t> cliMpNation;
     for (int i = 1; i < argc; ++i) {
         const std::string_view arg(argv[i]);
         if (arg == "--help") {
-            std::cout << "ss2 [--game-dir DIR] [--mission FILE.ssm|NAME|INDEX] [--campaign QUERY] [--overview] [--list-missions] [--list-campaigns] [--list-multiplayer] [--host PORT | --join HOST:PORT] [--hd-pack DIR] [--original-infantry] [--no-auto-engage] [--difficulty easy|normal|hard] [--record FILE | --replay FILE | --load-save FILE] [--4k] [--fullscreen | --windowed] [--lang en|fr|es] [--frames N] [--no-movies] [--validate] [--timing]\n"
+            std::cout << "ss2 [--game-dir DIR] [--mission FILE.ssm|NAME|INDEX] [--campaign QUERY] [--overview] [--list-missions] [--list-campaigns] [--list-multiplayer] [--host PORT | --join HOST:PORT] [--mp-nation NATION] [--hd-pack DIR] [--original-infantry] [--no-auto-engage] [--difficulty easy|normal|hard] [--record FILE | --replay FILE | --load-save FILE] [--4k] [--fullscreen | --windowed] [--lang en|fr|es] [--frames N] [--no-movies] [--validate] [--timing]\n"
                          "--game-dir opens Tutorial I (or --mission) from an extracted Gold 2.2 game directory.\n"
                          "--list-missions lists all installed single-player missions, their map sizes and descriptions.\n"
                          "--list-campaigns lists all installed campaigns and missions.\n"
                          "--list-multiplayer lists all installed multiplayer missions (maps/mplay/*.smm).\n"
                          "--host PORT hosts a 2-player lockstep TCP match on PORT with --mission.\n"
                          "--join HOST:PORT joins a 2-player lockstep TCP match at HOST:PORT.\n"
+                         "--mp-nation NATION selects the multiplayer faction (russian, german, british, us, japanese).\n"
                          "--mission launches a playable mission (file path, display name or 1-based index), or displays its overview if no game directory is given or --overview is set.\n"
                          "--campaign launches a playable campaign mission (e.g. german:1, british:5, 031000, or unique title substring).\n"
                          "--overview displays only the mission's JPEG overview instead of launching playable.\n"
@@ -575,6 +594,9 @@ int main(int argc, char** argv) try {
         } else if (arg == "--join" && i + 1 < argc) {
             mpJoinEndpoint = parseJoinEndpoint(argv[++i]);
             if (!mpJoinEndpoint) throw std::invalid_argument("--join requires HOST:PORT");
+        } else if (arg == "--mp-nation" && i + 1 < argc) {
+            cliMpNation = parseMpNationArg(argv[++i]);
+            if (!cliMpNation) throw std::invalid_argument("--mp-nation requires russian, german, british, us or japanese");
         }
         else if (arg == "--overview") overviewOnly = true;
         else if (arg == "--no-movies") noMovies = true;
@@ -849,6 +871,8 @@ int main(int argc, char** argv) try {
             setup.mapHash = ss2::computeMissionMapHash(md);
             setup.missionSpec = mission.stem().string();
             setup.autoEngage = autoEngage;
+            setup.playerNations[0] = cliMpNation.value_or(1u);
+            setup.playerNames[0] = settings.activeProfile.empty() ? std::string("Player 1") : settings.activeProfile;
             if (!hs.startHost(*mpHostPort, std::move(setup))) {
                 throw std::runtime_error(hs.errorText());
             }
@@ -859,7 +883,9 @@ int main(int argc, char** argv) try {
             if (!mission.empty()) {
                 expectedHash = ss2::computeMissionMapHash(ss2::assets::readMissionData(mission));
             }
-            if (!hs.startJoin(mpJoinEndpoint->first, mpJoinEndpoint->second, "Player 2", expectedHash)) {
+            const std::string joinName = settings.activeProfile.empty() ? std::string("Player 2") : settings.activeProfile;
+            if (!hs.startJoin(mpJoinEndpoint->first, mpJoinEndpoint->second, joinName, expectedHash,
+                              cliMpNation.value_or(0u))) {
                 throw std::runtime_error(hs.errorText());
             }
             std::cout << "Joining lockstep multiplayer at " << mpJoinEndpoint->first

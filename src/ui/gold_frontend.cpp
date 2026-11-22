@@ -179,6 +179,18 @@ constexpr std::array<ButtonSpec, 2> kMultiplayerButtons{{
 constexpr RectD kMpModeRect{438, 136, 330, 34};
 constexpr RectD kMpHostFieldRect{438, 204, 330, 32};
 constexpr RectD kMpPortFieldRect{438, 268, 160, 32};
+constexpr RectD kMpNationRect{608, 268, 160, 32};
+
+const char* mpNationLabel(std::uint8_t nation) {
+    switch (nation) {
+        case 0: return "Russian";
+        case 1: return "German";
+        case 2: return "British";
+        case 3: return "US";
+        case 4: return "Japanese";
+        default: return "German";
+    }
+}
 
 std::optional<std::uint16_t> parsePortText(std::string_view s) {
     if (s.empty()) return std::nullopt;
@@ -1381,6 +1393,7 @@ std::string GoldFrontEnd::hitTestStage(double sx, double sy) const {
                 if (kMpModeRect.contains(sx, sy)) return "mp_mode";
                 if (kMpHostFieldRect.contains(sx, sy)) return "mp_host_field";
                 if (kMpPortFieldRect.contains(sx, sy)) return "mp_port_field";
+                if (kMpNationRect.contains(sx, sy)) return "mp_nation";
                 if (const auto id = checkButtons(kMultiplayerButtons); !id.empty()) return id;
             } else {
                 if (const auto id = checkButtons(kSingleMissionButtons); !id.empty()) return id;
@@ -1908,7 +1921,7 @@ void GoldFrontEnd::handleKey(SDL_Keycode key) {
                 } else if (fe_.screen() == FrontEnd::Screen::LoadGame) {
                     cycleFocus({"load_start", "load_delete", "cancel"}, step);
                 } else if (fe_.screen() == FrontEnd::Screen::Multiplayer) {
-                    cycleFocus({"mp_mode", "mp_host_field", "mp_port_field", "mp_start", "cancel"}, step);
+                    cycleFocus({"mp_mode", "mp_host_field", "mp_port_field", "mp_nation", "mp_start", "cancel"}, step);
                 } else {
                     cycleFocus({"start", "cancel"}, step);
                 }
@@ -1920,6 +1933,7 @@ void GoldFrontEnd::handleKey(SDL_Keycode key) {
                     else activateId("load_start");
                 } else if (fe_.screen() == FrontEnd::Screen::Multiplayer) {
                     if (focusedId_ == "cancel" || focusedId_ == "mp_mode" ||
+                        focusedId_ == "mp_nation" ||
                         focusedId_ == "mp_host_field" || focusedId_ == "mp_port_field") {
                         activateId(focusedId_);
                     } else {
@@ -3281,6 +3295,20 @@ void GoldFrontEnd::renderToBuffer(int pixelW, int pixelH, std::vector<std::uint8
             drawInputField(kMpPortFieldRect, mpPortDraft_, "27015",
                            mpEditField_ == MpEditField::Port,
                            hoveredId_ == "mp_port_field", focusedId_ == "mp_port_field");
+
+            {
+                auto nLbl = makeTextLayout(pangoCtx, tr("Nation") + ":", 13.5, true);
+                cairo_move_to(cr, 608.0, 246.0);
+                cairo_set_source_rgb(cr, 232.0 / 255.0, 224.0 / 255.0, 188.0 / 255.0);
+                pango_cairo_show_layout(cr, nLbl.get());
+                const bool natHov = (hoveredId_ == "mp_nation");
+                const bool natFoc = (focusedId_ == "mp_nation");
+                drawBronzeBox(cr, kMpNationRect.x, kMpNationRect.y, kMpNationRect.w, kMpNationRect.h,
+                              (natHov || natFoc) ? 0.94 : 0.85);
+                drawGoldStencilButton(cr, pangoCtx, kMpNationRect,
+                                      tr(mpNationLabel(fe_.mpNation())), 'N',
+                                      natHov, natFoc, true, 15.0, true);
+            }
 
             if (selectedRow < rowCount) {
                 const auto& m = mpMissions_[selectedRow];

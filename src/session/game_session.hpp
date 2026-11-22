@@ -51,6 +51,8 @@ struct MultiplayerSessionConfig {
     std::uint32_t turnTicks{kDefaultTurnTicks};
     std::uint32_t inputDelayTurns{kDefaultInputDelayTurns};
     std::uint32_t hashIntervalTurns{kDefaultHashIntervalTurns};
+    std::array<std::uint8_t, 4> playerNations{1, 0, 2, 3};
+    std::array<std::string, 4> playerNames{"Player 1", "Player 2", "", ""};
     std::shared_ptr<TcpConnection> peer;
 };
 
@@ -168,6 +170,12 @@ struct GameSession {
     bool lockstepWaitingPeer = false;
     bool lockstepDesyncReported = false;
     bool lockstepPeerDisconnected = false;
+    bool mpChatActive = false;
+    std::string mpChatDraft;
+    int mpRttMs = -1;
+    std::uint32_t mpPingSeq = 0;
+    std::chrono::steady_clock::time_point lastMpPingAt{};
+    std::array<int, 32> lastZeppelinHolder{-2,-2,-2,-2,-2,-2,-2,-2,-2,-2,-2,-2,-2,-2,-2,-2,-2,-2,-2,-2,-2,-2,-2,-2,-2,-2,-2,-2,-2,-2,-2,-2};
 
     float refreshRate = 0.0f;
     VulkanWindow renderer;
@@ -314,6 +322,16 @@ struct GameSession {
 
     int run();
     int localOwner() const noexcept { return multiplayer.enabled ? multiplayer.localSeat : 0; }
+    static const char* mpNationName(std::uint8_t nation) noexcept {
+        switch (nation) {
+            case 0: return "Russian";
+            case 1: return "German";
+            case 2: return "British";
+            case 3: return "US";
+            case 4: return "Japanese";
+            default: return "German";
+        }
+    }
     void processLockstepPostTickSpawns();
     void spawnAbandonedCrew(const std::vector<assets::Placement>& spawns);
 

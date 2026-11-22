@@ -1,6 +1,8 @@
 #include "sim/mission_runner.hpp"
+#include "sim/tutorial_coordinates.hpp"
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <utility>
 
 namespace ss2 {
@@ -207,8 +209,255 @@ void MissionRunner::collect() {
             }
             continue;
         }
+        if (e.kind == MissionEvent::MultiplayerWave ||
+            e.kind == MissionEvent::MultiplayerZeppelinWave ||
+            e.kind == MissionEvent::MultiplayerZeppelinPlanes ||
+            e.kind == MissionEvent::MultiplayerZeppelinSorties) {
+            if (mpSkirmish_) handleMpScriptEventLocked(e);
+            else deferredMpScriptEvents_.push_back(e);
+            continue;
+        }
         pending_.push_back(e);
     }
+}
+
+void MissionRunner::configureMultiplayerSkirmish(const MultiplayerSkirmishConfig& cfg) {
+    std::lock_guard lock(mutex_);
+    MpSkirmishState mp{};
+    mp.config = cfg;
+    mp.config.playerCount = std::clamp(cfg.playerCount, 2, 4);
+    for (int s = 0; s < 4; ++s) {
+        if (mp.config.playerNations[s] > 4u) mp.config.playerNations[s] = 0u;
+        units_.setPlayerTeam(static_cast<unsigned>(s), mp.config.playerTeams[s]);
+    }
+    std::vector<unsigned> activeGates;
+    const auto& gates = tutorial_.data().gates;
+    for (unsigned gi = 0; gi < gates.size(); ++gi) {
+        if (gates[gi].first != 0 || gates[gi].second != 0) {
+            activeGates.push_back(gi);
+        }
+    }
+    for (int s = 0; s < 4; ++s) {
+        mp.assignedGates[s] = activeGates.empty()
+            ? static_cast<unsigned>(s)
+            : activeGates[static_cast<std::size_t>(s) % activeGates.size()];
+    }
+    mpSkirmish_ = std::move(mp);
+    auto deferred = std::exchange(deferredMpScriptEvents_, {});
+    for (const auto& ev : deferred) {
+        handleMpScriptEventLocked(ev);
+    }
+}
+
+void MissionRunner::handleMpScriptEventLocked(const MissionEvent& e) {
+    if (!mpSkirmish_) return;
+    auto& mp = *mpSkirmish_;
+    const auto& waves = tutorial_.data().reinforcements;
+    if (e.kind == MissionEvent::MultiplayerWave) {
+        for (int s = 0; s < mp.config.playerCount; ++s) {
+            if ((mp.resignedSeatsMask & (1u << s)) != 0u) continue;
+            const unsigned waveIdx = unpackMpNationWave(e.owner, e.destZone, mp.config.playerNations[s]);
+            if (waveIdx >= waves.size() || waves[waveIdx].empty()) continue;
+            MissionEvent spawnEv{MissionEvent::Reinforcement, waveIdx, static_cast<unsigned>(s),
+                                 mp.assignedGates[s], 0u, e.delaySec};
+            if (e.delaySec > 0u) {
+                scheduledReinforcements_.push_back({spawnEv, tutorial_.tick() + e.delaySec * 25u});
+            } else {
+                pending_.push_back(spawnEv);
+            }
+        }
+        return;
+    }
+
+    auto findOrAddGroup = [&](std::uint32_t mask) -> MpZeppelinGroup* {
+        if (mask == 0u) return nullptr;
+        for (auto& g : mp.groups) {
+            if (g.mask == mask) return &g;
+        }
+        MpZeppelinGroup g{};
+        g.mask = mask;
+        mp.groups.push_back(std::move(g));
+        return &mp.groups.back();
+    };
+
+    if (e.kind == MissionEvent::MultiplayerZeppelinWave) {
+        if (auto* g = findOrAddGroup(e.index)) {
+            g->waves.push_back({e.owner, e.destZone, e.delaySec});
+        }
+    } else if (e.kind == MissionEvent::MultiplayerZeppelinPlanes) {
+        if (auto* g = findOrAddGroup(e.index); g && e.gate < 5u && e.destZone > 0u) {
+            g->airPlanes.push_back({e.gate, e.destZone});
+        }
+    } else if (e.kind == MissionEvent::MultiplayerZeppelinSorties) {
+        if (auto* g = findOrAddGroup(e.index); g && e.gate < 5u && e.destZone > 0u) {
+            g->airSorties.push_back({e.gate, e.destZone});
+        }
+    }
+}
+
+void MissionRunner::stepMpSkirmishLocked() {
+    if (!mpSkirmish_) return;
+    auto& mp = *mpSkirmish_;
+    const std::uint32_t tick = tutorial_.tick();
+
+    if ((tick & 0xfu) == 0xeu || tick == 0u) {
+        std::uint32_t activeMask = 0u;
+        for (const auto& g : mp.groups) activeMask |= g.mask;
+
+        mp.teamPresentMask.fill(0u);
+        std::vector<std::tuple<int, int, int>> tileUnits;
+        units_.collectUnitTilePositions(tileUnits);
+        const auto& markers = tutorial_.data().markers;
+        const int originX = units_.originX();
+
+        for (int z = 0; z < 32 && static_cast<std::size_t>(z) < markers.size(); ++z) {
+            if ((activeMask & (1u << z)) == 0u) continue;
+            const auto [mx, my] = markers[z];
+            if (mx == originX && my == 16) continue;
+            const auto [zu, zv] = tutorialFootWorld(mx, my, originX);
+            const int zx = zu >> 5;
+            const int zy = zv >> 5;
+            for (const auto& [owner, ux, uy] : tileUnits) {
+                if (owner < 0 || owner >= mp.config.playerCount) continue;
+                if ((mp.resignedSeatsMask & (1u << owner)) != 0u) continue;
+                const int dx = std::abs(ux - zx);
+                const int dy = std::abs(uy - zy);
+                const int octDist = std::max(dx, dy) + std::min(dx, dy) / 2;
+                if (octDist <= mp.config.captureRadiusTiles) {
+                    const int team = std::clamp(mp.config.playerTeams[owner], 0, 3);
+                    mp.teamPresentMask[team] |= (1u << z);
+                }
+            }
+            int teamsPresent = 0;
+            for (int t = 0; t < 4; ++t) {
+                if ((mp.teamPresentMask[t] & (1u << z)) != 0u) ++teamsPresent;
+            }
+            if (teamsPresent > 1) {
+                mp.zeppelinContested[z] = true;
+                mp.zeppelinHolder[z] = -1;
+                for (int t = 0; t < 4; ++t) {
+                    mp.teamPresentMask[t] &= ~(1u << z);
+                }
+            } else {
+                mp.zeppelinContested[z] = false;
+            }
+        }
+    }
+
+    const auto& waves = tutorial_.data().reinforcements;
+    for (auto& g : mp.groups) {
+        int holdingTeam = -1;
+        if (g.mask != 0u) {
+            for (int t = 0; t < 4; ++t) {
+                if ((mp.teamPresentMask[t] & g.mask) == g.mask) {
+                    if (holdingTeam >= 0) {
+                        holdingTeam = -1;
+                        break;
+                    }
+                    holdingTeam = t;
+                }
+            }
+        }
+        if (holdingTeam < 0) {
+            g.holdTicks.fill(0u);
+            continue;
+        }
+        for (int t = 0; t < 4; ++t) {
+            if (t != holdingTeam) g.holdTicks[t] = 0u;
+        }
+        if (tick < mp.config.initialWaitTicks) continue;
+        if (g.holdTicks[holdingTeam] < mp.config.captureHoldTicks) {
+            ++g.holdTicks[holdingTeam];
+        }
+        if (g.holdTicks[holdingTeam] < mp.config.captureHoldTicks) continue;
+
+        for (int z = 0; z < 32; ++z) {
+            if ((g.mask & (1u << z)) != 0u && !mp.zeppelinContested[z]) {
+                mp.zeppelinHolder[z] = holdingTeam;
+            }
+        }
+
+        const bool grantAir = ((g.airGrantedTeamsMask & (1u << holdingTeam)) == 0u);
+        if (grantAir) {
+            g.airGrantedTeamsMask |= static_cast<std::uint8_t>(1u << holdingTeam);
+        }
+
+        for (int s = 0; s < mp.config.playerCount; ++s) {
+            if ((mp.resignedSeatsMask & (1u << s)) != 0u) continue;
+            if (mp.config.playerTeams[s] != holdingTeam) continue;
+            if (grantAir) {
+                for (const auto& ap : g.airPlanes) {
+                    units_.addAirSupportPlanes(s, static_cast<assets::AirMissionKind>(ap.slot),
+                                               static_cast<int>(ap.count));
+                }
+                for (const auto& as : g.airSorties) {
+                    units_.addAirSupportSorties(s, static_cast<assets::AirMissionKind>(as.slot),
+                                                static_cast<int>(as.count));
+                }
+            }
+        }
+
+        for (auto& w : g.waves) {
+            if (tick < w.nextRepeatTick[holdingTeam]) continue;
+            w.nextRepeatTick[holdingTeam] = tick + std::max<std::uint32_t>(25u, w.periodSec * 25u);
+            for (int s = 0; s < mp.config.playerCount; ++s) {
+                if ((mp.resignedSeatsMask & (1u << s)) != 0u) continue;
+                if (mp.config.playerTeams[s] != holdingTeam) continue;
+                const unsigned waveIdx = unpackMpNationWave(w.packed4, w.jpWave, mp.config.playerNations[s]);
+                if (waveIdx < waves.size() && !waves[waveIdx].empty()) {
+                    pending_.push_back({MissionEvent::Reinforcement, waveIdx, static_cast<unsigned>(s),
+                                        mp.assignedGates[s], 0u, 0u});
+                }
+            }
+        }
+    }
+
+    if ((tick & 0xfu) == 0xeu && tick >= 50u) {
+        evaluateMpVictoryLocked();
+    }
+}
+
+void MissionRunner::evaluateMpVictoryLocked() {
+    if (!mpSkirmish_ || mpSkirmish_->matchOutcomeTeam != -1) return;
+    auto& mp = *mpSkirmish_;
+
+    auto seatHasPendingSpawn = [&](int s) {
+        for (const auto& r : scheduledReinforcements_) {
+            if (r.event.owner == static_cast<unsigned>(s)) return true;
+        }
+        for (const auto& ev : pending_) {
+            if (ev.kind == MissionEvent::Reinforcement && ev.owner == static_cast<unsigned>(s)) return true;
+        }
+        return false;
+    };
+
+    std::vector<int> allTeams;
+    std::vector<int> survivingTeams;
+    for (int t = 0; t < 4; ++t) {
+        bool hasSeat = false;
+        bool hasLiving = false;
+        for (int s = 0; s < mp.config.playerCount; ++s) {
+            if (mp.config.playerTeams[s] != t) continue;
+            hasSeat = true;
+            if ((mp.resignedSeatsMask & (1u << s)) == 0u &&
+                (units_.countAliveByPlayer(s) > 0u || seatHasPendingSpawn(s))) {
+                hasLiving = true;
+                break;
+            }
+        }
+        if (hasSeat) allTeams.push_back(t);
+        if (hasLiving) survivingTeams.push_back(t);
+    }
+
+    if (allTeams.size() < 2u || survivingTeams.size() > 1u) return;
+    mp.matchOutcomeTeam = survivingTeams.empty() ? -2 : survivingTeams.front();
+    for (int t : allTeams) {
+        if (t != mp.matchOutcomeTeam) mp.defeatedTeamsMask |= static_cast<std::uint8_t>(1u << t);
+    }
+    const int viewerTeam = (units_.viewerOwner() >= 0 && units_.viewerOwner() < 4)
+        ? mp.config.playerTeams[units_.viewerOwner()] : -1;
+    const bool won = (mp.matchOutcomeTeam >= 0 && viewerTeam == mp.matchOutcomeTeam);
+    pending_.push_back({won ? MissionEvent::Victory : MissionEvent::Defeat, 0u});
 }
 
 void MissionRunner::flushScheduledReinforcements() {
@@ -385,6 +634,7 @@ void MissionRunner::stepTickLocked() {
                                     tutorial_.data().markers));
     collect();
     flushScheduledReinforcements();
+    if (mpSkirmish_) stepMpSkirmishLocked();
 }
 
 void MissionRunner::advanceTicks(unsigned n) {
@@ -986,6 +1236,59 @@ bool MissionRunner::togglePause() {
 cmd::TogglePause::Result MissionRunner::applyLocked(const cmd::TogglePause&) {
     paused_ = !paused_;
     return paused_;
+}
+void MissionRunner::resign(std::uint8_t seat) {
+    submit(cmd::Resign{seat});
+}
+cmd::Resign::Result MissionRunner::applyLocked(const cmd::Resign& c) {
+    if (c.seat >= 4u) return;
+    if (units_.commandActorActive() && static_cast<int>(c.seat) != units_.actorOwner()) return;
+    if (!mpSkirmish_ || c.seat >= static_cast<std::uint8_t>(mpSkirmish_->config.playerCount)) return;
+    mpSkirmish_->resignedSeatsMask |= static_cast<std::uint8_t>(1u << c.seat);
+    evaluateMpVictoryLocked();
+}
+std::vector<ZeppelinMarkerStatus> MissionRunner::zeppelinStatuses() const {
+    std::lock_guard lock(mutex_);
+    std::vector<ZeppelinMarkerStatus> out;
+    if (!mpSkirmish_) return out;
+    const auto& mp = *mpSkirmish_;
+    std::uint32_t activeMask = 0u;
+    for (const auto& g : mp.groups) activeMask |= g.mask;
+    const auto& markers = tutorial_.data().markers;
+    const int originX = units_.originX();
+    const std::uint32_t capTicks = std::max<std::uint32_t>(1u, mp.config.captureHoldTicks);
+    for (int z = 0; z < 32 && static_cast<std::size_t>(z) < markers.size(); ++z) {
+        if ((activeMask & (1u << z)) == 0u) continue;
+        const auto [mx, my] = markers[z];
+        if (mx == originX && my == 16) continue;
+        float progress = 0.0f;
+        int capturingTeam = -1;
+        for (const auto& g : mp.groups) {
+            if ((g.mask & (1u << z)) == 0u) continue;
+            for (int t = 0; t < 4; ++t) {
+                if (g.holdTicks[t] > 0u) {
+                    const float p = std::clamp(static_cast<float>(g.holdTicks[t]) / static_cast<float>(capTicks),
+                                               0.0f, 1.0f);
+                    if (p > progress) {
+                        progress = p;
+                        capturingTeam = t;
+                    }
+                }
+            }
+        }
+        out.push_back({static_cast<std::uint8_t>(z), mx, my, mp.zeppelinHolder[z], mp.zeppelinContested[z],
+                       progress, capturingTeam});
+    }
+    return out;
+}
+int MissionRunner::assignedGateForSeat(int seat) const {
+    std::lock_guard lock(mutex_);
+    if (!mpSkirmish_ || seat < 0 || seat >= 4) return std::max(0, seat);
+    return static_cast<int>(mpSkirmish_->assignedGates[seat]);
+}
+bool MissionRunner::mpSkirmishConfigured() const {
+    std::lock_guard lock(mutex_);
+    return mpSkirmish_.has_value();
 }
 bool MissionRunner::isPaused() const {
     std::lock_guard lock(mutex_);

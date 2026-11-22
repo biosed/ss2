@@ -162,8 +162,12 @@ int main() {
         check(def.screen() == FrontEnd::Screen::Multiplayer && !def.takeNotice().empty(),
               "Host Start with no multiplayer maps stays put and emits notice");
         check(def.takeNotice().empty(), "notice is cleared after reading");
-        check(def.shortcutId('m') == "mp_mode" && def.shortcutId('s') == "mp_start",
-              "Multiplayer advertises M (mode) and S (Start) shortcuts");
+        check(def.shortcutId('m') == "mp_mode" && def.shortcutId('n') == "mp_nation" &&
+              def.shortcutId('s') == "mp_start",
+              "Multiplayer advertises M (mode), N (Nation), and S (Start) shortcuts");
+        check(def.mpNation() == 1u, "Multiplayer defaults nation to German (1)");
+        def.activate("mp_nation");
+        check(def.mpNation() == 2u, "mp_nation cycles nation to British (2)");
         check(def.mpIsHost(), "Multiplayer defaults to Host Match");
         def.activate("mp_mode");
         check(!def.mpIsHost(), "mp_mode toggles to Join Match");

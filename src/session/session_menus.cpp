@@ -21,13 +21,22 @@ std::vector<MenuItem> GameSession::buildPauseItems() {
         if (airReady > 0) {
             items.push_back({"airsupport", ss2::tr("Air Support"), std::to_string(airReady), true});
         }
-        items.push_back({"quicksave", ss2::tr("Quick Save"), "F9", true});
-        items.push_back({"quickload", ss2::tr("Quick Load"), "F10", true});
-        items.push_back({"saveload", ss2::tr("Save / Load..."), "", true});
+        if (multiplayer.enabled) {
+            const std::uint8_t nat = multiplayer.playerNations[localOwner() & 3];
+            items.push_back({"", ss2::tr("Nation"),
+                             ss2::tr(mpNationName(nat)) + " (#" + std::to_string(localOwner() + 1) + ")", false});
+            if (mpRttMs >= 0) {
+                items.push_back({"", "RTT", std::to_string(mpRttMs) + " ms", false});
+            }
+        } else {
+            items.push_back({"quicksave", ss2::tr("Quick Save"), "F9", true});
+            items.push_back({"quickload", ss2::tr("Quick Load"), "F10", true});
+            items.push_back({"saveload", ss2::tr("Save / Load..."), "", true});
+        }
         items.push_back({"forces", ss2::tr("Force Status"), "O", true});
         items.push_back({"briefing", ss2::tr("Mission Briefing"), "J", true});
     }
-    if (!gameDir.empty() && nextMissionOut) {
+    if (!multiplayer.enabled && !gameDir.empty() && nextMissionOut) {
         items.push_back({"campaigns", ss2::tr("Campaigns"), "", true});
         items.push_back({"missions", ss2::tr("Missions"), "", true});
     }
@@ -43,12 +52,12 @@ std::vector<MenuItem> GameSession::buildPauseItems() {
         items.push_back({"next_track", ss2::tr("Next soundtrack track"), "N", true});
     }
     items.push_back({"effects", ss2::tr("Tracers and flashes"), ss2::tr(combatEffects ? "On" : "Off"), true});
-    if (simulation) {
+    if (!multiplayer.enabled && simulation) {
         const int sp = simulation->speedPercent();
         const std::string spStr = sp == 50 ? "0.5x" : sp == 200 ? "2x" : sp == 300 ? "3x" : "1x";
         items.push_back({"speed", ss2::tr("Game speed"), spStr, true});
     }
-    {
+    if (!multiplayer.enabled) {
         const char* diffKey = settings.difficulty == 1 ? "Easy" : settings.difficulty == 3 ? "Hard" : "Normal";
         items.push_back({"difficulty", ss2::tr("Difficulty"), ss2::tr(diffKey), true});
     }
@@ -60,6 +69,9 @@ std::vector<MenuItem> GameSession::buildPauseItems() {
     }
     items.push_back({"controls", ss2::tr("Controls"), "", true});
     items.push_back({"log", ss2::tr("Message log"), "L", true});
+    if (multiplayer.enabled && simulation) {
+        items.push_back({"resign", ss2::tr("Surrender"), "", true});
+    }
     items.push_back({"quit", ss2::tr("Quit to desktop"), "", true});
     return items;
 }
@@ -88,7 +100,7 @@ void GameSession::openPauseMenu() {
     faceArmed = false;
     armedAirSupport.reset();
     resetCursor();
-    if (simulation && !paused) {
+    if (simulation && !paused && !multiplayer.enabled) {
         paused = simulation->togglePause();
         menuPausedClock = true;
     } else {
@@ -229,7 +241,7 @@ void GameSession::openControlsMenu() {
 
 void GameSession::openDebriefMenu(bool victory) {
     if (limit || timing || !nextMissionOut || menu.active() || briefing.active()) return;
-    if (simulation && !paused) {
+    if (simulation && !paused && !multiplayer.enabled) {
         paused = simulation->togglePause();
         menuPausedClock = true;
     } else {
@@ -281,7 +293,7 @@ void GameSession::openDebriefMenu(bool victory) {
         }
     }
     bool shouldPersist = false;
-    if (victory && !completedKey.empty()) {
+    if (victory && !completedKey.empty() && !multiplayer.enabled) {
         if (settings.completedMissions.insert(completedKey).second) {
             shouldPersist = true;
         }

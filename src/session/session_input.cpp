@@ -31,6 +31,68 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
         renderer.handleEvent(event);
         return;
     }
+    if (multiplayer.enabled && simulation && !menu.active() && !briefing.active()) {
+        const std::string senderName = (localOwner() >= 0 && localOwner() < 4 &&
+                                        !multiplayer.playerNames[localOwner()].empty())
+            ? multiplayer.playerNames[localOwner()]
+            : (settings.activeProfile.empty() ? std::string("Player") : settings.activeProfile);
+        if (mpChatActive) {
+            if (event.type == SDL_EVENT_TEXT_INPUT && event.text.text) {
+                for (const unsigned char uc : std::string_view(event.text.text)) {
+                    if (uc >= 0x20u && uc != 0x7fu && mpChatDraft.size() < 120u) {
+                        mpChatDraft.push_back(static_cast<char>(uc));
+                    }
+                }
+                showNotice(ss2::trf("Say ({0}): {1}", {senderName, mpChatDraft + "_"}), ss2::NoticeKind::accepted);
+                return;
+            }
+            if (event.type == SDL_EVENT_KEY_DOWN) {
+                if (event.key.key == SDLK_ESCAPE) {
+                    mpChatActive = false;
+                    mpChatDraft.clear();
+                    if (window) SDL_StopTextInput(window);
+                    showNotice("", ss2::NoticeKind::accepted);
+                    return;
+                }
+                if (event.key.key == SDLK_BACKSPACE) {
+                    while (!mpChatDraft.empty() &&
+                           (static_cast<unsigned char>(mpChatDraft.back()) & 0xc0u) == 0x80u) {
+                        mpChatDraft.pop_back();
+                    }
+                    if (!mpChatDraft.empty()) mpChatDraft.pop_back();
+                    showNotice(ss2::trf("Say ({0}): {1}", {senderName, mpChatDraft + "_"}), ss2::NoticeKind::accepted);
+                    return;
+                }
+                if (event.key.key == SDLK_RETURN || event.key.key == SDLK_KP_ENTER) {
+                    const std::string msg = std::move(mpChatDraft);
+                    mpChatDraft.clear();
+                    mpChatActive = false;
+                    if (window) SDL_StopTextInput(window);
+                    if (!msg.empty()) {
+                        if (multiplayer.peer && multiplayer.peer->isConnected()) {
+                            (void)multiplayer.peer->sendPacket(
+                                ss2::ChatPacket{static_cast<std::uint8_t>(localOwner()), senderName, msg});
+                            (void)multiplayer.peer->flush();
+                        }
+                        const std::string line = senderName + ": " + msg;
+                        logHud(line);
+                        showNotice(ss2::trf("Chat: {0}", {line}), ss2::NoticeKind::accepted);
+                    } else {
+                        showNotice("", ss2::NoticeKind::accepted);
+                    }
+                    return;
+                }
+                return;
+            }
+        } else if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat &&
+                   (event.key.key == SDLK_RETURN || event.key.key == SDLK_KP_ENTER)) {
+            mpChatActive = true;
+            mpChatDraft.clear();
+            if (window) SDL_StartTextInput(window);
+            showNotice(ss2::trf("Say ({0}): {1}", {senderName, "_"}), ss2::NoticeKind::accepted);
+            return;
+        }
+    }
     if (hud && (event.type == SDL_EVENT_WINDOW_MOUSE_LEAVE || event.type == SDL_EVENT_WINDOW_FOCUS_LOST)) {
         hud->handle(event);
     }
@@ -230,6 +292,10 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
             openLogMenu();
         } else if (mr.activated == "back") {
             menu.open(ss2::tr("Paused"), buildPauseItems());
+        } else if (mr.activated == "resign" && simulation && multiplayer.enabled) {
+            simulation->resign(static_cast<std::uint8_t>(localOwner()));
+            closeMenu();
+            showNotice(ss2::tr("You surrendered."), ss2::NoticeKind::blocked);
         } else if (mr.activated == "quit") {
             running = false;
         }

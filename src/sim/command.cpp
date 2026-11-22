@@ -89,6 +89,7 @@ auto fields(const CallAirSupport& c) { return std::tie(c.kind, c.x, c.y); }
 auto fields(const LoadSnapshot& c) { return std::tie(c.snapshot); }
 auto fields(const Acknowledge&) { return std::tuple<>{}; }
 auto fields(const TogglePause&) { return std::tuple<>{}; }
+auto fields(const Resign& c) { return std::tie(c.seat); }
 
 template<class T> struct IsVector : std::false_type {};
 template<class T> struct IsVector<std::vector<T>> : std::true_type {};

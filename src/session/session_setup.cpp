@@ -495,6 +495,7 @@ void GameSession::initializeMission() {
         const int selOriginX = int(data.height) * 32;
         const std::string selTitle = isTutorial1 ? (mapScale == 2 ? "Tutorial I (2x HD)" : "Tutorial I")
                                                  : missionPath.stem().string();
+        currentMissionTitle = selTitle;
         if (replayFile) {
             simulation.emplace(ss2::MissionRunner::ManualClock{}, std::move(data), std::move(soldiers));
             if (!simulation->replay(replayFile->commands, replayFile->endTick)) {
@@ -538,6 +539,35 @@ void GameSession::initializeMission() {
         selection.emplace(window, renderer, std::move(viewInfantry), std::move(viewVehicles), mapScale, selOriginX, selTitle);
         selection->setVehicles(std::move(viewVehicleUnits));
         selection->setLocalPlayer(localOwner());
+        if (multiplayer.enabled && simulation) {
+            simulation->configureMultiplayerSkirmish({
+                multiplayer.playerCount,
+                multiplayer.playerNations,
+                missionPlayerTeams,
+                375u,
+                0u,
+                4,
+            });
+            processLockstepPostTickSpawns();
+            bool hasLocalUnit = false;
+            for (const auto& u : scene->units()) {
+                if (u.owner == localOwner() && u.hp > 0) { hasLocalUnit = true; break; }
+            }
+            if (!hasLocalUnit && vehicleScene) {
+                for (const auto& v : vehicleScene->vehicles()) {
+                    if (v.owner == localOwner() && v.alive && v.hp > 0) { hasLocalUnit = true; break; }
+                }
+            }
+            if (!hasLocalUnit) {
+                const int gate = simulation->assignedGateForSeat(localOwner());
+                const auto& gates = simulation->data().gates;
+                if (gate >= 0 && static_cast<std::size_t>(gate) < gates.size() &&
+                    (gates[gate].first != 0 || gates[gate].second != 0)) {
+                    renderer.focusMap(static_cast<double>(gates[gate].first * mapScale),
+                                      static_cast<double>(gates[gate].second * mapScale), true);
+                }
+            }
+        }
         {
             int airReadyCount = 0;
             for (const auto& sl : initAir) airReadyCount += sl.ready;

@@ -378,6 +378,13 @@ struct TogglePause {
     using Result = bool;
     bool operator==(const TogglePause&) const = default;
 };
+// Resigns a multiplayer seat (verified against the acting seat in lockstep applyAs).
+struct Resign {
+    static constexpr std::string_view tag = "resign";
+    using Result = void;
+    std::uint8_t seat{0};
+    bool operator==(const Resign&) const = default;
+};
 
 using Command = std::variant<
     Move, AttackMove, Patrol, Scatter, Attack, Stop, ToggleHoldFire, ToggleCrouch, ToggleBinoculars, SpawnInfantry,
@@ -387,7 +394,7 @@ using Command = std::variant<
     AbandonVehicles, TowVehicle, UnhitchVehicles, SpawnVehicle, AddReserveUnit, TakeReserveUnits,
     AttackGroundVehicles, AttackGroundSoldiers, LayMine, DisarmMine, GroupMove, GarrisonBuilding, EvacuateBuilding,
     ToggleBuildingHoldFire, ToggleBuildingBinoculars, BuildingAttack, BuildingAttackBuilding, AttackBuilding,
-    AttackBuildingWithVehicles, CallAirSupport, LoadSnapshot, Acknowledge, TogglePause>;
+    AttackBuildingWithVehicles, CallAirSupport, LoadSnapshot, Acknowledge, TogglePause, Resign>;
 
 // `tick` is the simulation tick at which the command was applied: after the
 // step that produced `tick` and before the next one.

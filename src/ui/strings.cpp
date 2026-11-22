@@ -887,6 +887,23 @@ constexpr Entry table[] = {
     {"Profile deleted.", "Profil supprimé.", "Perfil eliminado."},
     {"Profile already exists.", "Ce profil existe déjà.", "El perfil ya existe."},
     {"Cannot delete the last profile.", "Impossible de supprimer le dernier profil.", "No se puede eliminar el último perfil."},
+    {"Nation", "Nation", "Nación"},
+    {"Russian", "Russe", "Ruso"},
+    {"German", "Allemand", "Alemán"},
+    {"British", "Britannique", "Británico"},
+    {"US", "Américain", "Estadounidense"},
+    {"Japanese", "Japonais", "Japonés"},
+    {"Surrender", "Capituler", "Rendirse"},
+    {"Peer surrendered.", "Le pair a capitulé.", "El rival se ha rendido."},
+    {"You surrendered.", "Vous avez capitulé.", "Te has rendido."},
+    {"Zeppelin captured!", "Zeppelin capturé !", "¡Zepelín capturado!"},
+    {"Enemy captured a Zeppelin!", "L'ennemi a capturé un Zeppelin !", "¡El enemigo ha capturado un zepelín!"},
+    {"Multiplayer Victory!", "Victoire multijoueur !", "¡Victoria multijugador!"},
+    {"Multiplayer Defeat.", "Défaite multijoueur.", "Derrota multijugador."},
+    {"Ping: {0} ms", "Ping : {0} ms", "Ping: {0} ms"},
+    {"Chat: {0}", "Tchat : {0}", "Chat: {0}"},
+    {"Multiplayer match ended.", "Partie multijoueur terminée.", "Partida multijugador terminada."},
+    {"Say ({0}): {1}", "Dire ({0}) : {1}", "Decir ({0}): {1}"},
 };
 
 std::atomic<Language> current{Language::english};

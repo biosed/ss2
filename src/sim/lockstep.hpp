@@ -18,7 +18,7 @@ namespace ss2 {
 class MissionRunner;
 
 inline constexpr std::array<char, 8> kLockstepMagic{'S', 'S', '2', 'N', 'E', 'T', '1', '\0'};
-inline constexpr std::uint32_t kLockstepProtocolVersion = 1u;
+inline constexpr std::uint32_t kLockstepProtocolVersion = 2u;
 inline constexpr std::uint32_t kDefaultTurnTicks = 2u;
 inline constexpr std::uint32_t kDefaultInputDelayTurns = 2u;
 inline constexpr std::uint32_t kDefaultHashIntervalTurns = 5u;
@@ -28,6 +28,7 @@ struct HelloPacket {
     std::uint32_t protocolVersion{kLockstepProtocolVersion};
     std::uint8_t preferredSeat{1};
     std::string playerName;
+    std::uint8_t nation{0};
 };
 
 struct MatchSetupPacket {
@@ -40,6 +41,8 @@ struct MatchSetupPacket {
     std::string missionSpec;
     std::array<int, 4> playerTeams{0, 1, 2, 3};
     bool autoEngage{true};
+    std::array<std::uint8_t, 4> playerNations{1, 0, 2, 3};
+    std::array<std::string, 4> playerNames{"Player 1", "Player 2", "", ""};
 };
 
 struct TurnBundlePacket {
@@ -61,7 +64,24 @@ struct ByePacket {
     std::string reason;
 };
 
-using LockstepPacket = std::variant<HelloPacket, MatchSetupPacket, TurnBundlePacket, DesyncPacket, ByePacket>;
+struct ChatPacket {
+    std::uint8_t seat{0};
+    std::string sender;
+    std::string text;
+};
+
+struct PingPacket {
+    std::uint32_t seq{0};
+    std::uint64_t sentTimeMs{0};
+};
+
+struct PongPacket {
+    std::uint32_t seq{0};
+    std::uint64_t echoedTimeMs{0};
+};
+
+using LockstepPacket = std::variant<
+    HelloPacket, MatchSetupPacket, TurnBundlePacket, DesyncPacket, ByePacket, ChatPacket, PingPacket, PongPacket>;
 
 enum class LockstepDecodeStatus {
     Ok,

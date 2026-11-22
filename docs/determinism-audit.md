@@ -32,6 +32,7 @@ Tested after hardening and lockstep integration across four compiler/libc/ISA ta
 Observed bit-identical outputs on all four targets (and active FMA probe separation):
 - `combat_parity_test`: `combat_parity: PASS (120 ticks x 13 fields, 21 events, final_rng=0xe06870c1, 550 regression rows)`
 - `sim_determinism_test`: `SIM_DETERMINISM_HASHES t0=0x30877be0aac2d46d t125=0x68bbbf2d7f830c31 t250=0x890bb188bb2b3a64`
-- `lockstep_test` (250-tick twin-runner multi-seat determinism + live loopback TCP): `LOCKSTEP_DETERMINISM_HASH 0x1fe7fdf2e5192380 verifiedTick=246`
+- `lockstep_test` (250-tick twin-runner multi-seat determinism + live loopback TCP): `LOCKSTEP_DETERMINISM_HASH 0xdb1c5caa1787fcc7 verifiedTick=246` (updated from `0x1fe7fdf2e5192380` after fixing `TutorialUnits::formationTargets()` / `canMove()` to use `effectiveQueryOwner()` so Seat `>= 1` infantry orders execute instead of being dropped)
+- `lockstep_test` (skirmish `OP(52/53/54/56)` nation waves, Zeppelin capture/contest, anti-forged `cmd::Resign`): `LOCKSTEP_SKIRMISH_HASH 0x653b9a007be75c29`
 - x86-64-v3 FMA negative-control probe: `0x6610475e5345ba17` strict (`-ffp-contract=off` on ARM64 GCC and x86-64-v3) vs `0x5c3022d25bc09199` contracted (`-ffp-contract=fast` on x86-64-v3)
 - Full Tutorial I P[7] route replay (`gold_tutorial_replay`): `10 dialogs, 12 commands, 3862 ticks, stateHash 0x1627b0e8d45be6ea PASSED`

@@ -95,7 +95,7 @@ bool TutorialUnits::isElevatedMapPoint(int mapX, int mapY) const {
 bool TutorialUnits::canMove(size_t index, int x, int y) const {
     if (!mapBounds(x,y) || index >= soldiers_.size()) return false;
     const auto& soldier = soldiers_[index];
-    if (soldier.owner != actorOwner() || soldier.hp <= 0 || soldier.embarked || soldier.garrisonBuilding) return false;
+    if (soldier.owner != effectiveQueryOwner() || soldier.hp <= 0 || soldier.embarked || soldier.garrisonBuilding) return false;
     const auto dest = pointerCell(x,y,originX_);
     if (!grid_.inBounds(dest)) return false;
     return (soldier.goal && sameTile(dest, *soldier.goal)) || grid_.hasTerrainRoute(soldier.cell,dest);
@@ -164,8 +164,9 @@ std::vector<TutorialUnits::Destination> TutorialUnits::formationTargets(
         return {};
     std::vector<SubCell> sources;
     sources.reserve(ids.size());
+    const int owner = effectiveQueryOwner();
     for (size_t id : ids) {
-        if (id >= soldiers_.size() || soldiers_[id].owner != 0 || soldiers_[id].hp <= 0 ||
+        if (id >= soldiers_.size() || soldiers_[id].owner != owner || soldiers_[id].hp <= 0 ||
             soldiers_[id].embarked || soldiers_[id].garrisonBuilding) return {};
         sources.push_back(soldiers_[id].cell);
     }
@@ -1501,6 +1502,23 @@ unsigned TutorialUnits::countByPlayerMask(int owner, unsigned mask) const {
         total += countReserveByPlayer(owner);
     }
     return total;
+}
+
+void TutorialUnits::collectUnitTilePositions(std::vector<std::tuple<int, int, int>>& out) const {
+    out.clear();
+    out.reserve(soldiers_.size() + vehicles_.size());
+    for (const auto& s : soldiers_) {
+        if (s.hp <= 0 || s.embarked) continue;
+        SubCell c = s.cell;
+        if (s.garrisonBuilding && *s.garrisonBuilding < buildings_.size()) {
+            c = buildings_[*s.garrisonBuilding].entryCell;
+        }
+        out.emplace_back(s.owner, c.x / 2, c.y / 2);
+    }
+    for (const auto& v : vehicles_) {
+        if (!v.alive || v.hp <= 0 || (!v.hasCrew && v.passengers.empty())) continue;
+        out.emplace_back(v.owner, v.cell.x / 2, v.cell.y / 2);
+    }
 }
 
 std::pair<int, int> TutorialUnits::soldierWorld(const Soldier& s) const {

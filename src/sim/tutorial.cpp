@@ -398,6 +398,33 @@ void Tutorial::evaluate(unsigned script, const MissionQueries& queries) {
             break;
         }
         case 51: stack.push_back(1); active_[script] = false; break;
+        case 52: {
+            const auto delaySec = pop();
+            const auto wJp = pop(), wUs = pop(), wGb = pop(), wDe = pop(), wRu = pop();
+            events_.push_back({MissionEvent::MultiplayerWave, 0u, packMpFourWaves(wRu, wDe, wGb, wUs), 0u, wJp & 0xffu, delaySec});
+            break;
+        }
+        case 53: {
+            const auto periodSec = pop();
+            const auto wJp = pop(), wUs = pop(), wGb = pop(), wDe = pop(), wRu = pop();
+            const auto zepMask = pop();
+            events_.push_back({MissionEvent::MultiplayerZeppelinWave, zepMask, packMpFourWaves(wRu, wDe, wGb, wUs), 0u, wJp & 0xffu, periodSec});
+            break;
+        }
+        case 54: {
+            const auto airSlot = pop(), count = pop(), zepMask = pop();
+            events_.push_back({MissionEvent::MultiplayerZeppelinPlanes, zepMask, 0u, airSlot, count, 0u});
+            break;
+        }
+        case 55: {
+            (void)pop(); (void)pop();
+            break;
+        }
+        case 56: {
+            const auto airSlot = pop(), count = pop(), zepMask = pop();
+            events_.push_back({MissionEvent::MultiplayerZeppelinSorties, zepMask, 0u, airSlot, count, 0u});
+            break;
+        }
         case 76: {
             const auto periodSec = pop(), id = pop();
             if (id < timerPeriods_.size()) timerPeriods_[id] = periodSec * 25u;

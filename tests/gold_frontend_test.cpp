@@ -155,6 +155,9 @@ void testFallbackInteraction() {
     }
     fe.handleMouseDown(600.0, 153.0, 1);  // commit port and toggle back to Host Match
     check(fe.state().mpIsHost() && fe.state().mpPort() == 28000u, "edited Port committed in Multiplayer screen");
+    check(fe.state().mpNation() == 1u, "Gold Multiplayer defaults to German (1)");
+    fe.handleMouseDown(688.0, 284.0, 1);  // mp_nation [608,268,160,32]
+    check(fe.state().mpNation() == 2u, "clicked mp_nation cycles nation");
     fe.setMultiplayerMissions(makeSyntheticMissions(5));
     fe.handleMouseDown(120.0, 168.0, 1);  // row 1
     check(fe.state().selectedMultiplayerMission() == 1, "clicked MP map row 1");

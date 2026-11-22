@@ -88,7 +88,8 @@ public:
     bool startJoin(const std::string& host,
                    std::uint16_t port,
                    std::string playerName = "Player 2",
-                   std::uint64_t expectedMapHash = 0);
+                   std::uint64_t expectedMapHash = 0,
+                   std::uint8_t nation = 0);
 
     State poll();
     void cancel();
@@ -109,6 +110,7 @@ private:
     MatchSetupPacket setup_{};
     std::string playerName_{"Player 2"};
     std::uint64_t expectedMapHash_{0};
+    std::uint8_t nation_{0};
     bool helloSent_{false};
     std::string statusText_;
     std::string errorText_;

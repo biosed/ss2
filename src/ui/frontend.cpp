@@ -522,6 +522,8 @@ void FrontEnd::activate(const std::string& id) {
         case Screen::Multiplayer:
             if (id == "mp_mode") {
                 toggleMpMode();
+            } else if (id == "mp_nation") {
+                cycleMpNation(1);
             } else if (id == "mp_start") {
                 if (mpIsHost_ && mpMissions_.empty()) {
                     notice_ = tr("No multiplayer maps installed.");
@@ -632,6 +634,7 @@ std::string FrontEnd::shortcutId(char letter) const {
             break;
         case Screen::Multiplayer:
             if (c == 'm') return "mp_mode";
+            if (c == 'n') return "mp_nation";
             if (c == 's') return "mp_start";
             break;
         case Screen::CustomCampaigns:

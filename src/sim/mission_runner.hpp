@@ -2,6 +2,7 @@
 #include "sim/command.hpp"
 #include "sim/tutorial.hpp"
 #include "sim/tutorial_units.hpp"
+#include <array>
 #include <atomic>
 #include <condition_variable>
 #include <exception>
@@ -14,6 +15,25 @@
 #include <vector>
 
 namespace ss2 {
+struct MultiplayerSkirmishConfig {
+    int playerCount{2};
+    std::array<std::uint8_t, 4> playerNations{1, 0, 2, 3};
+    std::array<int, 4> playerTeams{0, 1, 2, 3};
+    std::uint32_t captureHoldTicks{375u};
+    std::uint32_t initialWaitTicks{0u};
+    int captureRadiusTiles{4};
+};
+
+struct ZeppelinMarkerStatus {
+    std::uint8_t index{0};
+    int x{0};
+    int y{0};
+    int holderTeam{-1};
+    bool contested{false};
+    float captureProgress{0.0f};
+    int capturingTeam{-1};
+};
+
 // The mission worker owns script execution. Only presentation events and input
 // cross between this clock and SDL's main thread.
 //
@@ -129,6 +149,11 @@ public:
     void acknowledge();
     bool togglePause();
     bool isPaused() const;
+    void configureMultiplayerSkirmish(const MultiplayerSkirmishConfig& cfg);
+    void resign(std::uint8_t seat);
+    std::vector<ZeppelinMarkerStatus> zeppelinStatuses() const;
+    int assignedGateForSeat(int seat) const;
+    bool mpSkirmishConfigured() const;
     void setViewerOwner(int owner);
     int viewerOwner() const;
     void setMultiplayerSymmetry(bool enabled);
@@ -166,6 +191,9 @@ private:
     };
     void collect();
     void flushScheduledReinforcements();
+    void handleMpScriptEventLocked(const MissionEvent& e);
+    void stepMpSkirmishLocked();
+    void evaluateMpVictoryLocked();
     void mergeSoldierPoses(std::span<const SoldierPose> incoming);
     void collectVehiclePoses();
     void collectBuildingUpdates();
@@ -238,6 +266,36 @@ private:
     cmd::LoadSnapshot::Result applyLocked(const cmd::LoadSnapshot&);
     cmd::Acknowledge::Result applyLocked(const cmd::Acknowledge&);
     cmd::TogglePause::Result applyLocked(const cmd::TogglePause&);
+    cmd::Resign::Result applyLocked(const cmd::Resign&);
+    struct MpZeppelinWave {
+        std::uint32_t packed4{0};
+        std::uint32_t jpWave{0};
+        std::uint32_t periodSec{0};
+        std::array<std::uint32_t, 4> nextRepeatTick{};
+    };
+    struct MpZeppelinAirGrant {
+        unsigned slot{0};
+        unsigned count{0};
+    };
+    struct MpZeppelinGroup {
+        std::uint32_t mask{0};
+        std::array<std::uint32_t, 4> holdTicks{};
+        std::uint8_t airGrantedTeamsMask{0};
+        std::vector<MpZeppelinWave> waves;
+        std::vector<MpZeppelinAirGrant> airPlanes;
+        std::vector<MpZeppelinAirGrant> airSorties;
+    };
+    struct MpSkirmishState {
+        MultiplayerSkirmishConfig config{};
+        std::array<unsigned, 4> assignedGates{};
+        std::uint8_t resignedSeatsMask{0};
+        std::uint8_t defeatedTeamsMask{0};
+        int matchOutcomeTeam{-1};
+        std::array<std::uint32_t, 4> teamPresentMask{};
+        std::array<int, 32> zeppelinHolder{-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1};
+        std::array<bool, 32> zeppelinContested{};
+        std::vector<MpZeppelinGroup> groups;
+    };
     TutorialUnits units_;
     std::array<bool, 64> spawnedReinforcementWaves_{};
     std::array<int, 64> reinforcementWaveOwner_{};
@@ -262,6 +320,8 @@ private:
     std::function<void(cmd::Command)> commandSink_;
     std::vector<assets::Placement> pendingCrewSpawns_;
     bool inLockstepApply_{false};
+    std::vector<MissionEvent> deferredMpScriptEvents_;
+    std::optional<MpSkirmishState> mpSkirmish_;
     std::jthread worker_;
 };
 }

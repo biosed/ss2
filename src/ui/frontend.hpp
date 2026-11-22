@@ -132,6 +132,12 @@ public:
     void setMpHostAddress(std::string addr) { mpHostAddress_ = std::move(addr); }
     std::uint16_t mpPort() const { return mpPort_; }
     void setMpPort(std::uint16_t port) { if (port > 0) mpPort_ = port; }
+    std::uint8_t mpNation() const { return mpNation_; }
+    void setMpNation(std::uint8_t nation) { if (nation <= 4u) mpNation_ = nation; }
+    void cycleMpNation(int delta = 1) {
+        const int next = (static_cast<int>(mpNation_) + delta % 5 + 5) % 5;
+        mpNation_ = static_cast<std::uint8_t>(next);
+    }
     const std::string& mpStatusText() const { return mpStatusText_; }
     void setMpStatusText(std::string text) { mpStatusText_ = std::move(text); }
 
@@ -164,6 +170,7 @@ private:
     bool mpIsHost_ = true;
     std::string mpHostAddress_ = "127.0.0.1";
     std::uint16_t mpPort_ = 27015;
+    std::uint8_t mpNation_ = 1;
     std::string mpStatusText_;
     int difficulty_ = 2;
     RatingsMode ratingsMode_ = RatingsMode::Campaigns;

@@ -36,8 +36,17 @@ void GameSession::updateHudAndBeams() {
                                  ":" + (remS < 10u ? std::string("0") : std::string{}) + std::to_string(remS);
             if (paused) {
                 prefix += " PAUSED";
-            } else if (const int sp = simulation->speedPercent(); sp != 100) {
-                prefix += (sp == 50 ? " 0.5x" : sp == 200 ? " 2x" : sp == 300 ? " 3x" : " 1x");
+            } else if (!multiplayer.enabled) {
+                if (const int sp = simulation->speedPercent(); sp != 100) {
+                    prefix += (sp == 50 ? " 0.5x" : sp == 200 ? " 2x" : sp == 300 ? " 3x" : " 1x");
+                }
+            }
+            if (multiplayer.enabled) {
+                prefix += " | ";
+                prefix += ss2::tr(mpNationName(multiplayer.playerNations[localOwner() & 3]));
+                if (mpRttMs >= 0) {
+                    prefix += " | " + std::to_string(mpRttMs) + "ms";
+                }
             }
             prefix += "] ";
             hs.objective = prefix + ss2::tr(currentObjective);
@@ -250,6 +259,21 @@ void GameSession::updateHudAndBeams() {
                 std::clamp(static_cast<float>(b.hp) / static_cast<float>(std::max(1, b.maxHp)), 0.0f, 1.0f)
             });
         }
+        std::vector<ss2::ZeppelinMarkerStatus> mpZeppelins;
+        if (multiplayer.enabled && simulation) {
+            mpZeppelins = simulation->zeppelinStatuses();
+            const int myTeam = (localOwner() >= 0 && localOwner() < 4) ? missionPlayerTeams[localOwner()] : 0;
+            for (const auto& z : mpZeppelins) {
+                const float du = std::round(std::clamp(static_cast<float>(z.x) * invW, 0.0f, 1.0f) * 256.0f) / 256.0f;
+                const float dv = std::round(std::clamp(static_cast<float>(z.y) * invH, 0.0f, 1.0f) * 128.0f) / 128.0f;
+                const bool heldByMe = (z.holderTeam >= 0 && z.holderTeam == myTeam);
+                const bool heldByEnemy = (z.holderTeam >= 0 && z.holderTeam != myTeam);
+                hs.dots.push_back({du, dv, heldByEnemy, false, !heldByMe && !heldByEnemy});
+                if (z.captureProgress > 0.0f && z.capturingTeam >= 0) {
+                    hs.pings.push_back({du, dv, z.capturingTeam != myTeam, z.captureProgress});
+                }
+            }
+        }
         bool barsChanged = unitBars.size() != lastUnitBars.size();
         if (!barsChanged) {
             for (std::size_t i = 0; i < unitBars.size(); ++i) {
@@ -445,10 +469,12 @@ void GameSession::updateHudAndBeams() {
             }
         }
     }
+    const std::vector<ss2::ZeppelinMarkerStatus> beamZeppelins =
+        (multiplayer.enabled && simulation) ? simulation->zeppelinStatuses() : std::vector<ss2::ZeppelinMarkerStatus>{};
     if (!activeVfx.empty() || !burningWrecks.empty() || !crippledSmokeVehicles.empty() ||
         !movingSmokeVehicles.empty() || !livePlanes.empty() || !orderLines.empty() ||
         previewRing || facePreview || !rangePreviews.empty() || !visibleOnScreenMines.empty() ||
-        !statusBadges.empty() || vfxWasNonEmpty) {
+        !statusBadges.empty() || !beamZeppelins.empty() || vfxWasNonEmpty) {
         const auto now = std::chrono::steady_clock::now();
         std::erase_if(activeVfx, [&](const ActiveVfx& v) { return now - v.start >= v.duration; });
         std::erase_if(burningWrecks, [&](const BurningWreck& w) { return now >= w.until; });
@@ -487,6 +513,33 @@ void GameSession::updateHudAndBeams() {
                 beams.push_back({mx - 5.0f * s, my, mx + 5.0f * s, my, 2.0f * s, 235, 92, 68, 0.85f, 0.85f});
             } else {
                 beams.push_back({mx, my, mx, my, (vm.antiTank ? 7.0f : 5.5f) * s, 105, 212, 235, 0.78f, 0.78f});
+            }
+        }
+        {
+            const int myTeam = (localOwner() >= 0 && localOwner() < 4) ? missionPlayerTeams[localOwner()] : 0;
+            for (const auto& z : beamZeppelins) {
+                if (beams.size() >= 112u) break;
+                const float zx = static_cast<float>(z.x) * s;
+                const float zy = static_cast<float>(z.y) * s;
+                const bool heldByMe = (z.holderTeam >= 0 && z.holderTeam == myTeam);
+                const bool heldByEnemy = (z.holderTeam >= 0 && z.holderTeam != myTeam);
+                const std::uint8_t zr = heldByEnemy ? 235 : (heldByMe ? 110 : 244);
+                const std::uint8_t zg = heldByEnemy ? 92  : (heldByMe ? 224 : 186);
+                const std::uint8_t zb = heldByEnemy ? 68  : (heldByMe ? 120 : 78);
+                pushIsoEllipse(zx, zy, 128.0f, 16, 1.8f * s, zr, zg, zb, 0.45f);
+                beams.push_back({zx, zy, zx, zy - 26.0f * s, 2.2f * s, zr, zg, zb, 0.90f, 0.90f});
+                beams.push_back({zx, zy - 26.0f * s, zx + 12.0f * s, zy - 22.0f * s,
+                                 3.5f * s, zr, zg, zb, 0.92f, 0.92f});
+                if (z.captureProgress > 0.0f && z.capturingTeam >= 0) {
+                    const bool capMine = (z.capturingTeam == myTeam);
+                    const std::uint8_t cr = capMine ? 110 : 235;
+                    const std::uint8_t cg = capMine ? 224 : 92;
+                    const std::uint8_t cb = capMine ? 120 : 68;
+                    const float fillW = 28.0f * s * std::clamp(z.captureProgress, 0.0f, 1.0f);
+                    beams.push_back({zx - 14.0f * s, zy - 32.0f * s,
+                                     zx - 14.0f * s + fillW, zy - 32.0f * s,
+                                     3.0f * s, cr, cg, cb, 0.95f, 0.95f});
+                }
             }
         }
         for (const auto& ol : orderLines) {

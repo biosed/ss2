@@ -11,7 +11,8 @@ namespace ss2 {
 struct MissionEvent {
     enum Kind {
         Dialog, Message, Camera, Marker, Victory, Defeat, Reinforcement, GroupOrder, FogReveal, PlayerTeam,
-        AirSupportAddPlanes, AirSupportAddSorties, AirStrike, GroupTransferOwner, GroupReassignInZone, GroupBombard
+        AirSupportAddPlanes, AirSupportAddSorties, AirStrike, GroupTransferOwner, GroupReassignInZone, GroupBombard,
+        MultiplayerWave, MultiplayerZeppelinWave, MultiplayerZeppelinPlanes, MultiplayerZeppelinSorties
     } kind;
     unsigned index{0};
     unsigned owner{0}, gate{0}, destZone{0}, delaySec{0};
@@ -65,4 +66,14 @@ private:
     void evaluate(unsigned script, const MissionQueries& queries);
 };
 unsigned tutorialTurnDelay(const std::filesystem::path& gameDir);
+
+// Packs Russian/German/British/US (low 4 bytes of `packed4`) + Japanese (`jp`) wave indices for OP(52)/OP(53).
+constexpr std::uint32_t packMpFourWaves(unsigned ru, unsigned de, unsigned gb, unsigned us) noexcept {
+    return (ru & 0xffu) | ((de & 0xffu) << 8) | ((gb & 0xffu) << 16) | ((us & 0xffu) << 24);
+}
+constexpr unsigned unpackMpNationWave(std::uint32_t packed4, std::uint32_t jpWave, unsigned nation) noexcept {
+    if (nation < 4u) return (packed4 >> (nation * 8u)) & 0xffu;
+    if (nation == 4u) return jpWave & 0xffu;
+    return 0xffu;
+}
 }

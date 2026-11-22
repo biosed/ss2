@@ -47,6 +47,37 @@ void GameSession::stepSimulationEvents() {
                             lockstepPeerDisconnected = true;
                             showNotice(ss2::tr("Peer disconnected."), ss2::NoticeKind::blocked);
                         }
+                    } else if (const auto* chat = std::get_if<ss2::ChatPacket>(&pkt)) {
+                        const std::string sender = !chat->sender.empty()
+                            ? chat->sender
+                            : (chat->seat < 4u && !multiplayer.playerNames[chat->seat].empty()
+                                ? multiplayer.playerNames[chat->seat]
+                                : ("Seat " + std::to_string(chat->seat + 1)));
+                        const std::string line = sender + ": " + chat->text;
+                        logHud(line);
+                        showNotice(ss2::trf("Chat: {0}", {line}), ss2::NoticeKind::accepted);
+                        if (audio) audio->playGroup("e_telegram", 0.55f);
+                    } else if (const auto* ping = std::get_if<ss2::PingPacket>(&pkt)) {
+                        (void)multiplayer.peer->sendPacket(ss2::PongPacket{ping->seq, ping->sentTimeMs});
+                    } else if (const auto* pong = std::get_if<ss2::PongPacket>(&pkt)) {
+                        const auto nowMs = static_cast<std::uint64_t>(
+                            std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now().time_since_epoch()).count());
+                        if (nowMs >= pong->echoedTimeMs) {
+                            mpRttMs = static_cast<int>(std::min<std::uint64_t>(nowMs - pong->echoedTimeMs, 9999u));
+                        }
+                    }
+                }
+                {
+                    const auto pingNow = std::chrono::steady_clock::now();
+                    if (multiplayer.peer->isConnected() &&
+                        (lastMpPingAt == std::chrono::steady_clock::time_point{} ||
+                         pingNow - lastMpPingAt >= std::chrono::seconds(2))) {
+                        lastMpPingAt = pingNow;
+                        const auto sentMs = static_cast<std::uint64_t>(
+                            std::chrono::duration_cast<std::chrono::milliseconds>(
+                                pingNow.time_since_epoch()).count());
+                        (void)multiplayer.peer->sendPacket(ss2::PingPacket{++mpPingSeq, sentMs});
                     }
                 }
                 for (const auto& outBundle : lockstep->produceOutboundBundles()) {
@@ -105,6 +136,27 @@ void GameSession::stepSimulationEvents() {
                 }
             }
             paused = simulation->isPaused();
+            if (multiplayer.enabled) {
+                const int myTeam = (localOwner() >= 0 && localOwner() < 4) ? missionPlayerTeams[localOwner()] : 0;
+                for (const auto& z : simulation->zeppelinStatuses()) {
+                    const std::size_t zi = z.index;
+                    if (zi >= lastZeppelinHolder.size()) continue;
+                    if (lastZeppelinHolder[zi] == -2) {
+                        lastZeppelinHolder[zi] = z.holderTeam;
+                        continue;
+                    }
+                    if (z.holderTeam != lastZeppelinHolder[zi]) {
+                        lastZeppelinHolder[zi] = z.holderTeam;
+                        if (z.holderTeam >= 0) {
+                            const bool mine = (z.holderTeam == myTeam);
+                            pushMinimapPing(z.x, z.y, !mine);
+                            if (audio) audio->playGroup(mine ? "accept" : "e_telegram", 0.65f);
+                            showNotice(ss2::tr(mine ? "Zeppelin captured!" : "Enemy captured a Zeppelin!"),
+                                       mine ? ss2::NoticeKind::accepted : ss2::NoticeKind::blocked);
+                        }
+                    }
+                }
+            }
         }
         bool markersDirty = false;
         bool spritesDirty = false;
@@ -941,20 +993,28 @@ void GameSession::stepSimulationEvents() {
                 selection->mark(x * mapScale, y * mapScale);
                 markerHint = true;
             } else if (event.kind == ss2::MissionEvent::Victory) {
-                std::cout << "Tutorial I victory (" << event.index << ")\n";
+                std::cout << (currentMissionTitle.empty() ? "Tutorial I" : currentMissionTitle)
+                          << " victory (" << event.index << ")\n";
                 if (audio) audio->playGroup("e_victory", 0.80f, ss2::VoicePriority::High);
-                currentObjective = "Mission Accomplished!";
+                currentObjective = ss2::tr(multiplayer.enabled ? "Multiplayer Victory!" : "Mission Accomplished!");
                 logHud(currentObjective);
-                SDL_SetWindowTitle(window, "Sudden Strike II | Tutorial I — Victory!");
-                orderNotice.show(ss2::tr("Mission Accomplished!"), ss2::NoticeKind::accepted, ss2::Notice::Duration::zero());
+                const std::string title = "Sudden Strike II | " +
+                    (currentMissionTitle.empty() ? std::string("Tutorial I") : currentMissionTitle) +
+                    " — Victory!";
+                SDL_SetWindowTitle(window, title.c_str());
+                orderNotice.show(currentObjective, ss2::NoticeKind::accepted, ss2::Notice::Duration::zero());
                 openDebriefMenu(true);
             } else if (event.kind == ss2::MissionEvent::Defeat) {
-                std::cout << "Mission defeat (" << event.index << ")\n";
+                std::cout << (currentMissionTitle.empty() ? "Mission" : currentMissionTitle)
+                          << " defeat (" << event.index << ")\n";
                 if (audio) audio->playGroup("e_defeat", 0.80f, ss2::VoicePriority::High);
-                currentObjective = "Mission Failed.";
+                currentObjective = ss2::tr(multiplayer.enabled ? "Multiplayer Defeat." : "Mission Failed.");
                 logHud(currentObjective);
-                SDL_SetWindowTitle(window, "Sudden Strike II — Defeat");
-                orderNotice.show(ss2::tr("Mission Failed."), ss2::NoticeKind::blocked, ss2::Notice::Duration::zero());
+                const std::string title = "Sudden Strike II | " +
+                    (currentMissionTitle.empty() ? std::string("Mission") : currentMissionTitle) +
+                    " — Defeat";
+                SDL_SetWindowTitle(window, title.c_str());
+                orderNotice.show(currentObjective, ss2::NoticeKind::blocked, ss2::Notice::Duration::zero());
                 openDebriefMenu(false);
             } else if (event.kind == ss2::MissionEvent::Reinforcement) {
                 if (!replayFile) {
