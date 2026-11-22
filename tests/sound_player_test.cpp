@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -20,6 +21,12 @@ void putU32(std::vector<std::uint8_t>& out, std::uint32_t v) {
 void putU16(std::vector<std::uint8_t>& out, std::uint16_t v) {
     out.push_back(static_cast<std::uint8_t>(v & 0xFFu));
     out.push_back(static_cast<std::uint8_t>((v >> 8u) & 0xFFu));
+}
+
+std::int16_t readS16(const std::vector<std::uint8_t>& pcm, std::size_t byteOffset) {
+    const std::uint16_t u = static_cast<std::uint16_t>(
+        pcm[byteOffset] | (static_cast<std::uint16_t>(pcm[byteOffset + 1]) << 8u));
+    return static_cast<std::int16_t>(u);
 }
 
 // Builds a RIFF/WAVE file with 16- or 24-bit PCM samples.
@@ -139,6 +146,78 @@ int main() {
         slots[2].started = 5;
         if (ss2::chooseVoice(slots, VoicePriority::Normal) != 1)
             throw std::runtime_error("the oldest voice of equal priority must be stolen");
+    }
+
+    // --- non-repeating multi-variant cycling -----------------------------
+    {
+        ss2::VariantSelector selector;
+        for (int i = 0; i < 8; ++i) {
+            if (selector.next("accept", 0) != 0u || selector.next("accept", 1) != 0u)
+                throw std::runtime_error("single-variant group must always pick index 0");
+        }
+        for (std::size_t count : {std::size_t{2}, std::size_t{3}, std::size_t{5}, std::size_t{6}}) {
+            const std::string group = "d_select_" + std::to_string(count);
+            std::size_t prev = count;
+            for (int bag = 0; bag < 6; ++bag) {
+                std::set<std::size_t> seenInBag;
+                for (std::size_t step = 0; step < count; ++step) {
+                    // Interleave unrelated SFX calls to verify per-group isolation.
+                    (void)selector.next("rifle", 3);
+                    const std::size_t pick = selector.next(group, count);
+                    if (pick >= count)
+                        throw std::runtime_error("VariantSelector returned out-of-range variant");
+                    if (pick == prev)
+                        throw std::runtime_error("VariantSelector repeated same take back-to-back");
+                    seenInBag.insert(pick);
+                    prev = pick;
+                }
+                if (seenInBag.size() != count)
+                    throw std::runtime_error("VariantSelector failed to cover all takes in cycle");
+            }
+        }
+    }
+
+    // --- stereo pan clamping & S16 mixing --------------------------------
+    {
+        if (ss2::clampPan(-3.0f) != -1.0f || ss2::clampPan(2.5f) != 1.0f || ss2::clampPan(0.0f) != 0.0f)
+            throw std::runtime_error("clampPan must clamp to [-1.0, +1.0]");
+        const auto [cL, cR] = ss2::stereoPanGains(0.0f);
+        if (std::abs(cL - 1.0f) > 1e-5f || std::abs(cR - 1.0f) > 1e-5f)
+            throw std::runtime_error("center pan must yield unity stereo gains");
+        const auto [hL, hLRight] = ss2::stereoPanGains(-4.0f);
+        if (std::abs(hL - 1.0f) > 1e-5f || std::abs(hLRight - 0.0f) > 1e-5f)
+            throw std::runtime_error("hard-left clamped pan must silence right channel");
+        const auto [hRLeft, hR] = ss2::stereoPanGains(4.0f);
+        if (std::abs(hRLeft - 0.0f) > 1e-5f || std::abs(hR - 1.0f) > 1e-5f)
+            throw std::runtime_error("hard-right clamped pan must silence left channel");
+
+        if (ss2::viewportStereoPan(0.0, 640.0) != 0.0f)
+            throw std::runtime_error("centered world sound must have zero pan");
+        const float leftEdge = ss2::viewportStereoPan(-640.0, 640.0);
+        const float rightEdge = ss2::viewportStereoPan(640.0, 640.0);
+        if (std::abs(leftEdge + 0.45f) > 1e-4f || std::abs(rightEdge - 0.45f) > 1e-4f)
+            throw std::runtime_error("viewport edge pan must be symmetric +/-0.45");
+        if (std::abs(ss2::viewportStereoPan(-5000.0, 640.0, 0.65f) + 0.65f) > 1e-4f ||
+            std::abs(ss2::viewportStereoPan(5000.0, 640.0, 0.65f) - 0.65f) > 1e-4f)
+            throw std::runtime_error("off-screen viewportStereoPan must clamp to maxPan");
+
+        // Mono S16 sample (+10000, -10000) panned +0.5 -> L=5000, R=10000; -5000, -10000.
+        std::vector<std::uint8_t> monoSrc;
+        putU16(monoSrc, static_cast<std::uint16_t>(std::int16_t{10000}));
+        putU16(monoSrc, static_cast<std::uint16_t>(std::int16_t{-10000}));
+        std::vector<std::uint8_t> stereoOut;
+        ss2::applyStereoPanS16(monoSrc, 1, 0.5f, stereoOut);
+        if (stereoOut.size() != 8u)
+            throw std::runtime_error("applyStereoPanS16 mono->stereo frame byte count mismatch");
+        if (readS16(stereoOut, 0) != 5000 || readS16(stereoOut, 2) != 10000 ||
+            readS16(stereoOut, 4) != -5000 || readS16(stereoOut, 6) != -10000) {
+            throw std::runtime_error("applyStereoPanS16 +0.5 right-pan sample mismatch");
+        }
+        ss2::applyStereoPanS16(monoSrc, 1, -1.5f, stereoOut);
+        if (readS16(stereoOut, 0) != 10000 || readS16(stereoOut, 2) != 0 ||
+            readS16(stereoOut, 4) != -10000 || readS16(stereoOut, 6) != 0) {
+            throw std::runtime_error("applyStereoPanS16 clamped hard-left sample mismatch");
+        }
     }
 
     // --- Ogg container magic ---------------------------------------------

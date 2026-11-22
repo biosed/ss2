@@ -2,6 +2,7 @@
 #include "assets/sound_bank.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -9,7 +10,11 @@
 #include <fstream>
 #include <map>
 #include <memory>
+#include <span>
 #include <string>
+#include <string_view>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace ss2 {
@@ -61,7 +66,87 @@ inline std::uint32_t readU32(const std::uint8_t* p) {
            (static_cast<std::uint32_t>(p[3]) << 24u);
 }
 
+inline std::string lowerAscii(std::string_view text) {
+    std::string out;
+    out.reserve(text.size());
+    for (unsigned char c : text) {
+        if (c == 0) break;
+        out.push_back(static_cast<char>(std::tolower(c)));
+    }
+    return out;
+}
+
+inline std::uint32_t hashGroupSeed(std::string_view key) {
+    std::uint32_t h = 2166136261u;
+    for (unsigned char c : key) {
+        h ^= static_cast<std::uint32_t>(std::tolower(c));
+        h *= 16777619u;
+    }
+    return h ? h : 0x9E3779B9u;
+}
+
+inline std::uint32_t xorshift32(std::uint32_t& state) {
+    if (state == 0u) state = 0x9E3779B9u;
+    std::uint32_t x = state;
+    x ^= x << 13u;
+    x ^= x >> 17u;
+    x ^= x << 5u;
+    state = x;
+    return x;
+}
+
 } // namespace audio_detail
+
+// Per-group non-repeating shuffle-bag selector across `0 .. count - 1`.
+// Visits every take in a group once per bag and guarantees no immediate back-to-back
+// repeat across bag boundaries when `count >= 2`, while keeping each sound group's
+// progression isolated from unrelated SFX activity.
+class VariantSelector {
+public:
+    std::size_t next(std::string_view group, std::size_t count) {
+        if (count <= 1u) return 0u;
+        const std::string key = audio_detail::lowerAscii(group);
+        auto [it, inserted] = states_.try_emplace(key);
+        auto& st = it->second;
+        if (inserted) {
+            st.rng = audio_detail::hashGroupSeed(key);
+        }
+        if (st.bag.size() != count || st.cursor >= count) {
+            refillBag(st, count);
+        }
+        const std::size_t chosen = st.bag[st.cursor++];
+        st.lastPicked = chosen;
+        st.hasLast = true;
+        return chosen;
+    }
+
+    void reset() { states_.clear(); }
+
+private:
+    struct GroupState {
+        std::vector<std::size_t> bag;
+        std::size_t cursor{0};
+        std::size_t lastPicked{0};
+        bool hasLast{false};
+        std::uint32_t rng{0x9E3779B9u};
+    };
+
+    static void refillBag(GroupState& st, std::size_t count) {
+        st.bag.resize(count);
+        for (std::size_t i = 0; i < count; ++i) st.bag[i] = i;
+        for (std::size_t i = count - 1; i > 0; --i) {
+            const std::size_t j = audio_detail::xorshift32(st.rng) % (i + 1u);
+            std::swap(st.bag[i], st.bag[j]);
+        }
+        if (st.hasLast && count >= 2u && st.bag[0] == st.lastPicked) {
+            const std::size_t swapIdx = 1u + (audio_detail::xorshift32(st.rng) % (count - 1u));
+            std::swap(st.bag[0], st.bag[swapIdx]);
+        }
+        st.cursor = 0;
+    }
+
+    std::unordered_map<std::string, GroupState> states_;
+};
 
 // True when the file starts with the OggS container magic, whatever its
 // extension is. Retail MUSIC ships one track as "_Track11.og_", so matching
@@ -135,6 +220,67 @@ inline float clampVolume(float volume) {
     return std::clamp(volume, 0.0f, 1.0f);
 }
 
+inline float clampPan(float pan) {
+    if (!std::isfinite(pan)) return 0.0f;
+    return std::clamp(pan, -1.0f, 1.0f);
+}
+
+struct StereoGains {
+    float left{1.0f};
+    float right{1.0f};
+};
+
+// Stereo left/right balance gains from normalized pan in [-1.0, +1.0].
+// Center (0.0) yields (1.0, 1.0) so unpanned cues keep exact unity level without clipping;
+// panning attenuates the opposite channel linearly toward 0.0 at full hard-pan.
+inline StereoGains stereoPanGains(float pan) {
+    const float p = clampPan(pan);
+    const float left = std::clamp(1.0f - std::max(0.0f, p), 0.0f, 1.0f);
+    const float right = std::clamp(1.0f + std::min(0.0f, p), 0.0f, 1.0f);
+    return {left, right};
+}
+
+// Subtle horizontal stereo pan derived from world offset `dx` relative to `viewportHalfWidth`.
+// Viewport edges map to +/-0.45 and off-screen cues clamp cleanly to +/-maxPan.
+inline float viewportStereoPan(double dx, double viewportHalfWidth, float maxPan = 0.65f) {
+    const float cap = clampVolume(maxPan);
+    if (viewportHalfWidth <= 1.0 || cap <= 0.0f) return 0.0f;
+    const double normX = dx / viewportHalfWidth;
+    return std::clamp(static_cast<float>(normX * 0.45), -cap, cap);
+}
+
+// Converts mono or stereo 16-bit little-endian PCM into stereo 16-bit little-endian PCM
+// with left/right balance applied from `pan` in [-1.0, +1.0].
+inline void applyStereoPanS16(std::span<const std::uint8_t> srcPcm, int srcChannels,
+                              float pan, std::vector<std::uint8_t>& dstStereoPcm) {
+    dstStereoPcm.clear();
+    if (srcChannels != 1 && srcChannels != 2) return;
+    const std::size_t frameBytes = static_cast<std::size_t>(srcChannels) * 2u;
+    const std::size_t frames = srcPcm.size() / frameBytes;
+    if (frames == 0u) return;
+
+    const auto [gainL, gainR] = stereoPanGains(pan);
+    dstStereoPcm.resize(frames * 4u);
+    for (std::size_t i = 0; i < frames; ++i) {
+        const std::uint8_t* frame = srcPcm.data() + i * frameBytes;
+        const auto sL = static_cast<std::int16_t>(audio_detail::readU16(frame));
+        const auto sR = (srcChannels == 2)
+                            ? static_cast<std::int16_t>(audio_detail::readU16(frame + 2))
+                            : sL;
+        const int outL = std::clamp(static_cast<int>(std::lround(static_cast<float>(sL) * gainL)),
+                                    -32768, 32767);
+        const int outR = std::clamp(static_cast<int>(std::lround(static_cast<float>(sR) * gainR)),
+                                    -32768, 32767);
+        const auto uL = static_cast<std::uint16_t>(static_cast<std::int16_t>(outL));
+        const auto uR = static_cast<std::uint16_t>(static_cast<std::int16_t>(outR));
+        std::uint8_t* dst = dstStereoPcm.data() + i * 4u;
+        dst[0] = static_cast<std::uint8_t>(uL & 0xFFu);
+        dst[1] = static_cast<std::uint8_t>((uL >> 8u) & 0xFFu);
+        dst[2] = static_cast<std::uint8_t>(uR & 0xFFu);
+        dst[3] = static_cast<std::uint8_t>((uR >> 8u) & 0xFFu);
+    }
+}
+
 inline float scaledSfxGain(float cueGain, float masterVolume) {
     const float master = clampVolume(masterVolume);
     if (master <= 0.001f) return 0.0f;
@@ -168,9 +314,11 @@ public:
     SoundPlayer& operator=(const SoundPlayer&) = delete;
 
     bool available() const { return device_ != 0; }
+    const assets::SoundBank& bank() const noexcept { return bank_; }
     void setHdAudioDir(const std::filesystem::path& dir);
     bool playGroup(const std::string& group, float gain = 0.65f,
-                   VoicePriority priority = VoicePriority::Normal);
+                   VoicePriority priority = VoicePriority::Normal,
+                   float pan = 0.0f);
     void setSfxVolume(float volume);
     float sfxVolume() const { return sfxVolume_; }
 
@@ -203,7 +351,9 @@ private:
     std::vector<Voice> voices_;
     std::size_t nextVoice_{0};
     std::uint64_t voiceSequence_{0};
-    std::uint32_t variantCounter_{0};
+    std::uint32_t pitchCounter_{0};
+    VariantSelector variantSelector_;
+    std::vector<std::uint8_t> pannedScratch_;
     std::map<std::string, std::vector<HdClip>> hdClips_;
     float sfxVolume_{1.0f};
     float musicGain_{0.28f};

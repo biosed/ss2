@@ -90,13 +90,13 @@ void SoundPlayer::setHdAudioDir(const std::filesystem::path& dir) {
     for (const auto& path : wavs) {
         const std::string stem = path.stem().string();
         // Naming convention: <group>_<variant>.wav (e.g., smg_burst_0.wav) or <group>.wav
-        std::string group = stem;
-        if (const auto us = stem.rfind('_'); us != std::string::npos && us + 1 < stem.size()) {
+        std::string group = audio_detail::lowerAscii(stem);
+        if (const auto us = group.rfind('_'); us != std::string::npos && us + 1 < group.size()) {
             bool allDigits = true;
-            for (std::size_t i = us + 1; i < stem.size(); ++i) {
-                if (stem[i] < '0' || stem[i] > '9') { allDigits = false; break; }
+            for (std::size_t i = us + 1; i < group.size(); ++i) {
+                if (group[i] < '0' || group[i] > '9') { allDigits = false; break; }
             }
-            if (allDigits) group = stem.substr(0, us);
+            if (allDigits) group = group.substr(0, us);
         }
         HdClip clip;
         if (loadWavPcm(path, clip.sampleRate, clip.channels, clip.pcm)) {
@@ -109,26 +109,35 @@ void SoundPlayer::setHdAudioDir(const std::filesystem::path& dir) {
     }
 }
 
-bool SoundPlayer::playGroup(const std::string& group, float gain, VoicePriority priority) {
+bool SoundPlayer::playGroup(const std::string& group, float gain, VoicePriority priority, float pan) {
     const float effectiveGain = scaledSfxGain(gain, sfxVolume_);
     if (!device_ || voices_.empty() || effectiveGain <= 0.0f) return false;
-    const std::uint32_t variant = variantCounter_++;
 
+    const std::string normGroup = audio_detail::lowerAscii(group);
     const std::uint8_t* pcmData = nullptr;
     int pcmBytes = 0;
     int baseFreq = 22050;
     int channels = 1;
 
-    const bool isVoiceover = (priority == VoicePriority::High) || (!group.empty() && group[0] == '$');
+    const bool isVoiceover = (priority == VoicePriority::High) ||
+                             (!normGroup.empty() && normGroup[0] == '$') ||
+                             (normGroup.size() > 2 && normGroup[1] == '_' &&
+                              (normGroup[0] == 'a' || normGroup[0] == 'b' || normGroup[0] == 'd' ||
+                               normGroup[0] == 'f' || normGroup[0] == 'i' || normGroup[0] == 'j' ||
+                               normGroup[0] == 'r'));
 
-    if (const auto it = hdClips_.find(group); it != hdClips_.end() && !it->second.empty()) {
-        const auto& hc = it->second[variant % it->second.size()];
+    if (const auto it = hdClips_.find(normGroup); it != hdClips_.end() && !it->second.empty()) {
+        const std::size_t variant = variantSelector_.next(normGroup, it->second.size());
+        const auto& hc = it->second[variant];
         pcmData = hc.pcm.data();
         pcmBytes = static_cast<int>(hc.pcm.size());
         baseFreq = static_cast<int>(hc.sampleRate);
         channels = static_cast<int>(hc.channels);
     } else {
-        const auto* clip = bank_.clip(group, variant);
+        const std::size_t count = bank_.variantCount(normGroup);
+        if (count == 0u) return false;
+        const std::size_t variant = variantSelector_.next(normGroup, count);
+        const auto* clip = bank_.clip(normGroup, variant);
         if (!clip || clip->pcm.empty() || clip->bitsPerSample != 16) return false;
         pcmData = clip->pcm.data();
         pcmBytes = static_cast<int>(clip->pcm.size());
@@ -168,25 +177,43 @@ bool SoundPlayer::playGroup(const std::string& group, float gain, VoicePriority 
     SDL_AudioStream* stream = voices_[voiceIndex].stream;
     if (!stream) return false;
 
+    const float clampedPan = clampPan(pan);
+    const std::uint8_t* streamData = pcmData;
+    int streamBytes = pcmBytes;
+    int streamChannels = channels;
+    if (std::abs(clampedPan) > 0.005f) {
+        applyStereoPanS16(
+            std::span<const std::uint8_t>(pcmData, static_cast<std::size_t>(pcmBytes)),
+            channels, clampedPan, pannedScratch_);
+        if (!pannedScratch_.empty()) {
+            streamData = pannedScratch_.data();
+            streamBytes = static_cast<int>(pannedScratch_.size());
+            streamChannels = 2;
+        }
+    }
+
     SDL_AudioSpec src{};
     src.format = SDL_AUDIO_S16;
-    src.channels = channels;
-    const float pitchMul = isVoiceover ? 1.0f : (0.97f + 0.015f * static_cast<float>(variant % 5u));
+    src.channels = streamChannels;
+    const std::uint32_t pitchStep = pitchCounter_++;
+    const float pitchMul = isVoiceover ? 1.0f : (0.97f + 0.015f * static_cast<float>(pitchStep % 5u));
     src.freq = std::max(8000, static_cast<int>(static_cast<float>(baseFreq) * pitchMul));
     SDL_SetAudioStreamFormat(stream, &src, nullptr);
     SDL_SetAudioStreamGain(stream, effectiveGain);
     SDL_ClearAudioStream(stream);
-    if (!SDL_PutAudioStreamData(stream, pcmData, pcmBytes)) {
+    if (!SDL_PutAudioStreamData(stream, streamData, streamBytes)) {
         voices_[voiceIndex].active = false;
         return false;
     }
     voices_[voiceIndex].priority = priority;
     voices_[voiceIndex].active = true;
     voices_[voiceIndex].started = ++voiceSequence_;
-    const std::uint64_t frameBytes = static_cast<std::uint64_t>(channels) * 2u;
-    const std::uint64_t durationMs = frameBytes > 0 && src.freq > 0
-                                         ? (static_cast<std::uint64_t>(pcmBytes) * 1000u) / (frameBytes * static_cast<std::uint64_t>(src.freq))
-                                         : 0u;
+    const std::uint64_t frameBytes = static_cast<std::uint64_t>(streamChannels) * 2u;
+    const std::uint64_t durationMs =
+        frameBytes > 0 && src.freq > 0
+            ? (static_cast<std::uint64_t>(streamBytes) * 1000u) /
+                  (frameBytes * static_cast<std::uint64_t>(src.freq))
+            : 0u;
     voices_[voiceIndex].expiresAt = SDL_GetTicks() + durationMs + 50u; // small margin
     return true;
 }

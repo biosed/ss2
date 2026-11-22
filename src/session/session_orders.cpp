@@ -26,6 +26,14 @@ void GameSession::armAirSupportKind(assets::AirMissionKind kind) {
     patrolArmed = false;
     faceArmed = false;
     armedAirSupport = kind;
+    if (audio) {
+        const std::string& planeId = slots[idx].planeId;
+        const std::string nation = inferNation(planeId.empty() ? "ju-87" : planeId);
+        const std::string airSelect = audio->bank().resolveUnitVoice(nation, "plane", "select");
+        if (!airSelect.empty()) {
+            (void)audio->playGroup(airSelect, 0.56f, ss2::VoicePriority::Normal);
+        }
+    }
     const TacticalCursorKind airCur =
         kind == ss2::assets::AirMissionKind::Bomber ? TacticalCursorKind::AirBomb :
         kind == ss2::assets::AirMissionKind::Recon ? TacticalCursorKind::AirSpy :
@@ -86,6 +94,7 @@ void GameSession::doToggleHoldFire() {
                         if (*hold) holdFireUnits.insert(sid);
                         else holdFireUnits.erase(sid);
                     }
+                    playSelectionVoice("hold");
                     showNotice(ss2::tr(*hold ? "Garrison hold fire enabled."
                                              : "Garrison fire at will enabled."),
                                ss2::NoticeKind::accepted);
@@ -116,6 +125,7 @@ void GameSession::doToggleHoldFire() {
         }
     }
     if (holdState) {
+        playSelectionVoice("hold");
         showNotice(ss2::tr(*holdState ? "Hold fire enabled." : "Fire at will enabled."), ss2::NoticeKind::accepted);
         std::cout << "Tutorial I tactical H (hold-fire=" << (*holdState ? "on" : "off") << "): "
                   << (sel.size() + vsel.size()) << " units\n";
@@ -135,6 +145,7 @@ void GameSession::doToggleCrouch() {
             }
         }
         syncGpuSprites();
+        playSelectionVoice(*crouched ? "crouch" : "stand");
         showNotice(ss2::tr(*crouched ? "Stance: Crouching (cover bonus, shorter sight)." : "Stance: Standing."),
                    ss2::NoticeKind::accepted);
         std::cout << "Tutorial I tactical C (stance=" << (*crouched ? "crouch" : "stand") << "): " << ids.size() << " units\n";
@@ -148,13 +159,19 @@ void GameSession::doToggleBinoculars() {
             const auto& sb = liveBuildings[*selectedBuilding];
             if (!sb.destroyed && sb.owner == localOwner() && sb.occupantCount > 0) {
                 if (const auto active = simulation->toggleBuildingBinoculars(*selectedBuilding)) {
+                    std::optional<size_t> binoSid;
                     for (const size_t sid : sb.occupantIds) {
                         const bool hasBino = scene && sid < scene->units().size() &&
                                              soldierHasBinoculars(scene->units()[sid].id);
                         if (hasBino) {
+                            if (!binoSid) binoSid = sid;
                             if (*active) binocularUnits.insert(sid);
                             else binocularUnits.erase(sid);
                         }
+                    }
+                    if (binoSid && scene && *binoSid < scene->units().size()) {
+                        const bool isVet = (*binoSid < unitExpa.size() && unitExpa[*binoSid] >= 16384);
+                        playUnitVoiceForId("binoculars", scene->units()[*binoSid].id, false, false, isVet);
                     }
                     showNotice(ss2::tr(*active ? "Garrison binoculars active (elevated vision)."
                                                : "Garrison binoculars stowed."),
@@ -170,10 +187,18 @@ void GameSession::doToggleBinoculars() {
     const auto& sel = selection->selected();
     const std::vector<size_t> ids(sel.begin(), sel.end());
     if (const auto active = simulation->toggleBinoculars(ids)) {
+        std::optional<size_t> binoSid;
         for (const auto id : ids) {
             if (scene && id < scene->units().size() && !soldierHasBinoculars(scene->units()[id].id)) continue;
+            if (!binoSid) binoSid = id;
             if (*active) binocularUnits.insert(id);
             else binocularUnits.erase(id);
+        }
+        if (binoSid && scene && *binoSid < scene->units().size()) {
+            const bool isVet = (*binoSid < unitExpa.size() && unitExpa[*binoSid] >= 16384);
+            playUnitVoiceForId("binoculars", scene->units()[*binoSid].id, false, false, isVet);
+        } else {
+            playSelectionVoice("binoculars");
         }
         showNotice(ss2::tr(*active ? "Binoculars active (extended vision)." : "Binoculars stowed."),
                    ss2::NoticeKind::accepted);
@@ -288,10 +313,18 @@ void GameSession::doUnloadOrUnhitch() {
     if (selectedBuilding && *selectedBuilding < liveBuildings.size()) {
         const auto& lb = liveBuildings[*selectedBuilding];
         if (!lb.destroyed && lb.owner == localOwner() && lb.occupantCount > 0) {
+            std::string evacUnitId;
+            bool evacVet = false;
+            if (scene && !lb.occupantIds.empty() && lb.occupantIds.front() < scene->units().size()) {
+                const size_t sid = lb.occupantIds.front();
+                evacUnitId = scene->units()[sid].id;
+                evacVet = (sid < unitExpa.size() && unitExpa[sid] >= 16384);
+            }
             const size_t evac = simulation->evacuateBuilding(*selectedBuilding);
             if (evac > 0) {
                 selectedBuilding.reset();
-                playSelectionVoice("move");
+                if (!evacUnitId.empty()) playUnitVoiceForId("unload", evacUnitId, false, false, evacVet);
+                else playSelectionVoice("unload");
                 showNotice(ss2::trf("Evacuated {0} soldiers from building.", {std::to_string(evac)}),
                            ss2::NoticeKind::accepted);
                 handledU = true;
@@ -303,14 +336,14 @@ void GameSession::doUnloadOrUnhitch() {
         const std::vector<size_t> vids(vsel.begin(), vsel.end());
         const size_t unhitched = simulation->unhitchVehicles(vids);
         if (unhitched > 0) {
-            playSelectionVoice("move");
+            playSelectionVoice("unload");
             showNotice(ss2::trf("Unhitched {0} field guns.", {std::to_string(unhitched)}),
                        ss2::NoticeKind::accepted);
             handledU = true;
         } else {
             const size_t unloaded = simulation->unloadVehicles(vids);
             if (unloaded > 0) {
-                playSelectionVoice("move");
+                playSelectionVoice("unload");
                 showNotice(ss2::trf("Unloaded {0} soldiers.", {std::to_string(unloaded)}), ss2::NoticeKind::accepted);
                 handledU = true;
             }
@@ -322,10 +355,19 @@ void GameSession::doUnloadOrUnhitch() {
         const auto [mapX, mapY] = renderer.mapPosition(mx, my);
         const auto hoveredBld = buildingAtMap(int(std::floor(mapX / mapScale)), int(std::floor(mapY / mapScale)));
         if (hoveredBld && liveBuildings[*hoveredBld].owner == localOwner() && liveBuildings[*hoveredBld].occupantCount > 0) {
+            const auto& hb = liveBuildings[*hoveredBld];
+            std::string evacUnitId;
+            bool evacVet = false;
+            if (scene && !hb.occupantIds.empty() && hb.occupantIds.front() < scene->units().size()) {
+                const size_t sid = hb.occupantIds.front();
+                evacUnitId = scene->units()[sid].id;
+                evacVet = (sid < unitExpa.size() && unitExpa[sid] >= 16384);
+            }
             const size_t evac = simulation->evacuateBuilding(*hoveredBld);
             if (evac > 0) {
                 if (selectedBuilding && *selectedBuilding == *hoveredBld) selectedBuilding.reset();
-                playSelectionVoice("move");
+                if (!evacUnitId.empty()) playUnitVoiceForId("unload", evacUnitId, false, false, evacVet);
+                else playSelectionVoice("unload");
                 showNotice(ss2::trf("Evacuated {0} soldiers from building.", {std::to_string(evac)}),
                            ss2::NoticeKind::accepted);
                 handledU = true;
@@ -377,6 +419,7 @@ void GameSession::doAbandonVehicles() {
     const std::vector<size_t> vids(vsel.begin(), vsel.end());
     if (multiplayer.enabled) {
         (void)simulation->abandonVehicles(vids);
+        playSelectionVoice("unload");
         showNotice(ss2::tr("Abandon order queued."), ss2::NoticeKind::accepted);
         return;
     }
@@ -392,6 +435,7 @@ void GameSession::doAbandonVehicles() {
         }
     }
     spawnAbandonedCrew(spawns);
+    playUnitVoiceForId("unload", spawns.front().id, false);
 }
 
 bool GameSession::issueGroundOrder(int simX, int simY, bool isAttackMove, bool append) {
@@ -441,7 +485,7 @@ bool GameSession::issueGroundOrder(int simX, int simY, bool isAttackMove, bool a
             true
         });
         syncMarkers();
-        playSelectionVoice(isAttackMove ? "attack" : "move");
+        playSelectionVoice(isAttackMove ? "attack_move" : "move");
         std::cout << "Tutorial I accepted move to map pixel " << simX << ',' << simY
                   << " for " << count << '/' << total << (vids.empty() ? " selected infantry\n" : " selected units\n");
         return true;
@@ -487,11 +531,16 @@ void GameSession::dispatchAirSupportAt(assets::AirMissionKind kind, int simX, in
                                                                                 : std::string("fly_small"));
             (void)audio->playGroup(flySnd, 0.45f, ss2::VoicePriority::Normal);
             const std::string nation = inferNation(planeId.empty() ? "ju-87" : planeId);
-            const std::string pfx = nation == "russian" ? "r_" : nation == "british" ? "b_"
-                                  : nation == "american" ? "a_" : nation == "japanese" ? "j_" : "d_";
-            if (!audio->playGroup(pfx + "plane_ack", 0.60f, ss2::VoicePriority::High) &&
-                !audio->playGroup(pfx + "pilot_ack", 0.60f, ss2::VoicePriority::High)) {
-                const char* airFallback = (nation == "american" || nation == "british") ? "b_plane_ack"
+            const std::string_view airVerb =
+                kind == ss2::assets::AirMissionKind::Bomber ? "attack_ground"
+                : kind == ss2::assets::AirMissionKind::Fighter ? "attack_unit"
+                : (kind == ss2::assets::AirMissionKind::Paratrooper ||
+                   kind == ss2::assets::AirMissionKind::Supply) ? "unload"
+                : "move";
+            const std::string airVoice = audio->bank().resolveUnitVoice(nation, "plane", airVerb);
+            if (airVoice.empty() || !audio->playGroup(airVoice, 0.60f, ss2::VoicePriority::High)) {
+                const char* airFallback = (nation == "american" || nation == "british" || nation == "french")
+                    ? "b_plane_ack"
                     : (nation == "russian" ? "r_plane_ack" : "d_plane_ack");
                 (void)audio->playGroup(airFallback, 0.60f, ss2::VoicePriority::High);
             }
