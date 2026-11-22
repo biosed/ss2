@@ -176,11 +176,64 @@ void drawSurfaceStretched(cairo_t* cr, cairo_surface_t* surf, double x, double y
     cairo_restore(cr);
 }
 
+namespace {
+const RamkaFrames* g_activeRamka = nullptr;
+
+bool ramkaComplete(const RamkaFrames& frames) {
+    for (const auto& f : frames) {
+        if (!f.surface || f.w <= 0 || f.h <= 0) return false;
+    }
+    return true;
+}
+} // namespace
+
+RamkaScope::RamkaScope(const RamkaFrames* frames) : prev_(g_activeRamka) {
+    g_activeRamka = (frames && ramkaComplete(*frames)) ? frames : nullptr;
+}
+
+RamkaScope::~RamkaScope() {
+    g_activeRamka = prev_;
+}
+
+void drawRamkaBorder(cairo_t* cr, const RamkaFrames& f, double x, double y, double w, double h) {
+    const double cw = f[0].w, ch = f[0].h;
+    const double rw = f[2].w, bh = f[5].h;
+    const double midW = std::max(0.0, w - cw - rw);
+    const double midH = std::max(0.0, h - ch - bh);
+    drawSurfaceStretched(cr, f[0].surface.get(), x, y, cw, ch);
+    drawSurfaceStretched(cr, f[2].surface.get(), x + w - rw, y, rw, f[2].h);
+    drawSurfaceStretched(cr, f[5].surface.get(), x, y + h - bh, f[5].w, bh);
+    drawSurfaceStretched(cr, f[7].surface.get(), x + w - f[7].w, y + h - f[7].h, f[7].w, f[7].h);
+    if (midW > 0.0) {
+        drawSurfaceStretched(cr, f[1].surface.get(), x + cw, y, midW, f[1].h);
+        drawSurfaceStretched(cr, f[6].surface.get(), x + cw, y + h - f[6].h, midW, f[6].h);
+    }
+    if (midH > 0.0) {
+        drawSurfaceStretched(cr, f[3].surface.get(), x, y + ch, f[3].w, midH);
+        drawSurfaceStretched(cr, f[4].surface.get(), x + w - f[4].w, y + ch, f[4].w, midH);
+    }
+}
+
+bool drawPckAt(cairo_t* cr, const PckSurface& p, double x, double y) {
+    if (!p.surface) return false;
+    drawSurfaceStretched(cr, p.surface.get(), x, y, p.w, p.h);
+    return true;
+}
+
 void drawBronzeBox(cairo_t* cr, double x, double y, double w, double h, double fillAlpha) {
     cairo_save(cr);
     cairo_rectangle(cr, x, y, w, h);
     cairo_set_source_rgba(cr, 12.0 / 255.0, 15.0 / 255.0, 8.0 / 255.0, fillAlpha);
     cairo_fill(cr);
+
+    if (g_activeRamka != nullptr) {
+        const auto& f = *g_activeRamka;
+        if (w >= double(f[0].w + f[2].w) && h >= double(f[0].h + f[5].h)) {
+            drawRamkaBorder(cr, f, x, y, w, h);
+            cairo_restore(cr);
+            return;
+        }
+    }
 
     cairo_set_line_width(cr, 2.0);
     cairo_set_source_rgb(cr, 182.0 / 255.0, 174.0 / 255.0, 146.0 / 255.0);
@@ -369,6 +422,16 @@ bool GoldFrontEnd::hasMenuCursor() const {
     return assets_ && assets_->menuCursor.loaded();
 }
 
+bool GoldFrontEnd::hasRetailWidgets() const {
+    if (!assets_) return false;
+    for (const auto& f : assets_->ramka) {
+        if (!f.surface) return false;
+    }
+    return assets_->speedBar.surface && assets_->speedThumb[0].surface && assets_->speedThumb[1].surface &&
+           assets_->rombik[0].surface && assets_->rombik[1].surface &&
+           assets_->colorSwatch[0].surface && assets_->colorSwatch[22].surface;
+}
+
 bool GoldFrontEnd::hasCreditsArt() const {
     return assets_ && assets_->creditsBg.surface != nullptr;
 }
@@ -409,6 +472,27 @@ void GoldFrontEnd::loadAssets(std::optional<int> fixedBgIndex) {
     tryLoadPckSlot(menuSue, "nbramka_bk.pck", 0, true, assets_->nbramkaFrame);
     tryLoadPckSlot(menuSue, "CREDITS.PCK", 0, false, assets_->creditsBg);
     tryLoadPckSlot(menuSue, "rg_bt.pck", 1, false, assets_->ratingsDropdownBtn);
+    try {
+        const auto rk = assets::readSueEntry(menuSue, "ramka.pck");
+        const auto n = assets::pckFrameCount(rk);
+        for (std::size_t i = 0; i < assets_->ramka.size() && i < n; ++i) {
+            assets_->ramka[i] = pckFrameToSurface(assets::decodeUiPckFrame(rk, i), true);
+        }
+    } catch (...) {
+    }
+    tryLoadPckSlot(menuSue, "speedbar.pck", 0, true, assets_->speedBar);
+    tryLoadPckSlot(menuSue, "speed_bt.pck", 0, true, assets_->speedThumb[0]);
+    tryLoadPckSlot(menuSue, "speed_bt.pck", 1, true, assets_->speedThumb[1]);
+    tryLoadPckSlot(menuSue, "rombik.pck", 0, true, assets_->rombik[0]);
+    tryLoadPckSlot(menuSue, "rombik.pck", 10, true, assets_->rombik[1]);
+    try {
+        const auto cb = assets::readSueEntry(menuSue, "colors_bt.pck");
+        const auto n = assets::pckFrameCount(cb);
+        for (std::size_t i = 0; i < assets_->colorSwatch.size() && i < n; ++i) {
+            assets_->colorSwatch[i] = pckFrameToSurface(assets::decodeUiPckFrame(cb, i), true);
+        }
+    } catch (...) {
+    }
     try {
         const auto nbrif = assets::readSueEntry(menuSue, "nbrif_bt.pck");
         const auto n = assets::pckFrameCount(nbrif);
@@ -1324,6 +1408,7 @@ void GoldFrontEnd::renderToBuffer(int pixelW, int pixelH, std::vector<std::uint8
     auto* pangoCtx = assets_->fontCtx.get();
     const RenderEnv env{cr, pangoCtx};
     const auto screen = fe_.screen();
+    const RamkaScope ramkaScope(&assets_->ramka);
 
     if (screen == FrontEnd::Screen::Credits) {
         renderCredits(env);

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -414,7 +415,39 @@ void GoldFrontEnd::renderOptions(const RenderEnv& env) {
         };
         drawArrowBox(dr, "<", hoveredId_ == decId);
         drawBronzeBox(cr, vr.x, vr.y, vr.w, vr.h, (rowFoc || rowHov) ? 0.92 : 0.84);
-        drawGoldStencilButton(cr, pangoCtx, vr, rows[i].value, '\0', rowHov, rowFoc, true, 14.5, true);
+        // Retail menu_common.sue widgets: speedbar.pck/speed_bt.pck sliders for the
+        // continuous rows, rombik.pck emerald gems for difficulty.
+        std::optional<double> sliderFrac;
+        if (i == 2) sliderFrac = std::clamp(double(optionsDraft_.sfxVolume), 0.0, 1.0);
+        else if (i == 3) sliderFrac = mv >= 0.34f ? 1.0 : mv >= 0.23f ? 2.0 / 3.0 : mv >= 0.13f ? 1.0 / 3.0 : 0.0;
+        else if (i == 5) {
+            const int sp = optionsDraft_.speedPercent;
+            sliderFrac = sp == 50 ? 0.0 : sp == 200 ? 2.0 / 3.0 : sp == 300 ? 1.0 : 1.0 / 3.0;
+        }
+        const auto& bar = assets_->speedBar;
+        const auto& thumb = assets_->speedThumb[(rowHov || rowFoc) ? 1 : 0];
+        if (sliderFrac && bar.surface && thumb.surface) {
+            const double bx = vr.x + 8.0;
+            const double by = vr.y + std::floor((vr.h - bar.h) * 0.5);
+            drawPckAt(cr, bar, bx, by);
+            const double tx = bx + std::round(*sliderFrac * double(bar.w - thumb.w));
+            drawPckAt(cr, thumb, tx, vr.y + std::floor((vr.h - thumb.h) * 0.5));
+            const double textX = bx + bar.w + 4.0;
+            const RectD textR{textX, vr.y, vr.x + vr.w - 4.0 - textX, vr.h};
+            drawGoldStencilButton(cr, pangoCtx, textR, rows[i].value, '\0', rowHov, rowFoc, true, 13.5, true);
+        } else if (i == 0 && assets_->rombik[0].surface && assets_->rombik[1].surface) {
+            const int diff = std::clamp(optionsDraft_.difficulty, 1, 3);
+            const auto& gem = assets_->rombik[0];
+            const double gy = vr.y + std::floor((vr.h - gem.h) * 0.5);
+            for (int g = 0; g < 3; ++g) {
+                drawPckAt(cr, assets_->rombik[g < diff ? 1 : 0], vr.x + 6.0 + g * (gem.w + 1.0), gy);
+            }
+            const double textX = vr.x + 6.0 + 3.0 * (gem.w + 1.0) + 2.0;
+            const RectD textR{textX, vr.y, vr.x + vr.w - 4.0 - textX, vr.h};
+            drawGoldStencilButton(cr, pangoCtx, textR, rows[i].value, '\0', rowHov, rowFoc, true, 14.5, true);
+        } else {
+            drawGoldStencilButton(cr, pangoCtx, vr, rows[i].value, '\0', rowHov, rowFoc, true, 14.5, true);
+        }
         drawArrowBox(ir, ">", hoveredId_ == incId);
     }
 
@@ -543,11 +576,16 @@ void GoldFrontEnd::renderRatings(const RenderEnv& env) {
             }
             pango_cairo_show_layout(cr, nameLayout.get());
 
+            const bool gemBadge = !row.isHeader && row.completed && assets_->rombik[1].surface != nullptr;
             const std::string statusShown = row.isHeader
                 ? row.status
-                : (row.completed ? (tr("Completed") + " [\xE2\x9C\x93]") : std::string("-"));
-            auto statLayout = makeTextLayout(pangoCtx, statusShown, 12.5, row.isHeader, 130.0, PANGO_ALIGN_CENTER);
-            cairo_move_to(cr, 480.0, ry + 2.0);
+                : (row.completed ? (gemBadge ? tr("Completed") : (tr("Completed") + " [\xE2\x9C\x93]"))
+                                 : std::string("-"));
+            const double statX = gemBadge ? 480.0 + double(assets_->rombik[1].w) : 480.0;
+            const double statW = gemBadge ? 130.0 - double(assets_->rombik[1].w) : 130.0;
+            if (gemBadge) drawPckAt(cr, assets_->rombik[1], 482.0, ry + 2.0);
+            auto statLayout = makeTextLayout(pangoCtx, statusShown, 12.5, row.isHeader, statW, PANGO_ALIGN_CENTER);
+            cairo_move_to(cr, statX, ry + 2.0);
             if (row.completed || row.isHeader) {
                 cairo_set_source_rgb(cr, 212.0 / 255.0, 224.0 / 255.0, 178.0 / 255.0);
             } else {

@@ -492,6 +492,71 @@ void testRetailGoldAssets(const std::filesystem::path& gameDir) {
     check(fe.hasCreditsArt(), "retail CREDITS.PCK loaded");
     check(fe.creditsLineCount() >= 128, "retail credits.seq loaded (128+ lines)");
 
+    // menu_common.sue widget sprites wired into the Gold front end.
+    {
+        const auto pckDims = [&](const char* entry, std::size_t expectFrames, int w, int h) {
+            const auto raw = ss2::assets::readSueEntry(menuSue, entry);
+            check(ss2::assets::pckFrameCount(raw) == expectFrames, entry);
+            const auto f0 = ss2::assets::decodeUiPckFrame(raw, 0);
+            check(f0.width == w && f0.height == h, entry);
+        };
+        pckDims("ramka.pck", 8, 5, 5);
+        pckDims("speedbar.pck", 1, 124, 11);
+        pckDims("speed_bt.pck", 2, 21, 13);
+        pckDims("rombik.pck", 11, 25, 14);
+        pckDims("colors_bt.pck", 36, 17, 17);
+        check(fe.hasRetailWidgets(), "retail ramka/speedbar/speed_bt/rombik/colors_bt widgets loaded");
+
+        const auto stage = ss2::GoldFrontEnd::computeStage(1280, 720);
+        // Count differing pixels inside a stage-space rectangle.
+        const auto regionDiff = [&](const std::vector<std::uint8_t>& a, const std::vector<std::uint8_t>& b,
+                                    double sx, double sy, double sw, double sh) {
+            int diff = 0;
+            const int x0 = int(stage.x + sx * stage.scale), x1 = int(stage.x + (sx + sw) * stage.scale);
+            const int y0 = int(stage.y + sy * stage.scale), y1 = int(stage.y + (sy + sh) * stage.scale);
+            for (int y = y0; y < y1; ++y) {
+                for (int x = x0; x < x1; ++x) {
+                    const std::size_t o = (std::size_t(y) * 1280u + std::size_t(x)) * 4u;
+                    if (a[o] != b[o] || a[o + 1] != b[o + 1] || a[o + 2] != b[o + 2]) ++diff;
+                }
+            }
+            return diff;
+        };
+        const auto renderOptionsWith = [&](float sfx, int difficulty) {
+            ss2::GoldFrontEnd ofe(nullptr, gameDir, 0);
+            ss2::UserSettings cfg{};
+            cfg.sfxVolume = sfx;
+            cfg.difficulty = difficulty;
+            ofe.setSettings(cfg);
+            ofe.handleMouseDown(185.0, 262.0, 1);  // OPTIONS
+            check(ofe.state().screen() == ss2::FrontEnd::Screen::Options, "retail Options opened");
+            std::vector<std::uint8_t> out;
+            ofe.renderToBuffer(1280, 720, out);
+            return out;
+        };
+        const auto loud = renderOptionsWith(1.0f, 1);
+        const auto muted = renderOptionsWith(0.0f, 3);
+        // SFX row (idx 2): speedbar track spans stage x 452..576, y 182..210; text sits right of it.
+        check(regionDiff(loud, muted, 452.0, 182.0, 124.0, 28.0) > 40,
+              "speed_bt thumb moves along speedbar.pck with SFX volume");
+        // Difficulty row (idx 0): three rombik.pck gems at stage x 450..528, y 98..126.
+        check(regionDiff(loud, muted, 450.0, 98.0, 78.0, 28.0) > 40,
+              "rombik.pck gems light up with Options difficulty");
+
+        ss2::GoldFrontEnd mfe(nullptr, gameDir, 0);
+        mfe.handleMouseDown(188.0, 195.0, 1);  // Multiplayer
+        check(mfe.state().screen() == ss2::FrontEnd::Screen::Multiplayer, "retail Multiplayer opened");
+        std::vector<std::uint8_t> german, british;
+        mfe.renderToBuffer(1280, 720, german);
+        mfe.handleMouseDown(688.0, 284.0, 1);  // mp_nation German -> British
+        check(mfe.state().mpNation() == 2u, "retail mp_nation cycles to British");
+        mfe.handleMouseMove(10.0, 10.0);
+        mfe.renderToBuffer(1280, 720, british);
+        // colors_bt.pck swatch at stage x 618..635, y 275..292.
+        check(regionDiff(german, british, 618.0, 275.0, 17.0, 17.0) > 40,
+              "colors_bt.pck nation swatch changes colour with mp_nation");
+    }
+
     std::vector<ss2::GoldMissionEntry> entries;
     std::size_t tutIdx = 0;
     const auto list = ss2::assets::listSinglePlayerMissions(gameDir);

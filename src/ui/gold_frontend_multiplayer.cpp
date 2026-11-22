@@ -549,9 +549,23 @@ void GoldFrontEnd::renderMultiplayer(const RenderEnv& env) {
         const bool natFoc = (focusedId_ == "mp_nation");
         drawBronzeBox(cr, kMpNationRect.x, kMpNationRect.y, kMpNationRect.w, kMpNationRect.h,
                       (natHov || natFoc) ? 0.94 : 0.85);
-        drawGoldStencilButton(cr, pangoCtx, kMpNationRect,
-                              tr(mpNationLabel(fe_.mpNation())), 'N',
-                              natHov, natFoc, true, 15.0, true);
+        // colors_bt.pck: 12 colours x [normal, lit, plate]; nation -> colour base frame.
+        static constexpr std::array<std::size_t, 5> kNationSwatchBase{0, 21, 9, 3, 6};
+        const int nat = fe_.mpNation();
+        const std::size_t swIdx = (nat >= 0 && nat < int(kNationSwatchBase.size()))
+            ? kNationSwatchBase[std::size_t(nat)] + ((natHov || natFoc) ? 1u : 0u) : 0u;
+        const auto& sw = assets_->colorSwatch[swIdx];
+        if (sw.surface) {
+            drawPckAt(cr, sw, kMpNationRect.x + 10.0, kMpNationRect.y + std::floor((kMpNationRect.h - sw.h) * 0.5));
+            const RectD textR{kMpNationRect.x + 14.0 + sw.w, kMpNationRect.y,
+                              kMpNationRect.w - 18.0 - sw.w, kMpNationRect.h};
+            drawGoldStencilButton(cr, pangoCtx, textR, tr(mpNationLabel(fe_.mpNation())), 'N',
+                                  natHov, natFoc, true, 15.0, true);
+        } else {
+            drawGoldStencilButton(cr, pangoCtx, kMpNationRect,
+                                  tr(mpNationLabel(fe_.mpNation())), 'N',
+                                  natHov, natFoc, true, 15.0, true);
+        }
     }
 
     {

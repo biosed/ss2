@@ -112,6 +112,8 @@ public:
     bool hasMenuAssets() const;
     bool hasMenuCursor() const;
     bool hasCreditsArt() const;
+    // menu_common.sue ramka/speedbar/speed_bt/rombik/colors_bt widgets all decoded.
+    bool hasRetailWidgets() const;
     std::size_t creditsLineCount() const;
     bool hasBriefingMedia() const;
     std::size_t briefingPartCount() const;

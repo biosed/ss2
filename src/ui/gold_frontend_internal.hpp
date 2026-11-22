@@ -141,6 +141,22 @@ Layout makeTextLayout(PangoContext* ctx, const std::string& text, double sizePx,
 std::string buildGoldMarkup(const std::string& label, char shortcut);
 void drawSurfaceStretched(cairo_t* cr, cairo_surface_t* surf, double x, double y, double w, double h);
 void drawBronzeBox(cairo_t* cr, double x, double y, double w, double h, double fillAlpha);
+// menu_common.sue ramka.pck: 8 x 5x5 riveted border pieces [TL,T,TR,L,R,BL,B,BR].
+// While a RamkaScope is alive, drawBronzeBox frames boxes with the retail 9-slice
+// instead of the vector bronze stroke.
+using RamkaFrames = std::array<PckSurface, 8>;
+// Blit a decoded PCK frame at its native size; false when the frame is missing.
+bool drawPckAt(cairo_t* cr, const PckSurface& p, double x, double y);
+void drawRamkaBorder(cairo_t* cr, const RamkaFrames& frames, double x, double y, double w, double h);
+class RamkaScope {
+public:
+    explicit RamkaScope(const RamkaFrames* frames);
+    ~RamkaScope();
+    RamkaScope(const RamkaScope&) = delete;
+    RamkaScope& operator=(const RamkaScope&) = delete;
+private:
+    const RamkaFrames* prev_;
+};
 void drawFallbackBackdrop(cairo_t* cr, bool briefing);
 void drawHeading(cairo_t* cr, PangoContext* ctx, const std::string& text, const RectD& r, double px = 17.0);
 void drawGoldStencilButton(cairo_t* cr, PangoContext* ctx, const RectD& r,
@@ -164,6 +180,11 @@ struct GoldFrontEnd::Assets {
     gold_ui::PckSurface creditsBg;
     gold_ui::PckSurface ratingsDropdownBtn;
     gold_ui::PckSurface nbramkaFrame;
+    gold_ui::RamkaFrames ramka;                       // ramka.pck[0..7] 5x5 9-slice
+    gold_ui::PckSurface speedBar;                     // speedbar.pck[0] 124x11
+    std::array<gold_ui::PckSurface, 2> speedThumb;    // speed_bt.pck[0..1] 21x13
+    std::array<gold_ui::PckSurface, 2> rombik;        // rombik.pck[0]=unlit, [10]=lit 25x14
+    std::array<gold_ui::PckSurface, 36> colorSwatch;  // colors_bt.pck 12 colours x 3 states
     std::array<gold_ui::PckSurface, 12> slotButtons;   // nbrif_bt[8..19]
     std::array<gold_ui::PckSurface, 6> scrollButtons;  // scrollbar_bt[0..5]
     std::array<gold_ui::PckSurface, 3> scrollTrack;    // scrollbar_sp[0..2]

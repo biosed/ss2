@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cctype>
 #include <chrono>
 #include <filesystem>
@@ -855,9 +856,11 @@ void GoldFrontEnd::renderCampaigns(const RenderEnv& env) {
                 cairo_fill(cr);
             }
             std::string mLabel = camp.missions[mi].name;
-            if (camp.missions[mi].completed) mLabel += "  [\xE2\x9C\x93]";
+            const bool gem = camp.missions[mi].completed && assets_->rombik[1].surface != nullptr;
+            if (camp.missions[mi].completed && !gem) mLabel += "  [\xE2\x9C\x93]";
+            if (gem) drawPckAt(cr, assets_->rombik[1], 758.0 - assets_->rombik[1].w, ry + 2.0);
             auto ml = makeTextLayout(pangoCtx, mLabel, 12.5, highlightNext);
-            pango_layout_set_width(ml.get(), int(316.0 * PANGO_SCALE));
+            pango_layout_set_width(ml.get(), int((gem ? 316.0 - assets_->rombik[1].w : 316.0) * PANGO_SCALE));
             pango_layout_set_ellipsize(ml.get(), PANGO_ELLIPSIZE_END);
             cairo_move_to(cr, 434, ry + 1.0);
             if (highlightNext) cairo_set_source_rgb(cr, 245.0 / 255.0, 245.0 / 255.0, 245.0 / 255.0);
@@ -934,9 +937,16 @@ void GoldFrontEnd::renderMissionBrowserScreen(const RenderEnv& env) {
 
                 const auto& m = rowAt(std::size_t(idx));
                 std::string label = m.name;
-                if (m.completed) label += "  [\xE2\x9C\x93]";
+                const auto& gemLit = assets_->rombik[1];
+                const bool gem = m.completed && gemLit.surface != nullptr;
+                if (m.completed && !gem) label += "  [\xE2\x9C\x93]";
+                if (gem) {
+                    drawPckAt(cr, gemLit, kListX + kListW - 8.0 - gemLit.w,
+                              ry + std::floor((kRowH - 1.0 - gemLit.h) * 0.5));
+                }
                 auto rowLayout = makeTextLayout(pangoCtx, label, 13.0, isSelected);
-                pango_layout_set_width(rowLayout.get(), int((kListW - 22.0) * PANGO_SCALE));
+                pango_layout_set_width(rowLayout.get(),
+                                       int((kListW - 22.0 - (gem ? gemLit.w + 6.0 : 0.0)) * PANGO_SCALE));
                 pango_layout_set_ellipsize(rowLayout.get(), PANGO_ELLIPSIZE_END);
 
                 cairo_move_to(cr, kListX + 12, ry + 2.0);
@@ -994,8 +1004,21 @@ void GoldFrontEnd::renderMissionBrowserScreen(const RenderEnv& env) {
                           kDifficultyButtonRect.w, kDifficultyButtonRect.h,
                           (hov || foc) ? 0.92 : 0.84);
             const std::string diffLabel = tr("Difficulty") + ": " + tr(difficultyKey(fe_.difficulty()));
-            drawGoldStencilButton(cr, pangoCtx, kDifficultyButtonRect, diffLabel, 'D',
-                                  hov, foc, true, 15.5, true);
+            if (assets_->rombik[0].surface && assets_->rombik[1].surface) {
+                const auto& g0 = assets_->rombik[0];
+                const int diff = std::clamp(fe_.difficulty(), 1, 3);
+                const double gy = kDifficultyButtonRect.y + std::floor((kDifficultyButtonRect.h - g0.h) * 0.5);
+                const double gx0 = kDifficultyButtonRect.x + kDifficultyButtonRect.w - 6.0 - 3.0 * (g0.w + 1.0);
+                for (int g = 0; g < 3; ++g) {
+                    drawPckAt(cr, assets_->rombik[g < diff ? 1 : 0], gx0 + g * (g0.w + 1.0), gy);
+                }
+                const RectD textR{kDifficultyButtonRect.x + 4.0, kDifficultyButtonRect.y,
+                                  gx0 - kDifficultyButtonRect.x - 6.0, kDifficultyButtonRect.h};
+                drawGoldStencilButton(cr, pangoCtx, textR, diffLabel, 'D', hov, foc, true, 15.5, true);
+            } else {
+                drawGoldStencilButton(cr, pangoCtx, kDifficultyButtonRect, diffLabel, 'D',
+                                      hov, foc, true, 15.5, true);
+            }
         }
 
         for (const auto& b : kSingleMissionButtons) {
