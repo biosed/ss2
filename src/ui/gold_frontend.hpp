@@ -121,15 +121,11 @@ public:
 
 private:
     struct Assets;
+    struct RenderEnv;
+
+    // Lifecycle, assets, shared list/scroll/focus helpers, and Main Menu (gold_frontend.cpp)
     void loadAssets(std::optional<int> fixedBgIndex);
     void loadCreditsText();
-    void loadBriefingMedia(const std::string& path);
-    void clearBriefingMedia();
-    void startBriefingVoice(const std::vector<std::int16_t>& pcm);
-    void stopBriefingVoice();
-    void setBriefingVoicePaused(bool paused);
-    void selectBriefingPart(int part);
-    void renderBriefingOverlayIfNeeded();
     void ensureFocusedValid();
     void syncNoticeFromState();
     void onScreenChanged(FrontEnd::Screen previous);
@@ -137,20 +133,73 @@ private:
     std::size_t activeListSelected() const;
     void selectActiveRow(std::size_t index);
     const char* activeRowPrefix() const;
+    void ensureSelectionVisible();
+    void scrollBy(int deltaRows);
+    void ensureOverviewLoaded(const std::string& path);
+    void cycleFocus(const std::vector<std::string>& ids, int step);
+    std::string hitTestActiveListAndScrollbar(double sx, double sy) const;
+    void handleActiveListNavigationKey(SDL_Keycode key);
+    void drawGoldScrollbar(const RenderEnv& env, double sx, double sy, double sw, double sh,
+                           int visibleRows, bool showThumb, std::size_t itemCount, int offset,
+                           bool upHov, bool downHov, bool thumbActive) const;
+    std::string hitTestStage(double sx, double sy) const;
+    void activateId(const std::string& id);
+    void renderMainMenu(const RenderEnv& env);
+
+    // Single Player, Campaigns, Custom Campaigns, Single Missions, Briefing (gold_frontend_campaigns.cpp)
+    void loadBriefingMedia(const std::string& path);
+    void clearBriefingMedia();
+    void startBriefingVoice(const std::vector<std::int16_t>& pcm);
+    void stopBriefingVoice();
+    void setBriefingVoicePaused(bool paused);
+    void selectBriefingPart(int part);
+    void renderBriefingOverlayIfNeeded();
+    void advanceBriefingMedia(std::chrono::nanoseconds dt);
     const std::vector<GoldCampaignEntry>& activeCampaignList() const;
     std::size_t activeCampaignIndex() const;
     std::size_t previewCampaignIndex(bool custom = false) const;
+    std::string hitTestSinglePlayer(double sx, double sy) const;
+    std::string hitTestCampaigns(double sx, double sy) const;
+    std::string hitTestMissionBrowser(double sx, double sy) const;
+    std::string hitTestBriefing(double sx, double sy) const;
+    bool activateSinglePlayer(const std::string& id);
+    bool handleSinglePlayerEditKey(SDL_Keycode key);
+    void handleSinglePlayerKey(SDL_Keycode key);
+    void handleCampaignsKey(SDL_Keycode key);
+    void handleMissionBrowserKey(SDL_Keycode key);
+    void handleBriefingKey(SDL_Keycode key);
+    void handleSinglePlayerTextInput(std::string_view txt);
+    void renderSinglePlayer(const RenderEnv& env);
+    void renderCampaigns(const RenderEnv& env);
+    void renderMissionBrowserScreen(const RenderEnv& env);
+    void renderBriefing(const RenderEnv& env);
+
+    // Multiplayer, Load Game, and Replay Browser (gold_frontend_multiplayer.cpp)
+    std::string hitTestMultiplayerOrBrowser(double sx, double sy) const;
+    bool activateMultiplayer(const std::string& id);
+    void finishMultiplayerEdit();
+    bool handleMultiplayerEditKey(SDL_Keycode key);
+    void handleMultiplayerOrBrowserKey(SDL_Keycode key);
+    void handleMultiplayerTextInput(std::string_view txt);
+    void renderReplaysOrLoadGame(const RenderEnv& env);
+    void renderMultiplayer(const RenderEnv& env);
+
+    // Options, Ratings, and Credits (gold_frontend_dialogs.cpp)
     std::size_t ratingsRowCount() const;
-    void ensureSelectionVisible();
-    void scrollBy(int deltaRows);
     void scrollRatingsBy(int deltaRows);
     void adjustOption(const std::string& id, int delta);
     void beginOptionsEdit();
     void commitOptionsEdit();
     void cancelOptionsEdit();
-    std::string hitTestStage(double sx, double sy) const;
-    void activateId(const std::string& id);
-    void ensureOverviewLoaded(const std::string& path);
+    std::string hitTestOptions(double sx, double sy) const;
+    std::string hitTestRatings(double sx, double sy) const;
+    std::string hitTestCredits(double sx, double sy) const;
+    void handleOptionsKey(SDL_Keycode key);
+    void handleRatingsKey(SDL_Keycode key);
+    void handleCreditsKey(SDL_Keycode key);
+    void renderOptions(const RenderEnv& env);
+    void renderRatings(const RenderEnv& env);
+    void renderCredits(const RenderEnv& env);
 
     SDL_Window* window_{};
     std::filesystem::path gameDir_;
