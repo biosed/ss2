@@ -118,6 +118,12 @@ constexpr std::array<ButtonSpec, 2> kCampaignFooterButtons{{
     {"custom", "Custom", 'C', {118, 512, 140, 35}, true},
     {"cancel", "Cancel", '\0', {542, 512, 118, 35}, true},
 }};
+constexpr RectD kCustomCancelRect{542, 512, 118, 35};
+constexpr RectD kProfileNameRect{66, 94, 238, 28};
+constexpr int kVisibleProfileRows = 17;
+constexpr RectD kProfileListRect{462, 95, 258, 362};
+constexpr RectD kProfileScrollUpRect{720, 95, 18, 18};
+constexpr RectD kProfileScrollDownRect{720, 439, 18, 18};
 
 constexpr std::array<ButtonSpec, 2> kSingleMissionButtons{{
     {"start", "Start", 'S', {135, 512, 106, 35}, true},
@@ -833,6 +839,31 @@ void GoldFrontEnd::setCampaigns(std::vector<GoldCampaignEntry> campaigns) {
     dirty_ = true;
 }
 
+void GoldFrontEnd::setCustomCampaigns(std::vector<GoldCampaignEntry> campaigns) {
+    customCampaigns_ = std::move(campaigns);
+    std::vector<FrontEnd::CampaignEntry> base;
+    base.reserve(customCampaigns_.size());
+    for (const auto& c : customCampaigns_) {
+        FrontEnd::CampaignEntry ce;
+        ce.name = c.name;
+        ce.missions.reserve(c.missions.size());
+        for (const auto& m : c.missions) {
+            ce.missions.push_back(FrontEnd::CampaignMissionEntry{
+                m.code, m.name, m.path, m.easyPath, m.description, m.tag
+            });
+        }
+        base.push_back(std::move(ce));
+    }
+    fe_.setCustomCampaigns(std::move(base));
+    assets_->overviews.clear();
+    if (fe_.screen() == FrontEnd::Screen::CampaignMissions && fe_.inCustomCampaign()) {
+        scrollOffset_ = 0;
+        ensureSelectionVisible();
+    }
+    if (fe_.screen() == FrontEnd::Screen::CustomCampaigns) ensureFocusedValid();
+    dirty_ = true;
+}
+
 void GoldFrontEnd::setReplays(std::vector<FrontEnd::ReplayEntry> replays) {
     replays_ = replays;
     fe_.setReplays(std::move(replays));
@@ -887,9 +918,21 @@ void GoldFrontEnd::setDifficulty(int difficulty) {
 
 void GoldFrontEnd::setSettings(const UserSettings& settings) {
     settings_ = settings;
-    optionsDraft_ = settings;
+    ensureProfilesInitialized(settings_);
+    optionsDraft_ = settings_;
     optionsBackupLanguage_ = ss2::language();
-    fe_.setDifficulty(settings.difficulty);
+    fe_.setDifficulty(settings_.difficulty);
+    profileEditMode_ = ProfileEditMode::None;
+    profileNameDraft_ = settings_.activeProfile;
+    const std::size_t activeIdx = findProfileIndex(settings_, settings_.activeProfile);
+    const int maxOff = std::max(0, int(settings_.profiles.size()) - kVisibleProfileRows);
+    profileScroll_ = std::clamp(profileScroll_, 0, maxOff);
+    if (activeIdx < settings_.profiles.size()) {
+        if (int(activeIdx) < profileScroll_) profileScroll_ = int(activeIdx);
+        else if (int(activeIdx) >= profileScroll_ + kVisibleProfileRows) {
+            profileScroll_ = std::min(maxOff, int(activeIdx) - kVisibleProfileRows + 1);
+        }
+    }
     dirty_ = true;
 }
 
@@ -971,10 +1014,19 @@ void GoldFrontEnd::adjustOption(const std::string& id, int delta) {
     dirty_ = true;
 }
 
+const std::vector<GoldCampaignEntry>& GoldFrontEnd::activeCampaignList() const {
+    return fe_.inCustomCampaign() ? customCampaigns_ : campaigns_;
+}
+
+std::size_t GoldFrontEnd::activeCampaignIndex() const {
+    return fe_.inCustomCampaign() ? fe_.selectedCustomCampaign() : fe_.selectedCampaign();
+}
+
 std::size_t GoldFrontEnd::activeListCount() const {
     if (fe_.screen() == FrontEnd::Screen::CampaignMissions) {
-        const std::size_t ci = fe_.selectedCampaign();
-        return ci < campaigns_.size() ? campaigns_[ci].missions.size() : 0;
+        const auto& active = activeCampaignList();
+        const std::size_t ci = activeCampaignIndex();
+        return ci < active.size() ? active[ci].missions.size() : 0;
     }
     if (fe_.screen() == FrontEnd::Screen::Replays) {
         return replays_.size();
@@ -1026,12 +1078,15 @@ const char* GoldFrontEnd::activeRowPrefix() const {
     return "mission:";
 }
 
-std::size_t GoldFrontEnd::previewCampaignIndex() const {
-    if (campaigns_.empty()) return 0;
+std::size_t GoldFrontEnd::previewCampaignIndex(bool custom) const {
+    const auto& list = custom ? customCampaigns_ : campaigns_;
+    if (list.empty()) return 0;
+    const char* prefix = custom ? "ccampaign:" : "campaign:";
     std::size_t idx = 0;
-    if (parseIndexAfter(hoveredId_, "campaign:", idx) && idx < campaigns_.size()) return idx;
-    if (parseIndexAfter(focusedId_, "campaign:", idx) && idx < campaigns_.size()) return idx;
-    return fe_.selectedCampaign() < campaigns_.size() ? fe_.selectedCampaign() : 0;
+    if (parseIndexAfter(hoveredId_, prefix, idx) && idx < list.size()) return idx;
+    if (parseIndexAfter(focusedId_, prefix, idx) && idx < list.size()) return idx;
+    const std::size_t sel = custom ? fe_.selectedCustomCampaign() : fe_.selectedCampaign();
+    return sel < list.size() ? sel : 0;
 }
 
 std::size_t GoldFrontEnd::ratingsRowCount() const {
@@ -1073,11 +1128,16 @@ void GoldFrontEnd::ensureFocusedValid() {
             if (focusedId_.empty()) focusedId_ = "single";
             break;
         case FrontEnd::Screen::SinglePlayer:
-            focusedId_ = "missions";
+            focusedId_ = (profileEditMode_ == ProfileEditMode::None) ? "missions" : "profile_name_field";
             break;
         case FrontEnd::Screen::Campaigns:
             focusedId_ = !campaigns_.empty()
                 ? ("campaign:" + std::to_string(fe_.selectedCampaign()))
+                : "cancel";
+            break;
+        case FrontEnd::Screen::CustomCampaigns:
+            focusedId_ = !customCampaigns_.empty()
+                ? ("ccampaign:" + std::to_string(fe_.selectedCustomCampaign()))
                 : "cancel";
             break;
         case FrontEnd::Screen::SingleMissions:
@@ -1138,31 +1198,52 @@ void GoldFrontEnd::onScreenChanged(FrontEnd::Screen previous) {
             mpEditField_ = MpEditField::None;
             if (window_) SDL_StopTextInput(window_);
         }
+        if (profileEditMode_ != ProfileEditMode::None) {
+            profileEditMode_ = ProfileEditMode::None;
+            profileNameDraft_ = settings_.activeProfile;
+            if (window_) SDL_StopTextInput(window_);
+        }
         ensureFocusedValid();
-        if (fe_.screen() == FrontEnd::Screen::SingleMissions) {
+        if (fe_.screen() == FrontEnd::Screen::SinglePlayer) {
+            ensureProfilesInitialized(settings_);
+            profileNameDraft_ = settings_.activeProfile;
+            const std::size_t activeIdx = findProfileIndex(settings_, settings_.activeProfile);
+            const int maxOff = std::max(0, int(settings_.profiles.size()) - kVisibleProfileRows);
+            profileScroll_ = std::clamp(profileScroll_, 0, maxOff);
+            if (activeIdx < settings_.profiles.size()) {
+                if (int(activeIdx) < profileScroll_) profileScroll_ = int(activeIdx);
+                else if (int(activeIdx) >= profileScroll_ + kVisibleProfileRows) {
+                    profileScroll_ = std::min(maxOff, int(activeIdx) - kVisibleProfileRows + 1);
+                }
+            }
+        } else if (fe_.screen() == FrontEnd::Screen::SingleMissions) {
             ensureSelectionVisible();
             if (const auto sel = fe_.selected(); sel < missions_.size()) {
                 ensureOverviewLoaded(missions_[sel].path);
             }
-        } else if (fe_.screen() == FrontEnd::Screen::Campaigns) {
-            const std::size_t ci = previewCampaignIndex();
-            if (ci < campaigns_.size() && !campaigns_[ci].missions.empty()) {
+        } else if (fe_.screen() == FrontEnd::Screen::Campaigns ||
+                   fe_.screen() == FrontEnd::Screen::CustomCampaigns) {
+            const bool custom = (fe_.screen() == FrontEnd::Screen::CustomCampaigns);
+            const auto& list = custom ? customCampaigns_ : campaigns_;
+            const std::size_t ci = previewCampaignIndex(custom);
+            if (ci < list.size() && !list[ci].missions.empty()) {
                 std::size_t mIdx = 0;
-                for (std::size_t i = 0; i < campaigns_[ci].missions.size(); ++i) {
-                    if (!campaigns_[ci].missions[i].completed) {
+                for (std::size_t i = 0; i < list[ci].missions.size(); ++i) {
+                    if (!list[ci].missions[i].completed) {
                         mIdx = i;
                         break;
                     }
                 }
-                ensureOverviewLoaded(campaigns_[ci].missions[mIdx].path);
+                ensureOverviewLoaded(list[ci].missions[mIdx].path);
             }
         } else if (fe_.screen() == FrontEnd::Screen::CampaignMissions) {
             scrollOffset_ = 0;
             ensureSelectionVisible();
-            const std::size_t ci = fe_.selectedCampaign();
+            const auto& active = activeCampaignList();
+            const std::size_t ci = activeCampaignIndex();
             const std::size_t mi = fe_.selectedCampaignMission();
-            if (ci < campaigns_.size() && mi < campaigns_[ci].missions.size()) {
-                ensureOverviewLoaded(campaigns_[ci].missions[mi].path);
+            if (ci < active.size() && mi < active[ci].missions.size()) {
+                ensureOverviewLoaded(active[ci].missions[mi].path);
             }
         } else if (fe_.screen() == FrontEnd::Screen::Replays ||
                    fe_.screen() == FrontEnd::Screen::LoadGame) {
@@ -1253,7 +1334,19 @@ std::string GoldFrontEnd::hitTestStage(double sx, double sy) const {
         case FrontEnd::Screen::MainMenu:
             return checkButtons(kMainButtons);
         case FrontEnd::Screen::SinglePlayer:
-            return checkButtons(kSinglePlayerButtons);
+            if (const auto id = checkButtons(kSinglePlayerButtons); !id.empty()) return id;
+            if (kProfileNameRect.contains(sx, sy)) return "profile_name_field";
+            if (kProfileScrollUpRect.contains(sx, sy)) return "profile_scroll_up";
+            if (kProfileScrollDownRect.contains(sx, sy)) return "profile_scroll_down";
+            if (RectD{kProfileListRect.x + 4, kProfileListRect.y + 6, kProfileListRect.w - 8,
+                      kVisibleProfileRows * kRowH}.contains(sx, sy)) {
+                const int row = int((sy - (kProfileListRect.y + 6)) / kRowH);
+                const std::size_t idx = std::size_t(profileScroll_ + row);
+                if (idx < settings_.profiles.size()) {
+                    return "profile_row:" + std::to_string(idx);
+                }
+            }
+            return {};
         case FrontEnd::Screen::Campaigns: {
             for (std::size_t i = 0; i < campaigns_.size(); ++i) {
                 if (campaignRectFor(i, campaigns_.size()).contains(sx, sy)) {
@@ -1261,6 +1354,15 @@ std::string GoldFrontEnd::hitTestStage(double sx, double sy) const {
                 }
             }
             return checkButtons(kCampaignFooterButtons);
+        }
+        case FrontEnd::Screen::CustomCampaigns: {
+            for (std::size_t i = 0; i < customCampaigns_.size(); ++i) {
+                if (campaignRectFor(i, customCampaigns_.size()).contains(sx, sy)) {
+                    return "ccampaign:" + std::to_string(i);
+                }
+            }
+            if (kCustomCancelRect.contains(sx, sy)) return "cancel";
+            return {};
         }
         case FrontEnd::Screen::SingleMissions:
         case FrontEnd::Screen::CampaignMissions:
@@ -1416,12 +1518,122 @@ void GoldFrontEnd::activateId(const std::string& id) {
         dirty_ = true;
         return;
     }
-    if (id == "profile_new" || id == "profile_rename" || id == "profile_delete" ||
-        id == "brief_restart" || id == "brief_pause" || id.rfind("slot_", 0) == 0) {
-        if (id == "profile_new" || id == "profile_rename" || id == "profile_delete") {
-            showNotice(tr("Not implemented yet."));
-        }
+    if (id == "brief_restart" || id == "brief_pause" || id.rfind("slot_", 0) == 0) {
         return;
+    }
+
+    if (prev == FrontEnd::Screen::SinglePlayer) {
+        ensureProfilesInitialized(settings_);
+        auto clampProfileScroll = [&] {
+            const int maxOff = std::max(0, int(settings_.profiles.size()) - kVisibleProfileRows);
+            profileScroll_ = std::clamp(profileScroll_, 0, maxOff);
+            const std::size_t activeIdx = findProfileIndex(settings_, settings_.activeProfile);
+            if (activeIdx < settings_.profiles.size()) {
+                if (int(activeIdx) < profileScroll_) profileScroll_ = int(activeIdx);
+                else if (int(activeIdx) >= profileScroll_ + kVisibleProfileRows) {
+                    profileScroll_ = std::min(maxOff, int(activeIdx) - kVisibleProfileRows + 1);
+                }
+            }
+        };
+        if (id == "profile_scroll_up") {
+            profileScroll_ = std::max(0, profileScroll_ - 1);
+            dirty_ = true;
+            return;
+        }
+        if (id == "profile_scroll_down") {
+            const int maxOff = std::max(0, int(settings_.profiles.size()) - kVisibleProfileRows);
+            profileScroll_ = std::min(maxOff, profileScroll_ + 1);
+            dirty_ = true;
+            return;
+        }
+        if (std::size_t pIdx = 0; parseIndexAfter(id, "profile_row:", pIdx)) {
+            if (profileEditMode_ != ProfileEditMode::None) {
+                profileEditMode_ = ProfileEditMode::None;
+                if (window_) SDL_StopTextInput(window_);
+            }
+            if (selectProfile(settings_, pIdx)) {
+                profileNameDraft_ = settings_.activeProfile;
+                settingsSaved_ = true;
+                clampProfileScroll();
+                dirty_ = true;
+            }
+            return;
+        }
+        if (id == "profile_name_field") {
+            profileEditMode_ = ProfileEditMode::Rename;
+            profileNameDraft_ = settings_.activeProfile;
+            focusedId_ = "profile_name_field";
+            if (window_) SDL_StartTextInput(window_);
+            dirty_ = true;
+            return;
+        }
+        if (id == "profile_new") {
+            if (profileEditMode_ != ProfileEditMode::New) {
+                profileEditMode_ = ProfileEditMode::New;
+                profileNameDraft_.clear();
+                focusedId_ = "profile_name_field";
+                if (window_) SDL_StartTextInput(window_);
+                dirty_ = true;
+                return;
+            }
+            std::string errKey;
+            if (createProfile(settings_, profileNameDraft_, &errKey)) {
+                profileEditMode_ = ProfileEditMode::None;
+                profileNameDraft_ = settings_.activeProfile;
+                if (window_) SDL_StopTextInput(window_);
+                focusedId_ = "missions";
+                settingsSaved_ = true;
+                clampProfileScroll();
+                showNotice(tr("Profile created."));
+            } else {
+                showNotice(tr(errKey));
+            }
+            return;
+        }
+        if (id == "profile_rename") {
+            if (profileEditMode_ != ProfileEditMode::Rename) {
+                profileEditMode_ = ProfileEditMode::Rename;
+                profileNameDraft_ = settings_.activeProfile;
+                focusedId_ = "profile_name_field";
+                if (window_) SDL_StartTextInput(window_);
+                dirty_ = true;
+                return;
+            }
+            std::string errKey;
+            if (renameActiveProfile(settings_, profileNameDraft_, &errKey)) {
+                profileEditMode_ = ProfileEditMode::None;
+                profileNameDraft_ = settings_.activeProfile;
+                if (window_) SDL_StopTextInput(window_);
+                focusedId_ = "missions";
+                settingsSaved_ = true;
+                showNotice(tr("Profile renamed."));
+            } else {
+                showNotice(tr(errKey));
+            }
+            return;
+        }
+        if (id == "profile_delete") {
+            if (profileEditMode_ != ProfileEditMode::None) {
+                profileEditMode_ = ProfileEditMode::None;
+                if (window_) SDL_StopTextInput(window_);
+            }
+            std::string errKey;
+            if (deleteActiveProfile(settings_, &errKey)) {
+                profileNameDraft_ = settings_.activeProfile;
+                settingsSaved_ = true;
+                clampProfileScroll();
+                showNotice(tr("Profile deleted."));
+            } else {
+                showNotice(tr(errKey));
+            }
+            return;
+        }
+        if (profileEditMode_ != ProfileEditMode::None) {
+            profileEditMode_ = ProfileEditMode::None;
+            profileNameDraft_ = settings_.activeProfile;
+            if (window_) SDL_StopTextInput(window_);
+            dirty_ = true;
+        }
     }
 
     if (prev == FrontEnd::Screen::LoadGame && id == "load_delete") {
@@ -1465,6 +1677,14 @@ void GoldFrontEnd::handleKey(SDL_Keycode key) {
     const auto prev = fe_.screen();
 
     if (key == SDLK_ESCAPE) {
+        if (prev == FrontEnd::Screen::SinglePlayer && profileEditMode_ != ProfileEditMode::None) {
+            profileEditMode_ = ProfileEditMode::None;
+            profileNameDraft_ = settings_.activeProfile;
+            if (window_) SDL_StopTextInput(window_);
+            focusedId_ = "missions";
+            dirty_ = true;
+            return;
+        }
         if (prev == FrontEnd::Screen::Options) cancelOptionsEdit();
         if (prev == FrontEnd::Screen::Multiplayer) {
             if (const auto p = parsePortText(mpPortDraft_)) fe_.setMpPort(*p);
@@ -1477,6 +1697,25 @@ void GoldFrontEnd::handleKey(SDL_Keycode key) {
         fe_.back();
         onScreenChanged(prev);
         return;
+    }
+
+    if (prev == FrontEnd::Screen::SinglePlayer && profileEditMode_ != ProfileEditMode::None) {
+        if (key == SDLK_BACKSPACE) {
+            while (!profileNameDraft_.empty() &&
+                   (static_cast<unsigned char>(profileNameDraft_.back()) & 0xc0u) == 0x80u) {
+                profileNameDraft_.pop_back();
+            }
+            if (!profileNameDraft_.empty()) profileNameDraft_.pop_back();
+            dirty_ = true;
+            return;
+        }
+        if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
+            activateId(profileEditMode_ == ProfileEditMode::New ? "profile_new" : "profile_rename");
+            return;
+        }
+        if ((key >= SDLK_A && key <= SDLK_Z) || (key >= SDLK_0 && key <= SDLK_9) || key == SDLK_SPACE) {
+            return;
+        }
     }
 
     if (prev == FrontEnd::Screen::Multiplayer && mpEditField_ != MpEditField::None) {
@@ -1535,6 +1774,8 @@ void GoldFrontEnd::handleKey(SDL_Keycode key) {
         focusedId_ = ids[next];
         if (std::size_t ci = 0; parseIndexAfter(focusedId_, "campaign:", ci)) {
             fe_.selectCampaign(ci);
+        } else if (std::size_t cci = 0; parseIndexAfter(focusedId_, "ccampaign:", cci)) {
+            fe_.selectCustomCampaign(cci);
         }
         dirty_ = true;
     };
@@ -1546,8 +1787,8 @@ void GoldFrontEnd::handleKey(SDL_Keycode key) {
             else if (key == SDLK_RETURN || key == SDLK_KP_ENTER || key == SDLK_SPACE) activateId(focusedId_);
             break;
         case FrontEnd::Screen::SinglePlayer:
-            if (key == SDLK_UP || key == SDLK_LEFT) cycleFocus({"campaigns", "missions", "load", "cancel"}, -1);
-            else if (key == SDLK_DOWN || key == SDLK_RIGHT) cycleFocus({"campaigns", "missions", "load", "cancel"}, 1);
+            if (key == SDLK_UP || key == SDLK_LEFT) cycleFocus({"campaigns", "missions", "load", "profile_new", "profile_rename", "profile_delete", "cancel"}, -1);
+            else if (key == SDLK_DOWN || key == SDLK_RIGHT || key == SDLK_TAB) cycleFocus({"campaigns", "missions", "load", "profile_new", "profile_rename", "profile_delete", "cancel"}, 1);
             else if (key == SDLK_RETURN || key == SDLK_KP_ENTER || key == SDLK_SPACE) activateId(focusedId_);
             break;
         case FrontEnd::Screen::Campaigns: {
@@ -1572,6 +1813,27 @@ void GoldFrontEnd::handleKey(SDL_Keycode key) {
             }
             break;
         }
+        case FrontEnd::Screen::CustomCampaigns: {
+            std::vector<std::string> order;
+            order.reserve(customCampaigns_.size() + 1);
+            for (std::size_t i = 0; i < customCampaigns_.size(); ++i) {
+                order.push_back("ccampaign:" + std::to_string(i));
+            }
+            order.push_back("cancel");
+            if (key == SDLK_UP) cycleFocus(order, -1);
+            else if (key == SDLK_DOWN) cycleFocus(order, 1);
+            else if (key == SDLK_LEFT || key == SDLK_RIGHT || key == SDLK_TAB) {
+                if (focusedId_ == "cancel" && !customCampaigns_.empty()) {
+                    focusedId_ = "ccampaign:" + std::to_string(fe_.selectedCustomCampaign());
+                } else {
+                    focusedId_ = "cancel";
+                }
+                dirty_ = true;
+            } else if (key == SDLK_RETURN || key == SDLK_KP_ENTER || key == SDLK_SPACE) {
+                activateId(focusedId_.empty() ? "cancel" : focusedId_);
+            }
+            break;
+        }
         case FrontEnd::Screen::SingleMissions:
         case FrontEnd::Screen::CampaignMissions:
         case FrontEnd::Screen::Replays:
@@ -1584,10 +1846,11 @@ void GoldFrontEnd::handleKey(SDL_Keycode key) {
             const std::size_t count = activeListCount();
             auto loadSelectedOverview = [&] {
                 if (fe_.screen() == FrontEnd::Screen::CampaignMissions) {
-                    const std::size_t ci = fe_.selectedCampaign();
+                    const auto& active = activeCampaignList();
+                    const std::size_t ci = activeCampaignIndex();
                     const std::size_t mi = fe_.selectedCampaignMission();
-                    if (ci < campaigns_.size() && mi < campaigns_[ci].missions.size()) {
-                        ensureOverviewLoaded(campaigns_[ci].missions[mi].path);
+                    if (ci < active.size() && mi < active[ci].missions.size()) {
+                        ensureOverviewLoaded(active[ci].missions[mi].path);
                     }
                 } else if (fe_.screen() == FrontEnd::Screen::SingleMissions) {
                     if (const auto mi = fe_.selected(); mi < missions_.size()) {
@@ -1808,6 +2071,12 @@ void GoldFrontEnd::handleMouseDown(double stageX, double stageY, std::uint8_t cl
             if (window_) SDL_StopTextInput(window_);
             dirty_ = true;
         }
+        if (fe_.screen() == FrontEnd::Screen::SinglePlayer && profileEditMode_ != ProfileEditMode::None) {
+            profileEditMode_ = ProfileEditMode::None;
+            profileNameDraft_ = settings_.activeProfile;
+            if (window_) SDL_StopTextInput(window_);
+            dirty_ = true;
+        }
         return;
     }
 
@@ -1828,9 +2097,10 @@ void GoldFrontEnd::handleMouseDown(double stageX, double stageY, std::uint8_t cl
             const bool alreadySelected = (idx == activeListSelected());
             selectActiveRow(idx);
             if (fe_.screen() == FrontEnd::Screen::CampaignMissions) {
-                const std::size_t ci = fe_.selectedCampaign();
-                if (ci < campaigns_.size() && idx < campaigns_[ci].missions.size()) {
-                    ensureOverviewLoaded(campaigns_[ci].missions[idx].path);
+                const auto& active = activeCampaignList();
+                const std::size_t ci = activeCampaignIndex();
+                if (ci < active.size() && idx < active[ci].missions.size()) {
+                    ensureOverviewLoaded(active[ci].missions[idx].path);
                 }
             } else if (fe_.screen() == FrontEnd::Screen::SingleMissions && idx < missions_.size()) {
                 ensureOverviewLoaded(missions_[idx].path);
@@ -1875,6 +2145,13 @@ void GoldFrontEnd::handleMouseWheel(float dy) {
         dirty_ = true;
     } else if (fe_.screen() == FrontEnd::Screen::Ratings && dy != 0.0f) {
         scrollRatingsBy(dy > 0 ? -3 : 3);
+    } else if (fe_.screen() == FrontEnd::Screen::SinglePlayer && dy != 0.0f) {
+        const int maxOff = std::max(0, int(settings_.profiles.size()) - kVisibleProfileRows);
+        const int next = std::clamp(profileScroll_ + (dy > 0 ? -3 : 3), 0, maxOff);
+        if (next != profileScroll_) {
+            profileScroll_ = next;
+            dirty_ = true;
+        }
     } else if (fe_.screen() == FrontEnd::Screen::Credits && dy != 0.0f) {
         const double minScroll = -kCreditsClipH + 40.0;
         const double maxScroll = creditsContentHeight_ > 0.0 ? creditsContentHeight_ : 1.0e6;
@@ -1892,6 +2169,23 @@ void GoldFrontEnd::handleEvent(const SDL_Event& event) {
 
     if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat) {
         handleKey(event.key.key);
+        return;
+    }
+
+    if (event.type == SDL_EVENT_TEXT_INPUT &&
+        fe_.screen() == FrontEnd::Screen::SinglePlayer &&
+        profileEditMode_ != ProfileEditMode::None && event.text.text) {
+        const std::string_view txt(event.text.text);
+        for (unsigned char uc : txt) {
+            if (uc < 0x20u || uc == 0x7fu || uc == '=' || uc == ':' || uc == ',' ||
+                uc == ';' || uc == '|' || uc == '/' || uc == '\\') {
+                continue;
+            }
+            if (profileNameDraft_.size() < 24u) {
+                profileNameDraft_.push_back(char(uc));
+            }
+        }
+        dirty_ = true;
         return;
     }
 
@@ -2272,56 +2566,133 @@ void GoldFrontEnd::renderToBuffer(int pixelW, int pixelH, std::vector<std::uint8
             cairo_set_source_rgba(cr, 232.0 / 255.0, 228.0 / 255.0, 200.0 / 255.0, 0.85);
             pango_cairo_show_layout(cr, ver.get());
         } else if (screen == FrontEnd::Screen::SinglePlayer) {
+            ensureProfilesInitialized(settings_);
             drawHeading(cr, pangoCtx, tr("Single Player"), {310, 28, 180, 34}, 17.0);
 
             auto nameLbl = makeTextLayout(pangoCtx, tr("Player name:"), 14.0, false);
             cairo_move_to(cr, 122, 72);
             cairo_set_source_rgb(cr, 236.0 / 255.0, 232.0 / 255.0, 212.0 / 255.0);
             pango_cairo_show_layout(cr, nameLbl.get());
-            drawBronzeBox(cr, 66, 94, 238, 28, 0.86);
-            auto prof = makeTextLayout(pangoCtx, "YourID", 13.5, true);
-            cairo_move_to(cr, 74, 100);
-            cairo_set_source_rgb(cr, 240.0 / 255.0, 240.0 / 255.0, 230.0 / 255.0);
+            const bool nameEditing = (profileEditMode_ != ProfileEditMode::None);
+            const bool nameHov = (hoveredId_ == "profile_name_field");
+            drawBronzeBox(cr, kProfileNameRect.x, kProfileNameRect.y, kProfileNameRect.w, kProfileNameRect.h,
+                          nameEditing ? 0.96 : nameHov ? 0.91 : 0.86);
+            if (nameEditing) {
+                cairo_set_source_rgba(cr, 212.0 / 255.0, 198.0 / 255.0, 118.0 / 255.0, 0.92);
+                cairo_set_line_width(cr, 1.5);
+                cairo_rectangle(cr, kProfileNameRect.x + 1.0, kProfileNameRect.y + 1.0,
+                                kProfileNameRect.w - 2.0, kProfileNameRect.h - 2.0);
+                cairo_stroke(cr);
+            }
+            const bool draftEmpty = profileNameDraft_.empty();
+            const std::string shownName = draftEmpty
+                ? (nameEditing ? "_" : tr("Enter player name"))
+                : (nameEditing ? (profileNameDraft_ + "_") : profileNameDraft_);
+            auto prof = makeTextLayout(pangoCtx, shownName, 13.5, !draftEmpty);
+            pango_layout_set_width(prof.get(), int((kProfileNameRect.w - 16.0) * PANGO_SCALE));
+            pango_layout_set_ellipsize(prof.get(), PANGO_ELLIPSIZE_START);
+            cairo_move_to(cr, kProfileNameRect.x + 8.0, kProfileNameRect.y + 6.0);
+            if (draftEmpty && !nameEditing) cairo_set_source_rgb(cr, 165.0 / 255.0, 165.0 / 255.0, 148.0 / 255.0);
+            else if (nameEditing) cairo_set_source_rgb(cr, 252.0 / 255.0, 240.0 / 255.0, 182.0 / 255.0);
+            else cairo_set_source_rgb(cr, 240.0 / 255.0, 240.0 / 255.0, 230.0 / 255.0);
             pango_cairo_show_layout(cr, prof.get());
 
             auto listLbl = makeTextLayout(pangoCtx, tr("Player list:"), 14.0, false);
             cairo_move_to(cr, 540, 72);
             cairo_set_source_rgb(cr, 236.0 / 255.0, 232.0 / 255.0, 212.0 / 255.0);
             pango_cairo_show_layout(cr, listLbl.get());
-            drawBronzeBox(cr, 462, 95, 258, 362, 0.86);
-            drawGoldScrollbar(720, 95, 18, 362, kVisibleMissionRows, false, 1, 0, false, false, false);
-            auto item = makeTextLayout(pangoCtx, "YourID", 13.5, true);
-            cairo_move_to(cr, 472, 104);
-            cairo_set_source_rgb(cr, 49.0 / 255.0, 174.0 / 255.0, 74.0 / 255.0);
-            pango_cairo_show_layout(cr, item.get());
+            drawBronzeBox(cr, kProfileListRect.x, kProfileListRect.y, kProfileListRect.w, kProfileListRect.h, 0.86);
+            drawGoldScrollbar(720, 95, 18, 362, kVisibleProfileRows,
+                              settings_.profiles.size() > std::size_t(kVisibleProfileRows),
+                              settings_.profiles.size(), profileScroll_,
+                              hoveredId_ == "profile_scroll_up", hoveredId_ == "profile_scroll_down", false);
+
+            cairo_save(cr);
+            cairo_rectangle(cr, kProfileListRect.x + 4, kProfileListRect.y + 4,
+                            kProfileListRect.w - 8, kProfileListRect.h - 8);
+            cairo_clip(cr);
+            const int profCount = int(settings_.profiles.size());
+            const int maxOff = std::max(0, profCount - kVisibleProfileRows);
+            profileScroll_ = std::clamp(profileScroll_, 0, maxOff);
+            const int endIdx = std::min(profCount, profileScroll_ + kVisibleProfileRows);
+            for (int idx = profileScroll_; idx < endIdx; ++idx) {
+                const int row = idx - profileScroll_;
+                const double ry = kProfileListRect.y + 6.0 + row * kRowH;
+                const auto& p = settings_.profiles[std::size_t(idx)];
+                const bool isActive = profileNameEquals(p.name, settings_.activeProfile);
+                const bool isHov = (hoveredId_ == "profile_row:" + std::to_string(idx));
+                if (isActive) {
+                    cairo_set_source_rgba(cr, 98.0 / 255.0, 114.0 / 255.0, 72.0 / 255.0, 0.38);
+                    cairo_rectangle(cr, kProfileListRect.x + 5, ry, kProfileListRect.w - 10, kRowH - 1.0);
+                    cairo_fill(cr);
+                } else if (isHov) {
+                    cairo_set_source_rgba(cr, 72.0 / 255.0, 96.0 / 255.0, 56.0 / 255.0, 0.22);
+                    cairo_rectangle(cr, kProfileListRect.x + 5, ry, kProfileListRect.w - 10, kRowH - 1.0);
+                    cairo_fill(cr);
+                }
+                std::string label = p.name;
+                if (!p.completedMissions.empty()) {
+                    label += "  (" + std::to_string(p.completedMissions.size()) + " [\xE2\x9C\x93])";
+                }
+                auto item = makeTextLayout(pangoCtx, label, 13.0, isActive);
+                pango_layout_set_width(item.get(), int((kProfileListRect.w - 20.0) * PANGO_SCALE));
+                pango_layout_set_ellipsize(item.get(), PANGO_ELLIPSIZE_END);
+                cairo_move_to(cr, kProfileListRect.x + 10.0, ry + 2.0);
+                if (isActive) cairo_set_source_rgb(cr, 245.0 / 255.0, 245.0 / 255.0, 245.0 / 255.0);
+                else if (isHov) cairo_set_source_rgb(cr, 128.0 / 255.0, 224.0 / 255.0, 138.0 / 255.0);
+                else cairo_set_source_rgb(cr, 49.0 / 255.0, 174.0 / 255.0, 74.0 / 255.0);
+                pango_cairo_show_layout(cr, item.get());
+            }
+            cairo_restore(cr);
 
             for (const auto& b : kSinglePlayerButtons) {
                 const bool small = (std::string_view(b.id).rfind("profile_", 0) == 0);
+                const bool activeButton =
+                    (profileEditMode_ == ProfileEditMode::New && std::string_view(b.id) == "profile_new") ||
+                    (profileEditMode_ == ProfileEditMode::Rename && std::string_view(b.id) == "profile_rename");
                 drawGoldStencilButton(cr, pangoCtx, b.rect, tr(b.enLabel), b.shortcut,
-                                      hoveredId_ == b.id, focusedId_ == b.id, b.enabled,
+                                      hoveredId_ == b.id, focusedId_ == b.id || activeButton, b.enabled,
                                       small ? 17.5 : 24.0, small);
             }
-        } else if (screen == FrontEnd::Screen::Campaigns) {
-            drawHeading(cr, pangoCtx, tr("Campaigns"), {310, 28, 180, 34}, 17.0);
+        } else if (screen == FrontEnd::Screen::Campaigns || screen == FrontEnd::Screen::CustomCampaigns) {
+            const bool isCustom = (screen == FrontEnd::Screen::CustomCampaigns);
+            const auto& list = isCustom ? customCampaigns_ : campaigns_;
+            const char* btnPrefix = isCustom ? "ccampaign:" : "campaign:";
+            drawHeading(cr, pangoCtx, tr(isCustom ? "Custom Campaigns" : "Campaigns"), {240, 28, 320, 34}, 17.0);
 
-            if (campaigns_.empty()) {
-                drawBronzeBox(cr, 43, 134, 330, 120, 0.88);
-                auto emptyLbl = makeTextLayout(pangoCtx, tr("No campaigns installed."), 14.0, false);
-                cairo_move_to(cr, 60, 182);
-                cairo_set_source_rgb(cr, 180.0 / 255.0, 180.0 / 255.0, 165.0 / 255.0);
+            if (list.empty()) {
+                drawBronzeBox(cr, 43, 134, 714, 148, 0.88);
+                auto emptyLbl = makeTextLayout(cr ? pangoCtx : pangoCtx,
+                                               tr(isCustom ? "No custom campaigns installed." : "No campaigns installed."),
+                                               14.5, true);
+                cairo_move_to(cr, 64, 166);
+                cairo_set_source_rgb(cr, 232.0 / 255.0, 224.0 / 255.0, 188.0 / 255.0);
                 pango_cairo_show_layout(cr, emptyLbl.get());
+                if (isCustom) {
+                    auto hintLbl = makeTextLayout(pangoCtx,
+                        "maps/custom_campaign/<CampaignName>/   |   ~/.local/share/ss2/custom_campaigns/",
+                        12.5, false, 670.0);
+                    cairo_move_to(cr, 64, 206);
+                    cairo_set_source_rgb(cr, 180.0 / 255.0, 188.0 / 255.0, 165.0 / 255.0);
+                    pango_cairo_show_layout(cr, hintLbl.get());
+                }
             } else {
-                const std::size_t pIdx = previewCampaignIndex();
-                for (std::size_t i = 0; i < campaigns_.size(); ++i) {
-                    const std::string cid = "campaign:" + std::to_string(i);
-                    const auto disp = campaignButtonDisplay(campaigns_[i].name);
-                    const RectD r = campaignRectFor(i, campaigns_.size());
-                    drawGoldStencilButton(cr, pangoCtx, r, disp.label, disp.shortcut,
-                                          hoveredId_ == cid, focusedId_ == cid || i == pIdx, true, 24.0);
+                const std::size_t pIdx = previewCampaignIndex(isCustom);
+                for (std::size_t i = 0; i < list.size(); ++i) {
+                    const std::string cid = std::string(btnPrefix) + std::to_string(i);
+                    const RectD r = campaignRectFor(i, list.size());
+                    if (isCustom) {
+                        drawGoldStencilButton(cr, pangoCtx, r, list[i].name, '\0',
+                                              hoveredId_ == cid, focusedId_ == cid || i == pIdx, true, 19.0, true);
+                    } else {
+                        const auto disp = campaignButtonDisplay(list[i].name);
+                        drawGoldStencilButton(cr, pangoCtx, r, disp.label, disp.shortcut,
+                                              hoveredId_ == cid, focusedId_ == cid || i == pIdx, true, 24.0);
+                    }
                 }
 
                 // Right-hand Campaign Dossier panel synced with hovered/focused/selected nation
-                const auto& camp = campaigns_[pIdx];
+                const auto& camp = list[pIdx];
                 drawHeading(cr, pangoCtx, camp.name, {420, 74, 348, 26}, 15.5);
                 drawBronzeBox(cr, 420, 104, 348, 384, 0.86);
 
@@ -2383,15 +2754,21 @@ void GoldFrontEnd::renderToBuffer(int pixelW, int pixelH, std::vector<std::uint8
                 drawHeading(cr, pangoCtx, diffStr, {434, 456, 320, 18}, 12.5);
             }
 
-            for (const auto& b : kCampaignFooterButtons) {
-                drawGoldStencilButton(cr, pangoCtx, b.rect, tr(b.enLabel), b.shortcut,
-                                      hoveredId_ == b.id, focusedId_ == b.id, b.enabled, 24.0);
+            if (isCustom) {
+                drawGoldStencilButton(cr, pangoCtx, kCustomCancelRect, tr("Cancel"), '\0',
+                                      hoveredId_ == "cancel", focusedId_ == "cancel", true, 24.0);
+            } else {
+                for (const auto& b : kCampaignFooterButtons) {
+                    drawGoldStencilButton(cr, pangoCtx, b.rect, tr(b.enLabel), b.shortcut,
+                                          hoveredId_ == b.id, focusedId_ == b.id, b.enabled, 24.0);
+                }
             }
         } else if (screen == FrontEnd::Screen::CampaignMissions) {
-            const std::size_t ci = fe_.selectedCampaign();
+            const auto& active = activeCampaignList();
+            const std::size_t ci = activeCampaignIndex();
             static const std::vector<GoldCampaignMissionEntry> kEmptyCampaignMissions;
-            const auto& campName = ci < campaigns_.size() ? campaigns_[ci].name : tr("Campaigns");
-            const auto& cMissions = ci < campaigns_.size() ? campaigns_[ci].missions : kEmptyCampaignMissions;
+            const auto& campName = ci < active.size() ? active[ci].name : tr(fe_.inCustomCampaign() ? "Custom Campaigns" : "Campaigns");
+            const auto& cMissions = ci < active.size() ? active[ci].missions : kEmptyCampaignMissions;
             renderMissionBrowser(campName, [&](std::size_t i) -> const auto& { return cMissions[i]; },
                                  cMissions.size(), fe_.selectedCampaignMission(), "cmission:", true);
         } else if (screen == FrontEnd::Screen::SingleMissions) {

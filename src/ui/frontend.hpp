@@ -17,7 +17,7 @@ namespace ss2 {
 class FrontEnd {
 public:
     enum class Screen {
-        MainMenu, SinglePlayer, SingleMissions, Campaigns, CampaignMissions,
+        MainMenu, SinglePlayer, SingleMissions, Campaigns, CustomCampaigns, CampaignMissions,
         Briefing, Multiplayer, Options, Ratings, Replays, LoadGame, Credits,
         Launch, LaunchReplay, LaunchSave, LaunchMultiplayer, Quit
     };
@@ -68,6 +68,7 @@ public:
 
     void setMissions(std::vector<Entry> missions);
     void setCampaigns(std::vector<CampaignEntry> campaigns);
+    void setCustomCampaigns(std::vector<CampaignEntry> campaigns);
     void setReplays(std::vector<ReplayEntry> replays);
     void setSaves(std::vector<SaveEntry> saves);
     void setMultiplayerMissions(std::vector<Entry> missions);
@@ -83,6 +84,10 @@ public:
     const std::vector<CampaignEntry>& campaigns() const { return campaigns_; }
     std::size_t selectedCampaign() const { return selectedCampaign_; }
     void selectCampaign(std::size_t index);
+    const std::vector<CampaignEntry>& customCampaigns() const { return customCampaigns_; }
+    std::size_t selectedCustomCampaign() const { return selectedCustomCampaign_; }
+    void selectCustomCampaign(std::size_t index);
+    bool inCustomCampaign() const { return inCustomCampaign_; }
     std::size_t selectedCampaignMission() const { return selectedCampaignMission_; }
     void selectCampaignMission(std::size_t index);
     const CampaignEntry* currentCampaign() const;
@@ -143,15 +148,18 @@ private:
     Screen screen_ = Screen::MainMenu;
     std::vector<Entry> missions_;
     std::vector<CampaignEntry> campaigns_;
+    std::vector<CampaignEntry> customCampaigns_;
     std::vector<ReplayEntry> replays_;
     std::vector<SaveEntry> saves_;
     std::vector<Entry> mpMissions_;
     std::size_t selected_ = 0;
     std::size_t selectedCampaign_ = 0;
+    std::size_t selectedCustomCampaign_ = 0;
     std::size_t selectedCampaignMission_ = 0;
     std::size_t selectedReplay_ = 0;
     std::size_t selectedSave_ = 0;
     std::size_t selectedMpMission_ = 0;
+    bool inCustomCampaign_ = false;
     bool briefingFromCampaign_ = false;
     bool mpIsHost_ = true;
     std::string mpHostAddress_ = "127.0.0.1";

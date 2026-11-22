@@ -136,6 +136,51 @@ int main() {
             std::error_code ec;
             std::filesystem::remove_all(tmpDir, ec);
         }
+
+        // Multi-profile player settings: legacy migration, create/rename/delete, isolation, INI round-trip.
+        {
+            const std::string legacyIni =
+                "active_difficulty = 1\n"
+                "completed_missions = 023000,alpha\n"
+                "high_scores = 023000:7500,alpha:4200\n";
+            UserSettings cfg = parseUserSettings(legacyIni);
+            check(cfg.activeProfile == "YourID" && cfg.profiles.size() == 1 &&
+                  cfg.completedMissions.count("023000") && cfg.missionHighScores["023000"] == 7500,
+                  "legacy INI migrates progress into default YourID profile");
+            check(sanitizeProfileName("  Bad:Name=1/2\\3  ") == "BadName123",
+                  "sanitizeProfileName trims and strips delimiter characters");
+            check(createProfile(cfg, "Rommel") && cfg.activeProfile == "Rommel" &&
+                  cfg.profiles.size() == 2 && cfg.completedMissions.empty() && cfg.missionHighScores.empty(),
+                  "createProfile creates isolated empty profile and activates it");
+            check(!createProfile(cfg, "rOmMeL") && !createProfile(cfg, "   "),
+                  "createProfile rejects duplicates (case-insensitive) and blanks");
+
+            cfg.completedMissions.insert("01_DOVER");
+            cfg.missionHighScores["01_DOVER"] = 9100;
+            check(renameActiveProfile(cfg, "Manstein") && cfg.activeProfile == "Manstein" &&
+                  cfg.missionHighScores["01_DOVER"] == 9100,
+                  "renameActiveProfile renames active profile and keeps scores");
+            check(!renameActiveProfile(cfg, "yourid"),
+                  "renameActiveProfile rejects collision with existing profile");
+
+            check(selectProfile(cfg, 0) && cfg.activeProfile == "YourID" &&
+                  cfg.missionHighScores["023000"] == 7500 && !cfg.missionHighScores.count("01_DOVER"),
+                  "selectProfile restores YourID progress without cross-profile bleed");
+
+            const UserSettings roundTrip = parseUserSettings(serializeUserSettings(cfg));
+            check(roundTrip.profiles.size() == 2 && roundTrip.activeProfile == "YourID" &&
+                  roundTrip.profiles[0].missionHighScores.at("023000") == 7500 &&
+                  roundTrip.profiles[1].name == "Manstein" &&
+                  roundTrip.profiles[1].missionHighScores.at("01_DOVER") == 9100,
+                  "multi-profile INI round-trip preserves all profiles and scores");
+
+            UserSettings delCfg = roundTrip;
+            check(selectProfile(delCfg, 1) && deleteActiveProfile(delCfg) &&
+                  delCfg.profiles.size() == 1 && delCfg.activeProfile == "YourID",
+                  "deleteActiveProfile removes selected profile and restores remaining profile");
+            check(!deleteActiveProfile(delCfg),
+                  "deleteActiveProfile refuses to delete the last remaining profile");
+        }
     } catch (const std::exception& e) {
         std::cerr << e.what() << '\n';
         return 1;

@@ -24,7 +24,7 @@ unsigned dirDelta32(unsigned a, unsigned b) {
 }
 int TutorialUnits::scaleVehicleDamageForDifficulty(int targetOwner, int rawDamage) const {
     if (rawDamage <= 0 || targetOwner != 0) return rawDamage;
-    if (difficulty_ == 1) return std::max(1, (rawDamage * 80) / 100);
+    if (difficulty_ <= 1) return std::max(1, (rawDamage * 80) / 100);
     if (difficulty_ == 3) return std::max(1, (rawDamage * 115) / 100);
     return rawDamage;
 }

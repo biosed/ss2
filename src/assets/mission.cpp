@@ -8,11 +8,13 @@
 #include <csetjmp>
 #include <cstdint>
 #include <cstring>
+#include <fstream>
 #include <jpeglib.h>
 #include <map>
 #include <memory>
 #include <optional>
 #include <span>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -389,6 +391,67 @@ void parseReinforcements(BytesView unamesRaw, BytesView support,
     }
     if (!support.empty())
         throw std::runtime_error("Trailing mission reinforcement bytes");
+}
+std::optional<CampaignMissionSummary> findCampaignMissionInList(const std::vector<CampaignSummary>& campaigns,
+                                                                std::string_view query,
+                                                                bool easy) {
+    const std::string_view q = trimAscii(query);
+    if (q.empty() || campaigns.empty()) return std::nullopt;
+
+    const auto applyDifficulty = [easy](CampaignMissionSummary m) {
+        if (easy && !m.easyPath.empty()) m.path = m.easyPath;
+        return m;
+    };
+
+    if (const auto colon = q.find(':'); colon != std::string_view::npos) {
+        std::string campQ = asciiLower(trimAscii(q.substr(0, colon)));
+        if (campQ == "american" || campQ == "usa") campQ = "us";
+        else if (campQ == "soviet" || campQ == "ussr") campQ = "russian";
+        else if (campQ == "uk") campQ = "british";
+        const std::string_view idxStr = trimAscii(q.substr(colon + 1));
+        std::size_t idx = 0;
+        const auto [ptr, ec] = std::from_chars(idxStr.data(), idxStr.data() + idxStr.size(), idx);
+        if (ec != std::errc{} || ptr != idxStr.data() + idxStr.size() || idx == 0 || campQ.empty()) {
+            return std::nullopt;
+        }
+        std::vector<const CampaignSummary*> prefixMatches;
+        std::vector<const CampaignSummary*> substrMatches;
+        for (const auto& c : campaigns) {
+            const std::string cLower = asciiLower(c.name);
+            if (cLower == campQ || cLower.starts_with(campQ)) {
+                prefixMatches.push_back(&c);
+            } else if (cLower.find(campQ) != std::string::npos) {
+                substrMatches.push_back(&c);
+            }
+        }
+        const auto& chosen = !prefixMatches.empty() ? prefixMatches : substrMatches;
+        if (chosen.size() == 1 && idx <= chosen.front()->missions.size()) {
+            return applyDifficulty(chosen.front()->missions[idx - 1]);
+        }
+        return std::nullopt;
+    }
+
+    const std::string qLower = asciiLower(q);
+    for (const auto& c : campaigns) {
+        for (const auto& m : c.missions) {
+            if (asciiLower(m.code) == qLower || asciiLower(m.title) == qLower) {
+                return applyDifficulty(m);
+            }
+        }
+    }
+
+    std::vector<const CampaignMissionSummary*> sub;
+    for (const auto& c : campaigns) {
+        for (const auto& m : c.missions) {
+            if (asciiLower(m.title).find(qLower) != std::string::npos ||
+                asciiLower(c.name).find(qLower) != std::string::npos) {
+                sub.push_back(&m);
+            }
+        }
+    }
+    if (sub.empty()) return std::nullopt;
+    if (sub.size() == 1) return applyDifficulty(*sub.front());
+    return std::nullopt;
 }
 } // namespace
 
@@ -950,65 +1013,192 @@ std::vector<CampaignSummary> listCampaigns(const std::filesystem::path& gameDir)
 std::optional<CampaignMissionSummary> findCampaignMission(const std::filesystem::path& gameDir,
                                                           std::string_view query,
                                                           bool easy) {
-    const std::string_view q = trimAscii(query);
-    if (q.empty()) return std::nullopt;
-    const auto campaigns = listCampaigns(gameDir);
-    if (campaigns.empty()) return std::nullopt;
+    return findCampaignMissionInList(listCampaigns(gameDir), query, easy);
+}
 
-    const auto applyDifficulty = [easy](CampaignMissionSummary m) {
-        if (easy && !m.easyPath.empty()) m.path = m.easyPath;
-        return m;
-    };
+std::vector<CampaignSummary> listCustomCampaigns(const std::filesystem::path& gameDir,
+                                                 const std::filesystem::path& userDir) {
+    std::vector<std::filesystem::path> candidateRoots;
+    std::error_code ec;
+    if (!gameDir.empty()) {
+        if (const auto mapsDir = findChildDirIgnoreCase(gameDir, "maps")) {
+            if (const auto ccDir = findChildDirIgnoreCase(*mapsDir, "custom_campaign");
+                ccDir && std::filesystem::is_directory(*ccDir, ec) && !ec) {
+                candidateRoots.push_back(*ccDir);
+            }
+        }
+    }
+    if (!userDir.empty() && std::filesystem::is_directory(userDir, ec) && !ec) {
+        candidateRoots.push_back(userDir);
+    }
 
-    if (const auto colon = q.find(':'); colon != std::string_view::npos) {
-        std::string campQ = asciiLower(trimAscii(q.substr(0, colon)));
-        if (campQ == "american" || campQ == "usa") campQ = "us";
-        else if (campQ == "soviet" || campQ == "ussr") campQ = "russian";
-        else if (campQ == "uk") campQ = "british";
-        const std::string_view idxStr = trimAscii(q.substr(colon + 1));
-        std::size_t idx = 0;
-        const auto [ptr, ec] = std::from_chars(idxStr.data(), idxStr.data() + idxStr.size(), idx);
-        if (ec != std::errc{} || ptr != idxStr.data() + idxStr.size() || idx == 0 || campQ.empty()) {
+    std::vector<std::filesystem::path> roots;
+    std::vector<std::filesystem::path> canonicalSeen;
+    for (const auto& r : candidateRoots) {
+        std::error_code cEc;
+        auto can = std::filesystem::weakly_canonical(r, cEc);
+        if (cEc) can = r;
+        if (std::ranges::find(canonicalSeen, can) == canonicalSeen.end()) {
+            canonicalSeen.push_back(std::move(can));
+            roots.push_back(r);
+        }
+    }
+
+    auto loadFileSummary = [](const std::filesystem::path& filePath,
+                              const std::optional<std::filesystem::path>& easyDir,
+                              const std::string& codeOverride = {},
+                              const std::string& titleOverride = {})
+        -> std::optional<CampaignMissionSummary> {
+        try {
+            const auto archive = loadMissionArchive(filePath);
+            std::filesystem::path easyPath;
+            if (easyDir) {
+                if (const auto ep = findChildFileIgnoreCase(*easyDir, filePath.filename().string())) {
+                    easyPath = *ep;
+                }
+            }
+            std::string title = titleOverride;
+            if (title.empty()) title = parseDescriptionIn(archive, true);
+            if (title.empty()) title = displayNameFromStem(filePath.stem().string());
+            std::string code = codeOverride.empty() ? filePath.stem().string() : codeOverride;
+            std::string description = parseDescriptionIn(archive, false);
+            return CampaignMissionSummary{
+                std::move(code), std::move(title), filePath, std::move(easyPath),
+                archive.width, archive.height, archive.scheme, std::move(description)
+            };
+        } catch (const std::exception&) {
             return std::nullopt;
         }
-        std::vector<const CampaignSummary*> prefixMatches;
-        std::vector<const CampaignSummary*> substrMatches;
-        for (const auto& c : campaigns) {
-            const std::string cLower = asciiLower(c.name);
-            if (cLower == campQ || cLower.starts_with(campQ)) {
-                prefixMatches.push_back(&c);
-            } else if (cLower.find(campQ) != std::string::npos) {
-                substrMatches.push_back(&c);
+    };
+
+    auto scanMissionDir = [&](const std::filesystem::path& dir, const std::string& fallbackName) {
+        std::vector<CampaignSummary> found;
+        const auto easyDir = findChildDirIgnoreCase(dir, "EASY");
+
+        if (const auto seqPath = findChildFileIgnoreCase(dir, "campaign.seq")) {
+            std::ifstream seqIn(*seqPath, std::ios::binary);
+            if (seqIn) {
+                std::ostringstream ss;
+                ss << seqIn.rdbuf();
+                const std::string seqText = decodeMissionText(ss.str());
+                std::size_t pos = 0;
+                while (pos < seqText.size()) {
+                    std::size_t eol = seqText.find('\n', pos);
+                    if (eol == std::string_view::npos) eol = seqText.size();
+                    const std::string_view line = trimAscii(std::string_view(seqText).substr(pos, eol - pos));
+                    pos = eol + 1;
+                    if (line.empty() || line.front() == '#' || line.front() == ';') continue;
+                    if (line.front() == '>') {
+                        const std::string cname(trimAscii(line.substr(1)));
+                        if (!cname.empty()) found.push_back({cname, {}});
+                        continue;
+                    }
+                    const auto gt = line.find('>');
+                    const bool hasTitle = (gt != std::string_view::npos);
+                    const std::string code(trimAscii(hasTitle ? line.substr(0, gt) : line));
+                    const std::string title = hasTitle ? std::string(trimAscii(line.substr(gt + 1))) : std::string{};
+                    if (code.empty()) continue;
+                    if (found.empty()) found.push_back({fallbackName, {}});
+                    std::optional<std::filesystem::path> mFile;
+                    if (hasTitle) {
+                        mFile = findChildFileIgnoreCase(dir, code + ".ssc");
+                        if (!mFile) mFile = findChildFileIgnoreCase(dir, code + ".ssm");
+                        if (!mFile) mFile = findChildFileIgnoreCase(dir, code);
+                    } else {
+                        mFile = findChildFileIgnoreCase(dir, code);
+                        if (!mFile) mFile = findChildFileIgnoreCase(dir, code + ".ssc");
+                        if (!mFile) mFile = findChildFileIgnoreCase(dir, code + ".ssm");
+                    }
+                    if (mFile) {
+                        const std::string resolvedCode = hasTitle ? code : mFile->stem().string();
+                        if (auto sum = loadFileSummary(*mFile, easyDir, resolvedCode, title)) {
+                            found.back().missions.push_back(std::move(*sum));
+                        }
+                    }
+                }
+                std::erase_if(found, [](const CampaignSummary& c) { return c.missions.empty(); });
+                if (!found.empty()) return found;
             }
         }
-        const auto& chosen = !prefixMatches.empty() ? prefixMatches : substrMatches;
-        if (chosen.size() == 1 && idx <= chosen.front()->missions.size()) {
-            return applyDifficulty(chosen.front()->missions[idx - 1]);
+
+        std::vector<std::filesystem::path> files;
+        std::error_code fEc;
+        for (std::filesystem::directory_iterator it(dir, fEc), end; !fEc && it != end; it.increment(fEc)) {
+            std::error_code regEc;
+            if (!it->is_regular_file(regEc)) continue;
+            const std::string ext = it->path().extension().string();
+            if (asciiEqualsIgnoreCase(ext, ".ssc") || asciiEqualsIgnoreCase(ext, ".ssm")) {
+                files.push_back(it->path());
+            }
         }
-        return std::nullopt;
+        std::ranges::sort(files);
+        if (!files.empty()) {
+            CampaignSummary cs{fallbackName, {}};
+            for (const auto& f : files) {
+                if (auto sum = loadFileSummary(f, easyDir)) {
+                    cs.missions.push_back(std::move(*sum));
+                }
+            }
+            if (!cs.missions.empty()) found.push_back(std::move(cs));
+        }
+        return found;
+    };
+
+    std::vector<CampaignSummary> out;
+    for (const auto& root : roots) {
+        std::vector<std::filesystem::path> subdirs;
+        std::error_code dEc;
+        for (std::filesystem::directory_iterator it(root, dEc), end; !dEc && it != end; it.increment(dEc)) {
+            std::error_code isDirEc;
+            if (!it->is_directory(isDirEc)) continue;
+            const std::string dirName = it->path().filename().string();
+            if (asciiEqualsIgnoreCase(dirName, "EASY")) continue;
+            subdirs.push_back(it->path());
+        }
+        std::ranges::sort(subdirs);
+        for (const auto& sub : subdirs) {
+            auto camps = scanMissionDir(sub, sub.filename().string());
+            for (auto& c : camps) out.push_back(std::move(c));
+        }
+
+        // Also include loose .ssc/.ssm missions placed directly under root as "Custom Campaign".
+        const auto rootEasyDir = findChildDirIgnoreCase(root, "EASY");
+        std::vector<std::filesystem::path> rootFiles;
+        std::error_code rfEc;
+        for (std::filesystem::directory_iterator it(root, rfEc), end; !rfEc && it != end; it.increment(rfEc)) {
+            std::error_code regEc;
+            if (!it->is_regular_file(regEc)) continue;
+            const std::string ext = it->path().extension().string();
+            if (asciiEqualsIgnoreCase(ext, ".ssc") || asciiEqualsIgnoreCase(ext, ".ssm")) {
+                rootFiles.push_back(it->path());
+            }
+        }
+        std::ranges::sort(rootFiles);
+        if (!rootFiles.empty()) {
+            CampaignSummary loose{"Custom Campaign", {}};
+            for (const auto& f : rootFiles) {
+                if (auto sum = loadFileSummary(f, rootEasyDir)) {
+                    loose.missions.push_back(std::move(*sum));
+                }
+            }
+            if (!loose.missions.empty()) out.push_back(std::move(loose));
+        }
     }
 
-    const std::string qLower = asciiLower(q);
-    for (const auto& c : campaigns) {
-        for (const auto& m : c.missions) {
-            if (asciiLower(m.code) == qLower || asciiLower(m.title) == qLower) {
-                return applyDifficulty(m);
-            }
-        }
-    }
+    std::ranges::sort(out, [](const CampaignSummary& a, const CampaignSummary& b) {
+        const auto la = asciiLower(a.name);
+        const auto lb = asciiLower(b.name);
+        if (la != lb) return la < lb;
+        return a.name < b.name;
+    });
+    return out;
+}
 
-    std::vector<const CampaignMissionSummary*> sub;
-    for (const auto& c : campaigns) {
-        for (const auto& m : c.missions) {
-            if (asciiLower(m.title).find(qLower) != std::string::npos ||
-                asciiLower(c.name).find(qLower) != std::string::npos) {
-                sub.push_back(&m);
-            }
-        }
-    }
-    if (sub.empty()) return std::nullopt;
-    if (sub.size() == 1) return applyDifficulty(*sub.front());
-    return std::nullopt;
+std::optional<CampaignMissionSummary> findCustomCampaignMission(const std::filesystem::path& gameDir,
+                                                                std::string_view query,
+                                                                bool easy,
+                                                                const std::filesystem::path& userDir) {
+    return findCampaignMissionInList(listCustomCampaigns(gameDir, userDir), query, easy);
 }
 
 }

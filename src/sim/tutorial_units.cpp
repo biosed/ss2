@@ -1566,14 +1566,14 @@ void TutorialUnits::refreshSpotting(std::vector<SoldierPose>* changed, bool emit
         if (v.bonusSight != 0) {
             effVr = std::clamp(effVr + (v.bonusSight * visPct) / 100, 1, 31);
         }
-        if (difficulty_ == 1 && v.owner == 0) {
+        if (difficulty_ <= 1 && v.owner == 0) {
             effVr = std::clamp((effVr * 13) / 10, 1, 31);
         }
         if (marchBonus > 0) {
             // Gold 0x1001d3e0..0x1001d46f adds (marchsightbonus * visPct) / 100 after base vehicle sight,
             // re-applies Easy 1.3x for player units, clamps to 31 (0x1f), and takes max(base, result).
             int withMarch = effVr + (marchBonus * visPct) / 100;
-            if (difficulty_ == 1 && v.owner == 0) {
+            if (difficulty_ <= 1 && v.owner == 0) {
                 withMarch = (withMarch * 13) / 10;
             }
             effVr = std::max(effVr, std::min(31, withMarch));

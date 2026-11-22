@@ -311,7 +311,7 @@ int effectiveSightRadius(const InfantryCombatDesc& desc, int expa, bool crouched
     if (weatherVisPct < 100) {
         r = std::max(1, (r * weatherVisPct) / 100);
     }
-    if (difficulty == 1 && owner == 0) {
+    if (difficulty <= 1 && owner == 0) {
         r = (r * 13) / 10;
     } else if (difficulty == 3 && owner != 0 && owner != 3) {
         r = (r * 115) / 100;

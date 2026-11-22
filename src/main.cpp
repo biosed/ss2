@@ -290,55 +290,67 @@ std::optional<FrontEndResult> runFrontEnd(SDL_Window* window, ss2::ValidationRep
     goldFe.setSettings(settings);
 
     const auto installedMissions = ss2::assets::listSinglePlayerMissions(gameDir);
-    std::vector<ss2::GoldMissionEntry> entries;
-    for (const auto& m : installedMissions) {
-        std::string tag = std::to_string(m.width) + "x" + std::to_string(m.height) +
-                          (m.scheme == 2 ? " Beach" : " Summer");
-        const std::string key = ss2::normalizeMissionKey(m.path.stem().string());
-        const bool completed = settings.completedMissions.contains(key);
-        int highScore = 0;
-        if (completed) tag = ss2::tr("Completed") + " | " + tag;
-        if (const auto sit = settings.missionHighScores.find(key);
-            sit != settings.missionHighScores.end() && sit->second > 0) {
-            highScore = sit->second;
-            tag += " | " + std::to_string(highScore);
-        }
-        entries.push_back({m.name, m.path.string(), m.description, tag,
-                           m.width, m.height, m.scheme, completed, highScore});
-    }
-    goldFe.setMissions(std::move(entries));
-
     const auto installedCampaigns = ss2::assets::listCampaigns(gameDir);
-    std::vector<ss2::GoldCampaignEntry> campaignEntries;
-    for (const auto& c : installedCampaigns) {
-        ss2::GoldCampaignEntry ce;
-        ce.name = c.name;
-        ce.missions.reserve(c.missions.size());
-        for (const auto& m : c.missions) {
-            std::string tag = std::to_string(m.width) + "x" + std::to_string(m.height) +
-                              (m.scheme == 2 ? " Beach" : " Summer");
-            const std::string codeKey = ss2::normalizeMissionKey(m.code);
-            const std::string stemKey = ss2::normalizeMissionKey(m.path.stem().string());
-            const bool completed = settings.completedMissions.contains(codeKey) ||
-                                   settings.completedMissions.contains(stemKey);
-            if (completed) tag = ss2::tr("Completed") + " | " + tag;
-            int bestScore = 0;
-            if (const auto sit = settings.missionHighScores.find(codeKey); sit != settings.missionHighScores.end()) {
-                bestScore = std::max(bestScore, sit->second);
-            }
-            if (const auto sit = settings.missionHighScores.find(stemKey); sit != settings.missionHighScores.end()) {
-                bestScore = std::max(bestScore, sit->second);
-            }
-            if (bestScore > 0) tag += " | " + std::to_string(bestScore);
-            ce.missions.push_back({m.code, m.title, m.path.string(), m.easyPath.string(),
-                                   m.description, tag, m.width, m.height, m.scheme,
-                                   completed, bestScore});
-        }
-        campaignEntries.push_back(std::move(ce));
-    }
-    goldFe.setCampaigns(std::move(campaignEntries));
     goldFe.setReplays(scanSavedReplays());
     goldFe.setSaves(scanSavedGames(gameDir, installedMissions, installedCampaigns));
+
+    const auto installedCustomCampaigns = ss2::assets::listCustomCampaigns(gameDir, ss2::defaultCustomCampaignsDir());
+    const auto refreshFrontEndProgress = [&] {
+        std::vector<ss2::GoldMissionEntry> entries;
+        for (const auto& m : installedMissions) {
+            std::string tag = std::to_string(m.width) + "x" + std::to_string(m.height) +
+                              (m.scheme == 2 ? " Beach" : " Summer");
+            const std::string key = ss2::normalizeMissionKey(m.path.stem().string());
+            const bool completed = settings.completedMissions.contains(key);
+            int highScore = 0;
+            if (completed) tag = ss2::tr("Completed") + " | " + tag;
+            if (const auto sit = settings.missionHighScores.find(key);
+                sit != settings.missionHighScores.end() && sit->second > 0) {
+                highScore = sit->second;
+                tag += " | " + std::to_string(highScore);
+            }
+            entries.push_back({m.name, m.path.string(), m.description, tag,
+                               m.width, m.height, m.scheme, completed, highScore});
+        }
+        goldFe.setMissions(std::move(entries));
+
+        auto buildCampaignEntries = [&](const std::vector<ss2::assets::CampaignSummary>& src) {
+            std::vector<ss2::GoldCampaignEntry> out;
+            out.reserve(src.size());
+            for (const auto& c : src) {
+                ss2::GoldCampaignEntry ce;
+                ce.name = c.name;
+                ce.missions.reserve(c.missions.size());
+                for (const auto& m : c.missions) {
+                    std::string tag = std::to_string(m.width) + "x" + std::to_string(m.height) +
+                                      (m.scheme == 2 ? " Beach" : " Summer");
+                    const std::string codeKey = ss2::normalizeMissionKey(m.code);
+                    const std::string stemKey = ss2::normalizeMissionKey(m.path.stem().string());
+                    const bool completed = settings.completedMissions.contains(codeKey) ||
+                                           settings.completedMissions.contains(stemKey);
+                    if (completed) tag = ss2::tr("Completed") + " | " + tag;
+                    int bestScore = 0;
+                    if (const auto sit = settings.missionHighScores.find(codeKey);
+                        sit != settings.missionHighScores.end()) {
+                        bestScore = std::max(bestScore, sit->second);
+                    }
+                    if (const auto sit = settings.missionHighScores.find(stemKey);
+                        sit != settings.missionHighScores.end()) {
+                        bestScore = std::max(bestScore, sit->second);
+                    }
+                    if (bestScore > 0) tag += " | " + std::to_string(bestScore);
+                    ce.missions.push_back({m.code, m.title, m.path.string(), m.easyPath.string(),
+                                           m.description, tag, m.width, m.height, m.scheme,
+                                           completed, bestScore});
+                }
+                out.push_back(std::move(ce));
+            }
+            return out;
+        };
+        goldFe.setCampaigns(buildCampaignEntries(installedCampaigns));
+        goldFe.setCustomCampaigns(buildCampaignEntries(installedCustomCampaigns));
+    };
+    refreshFrontEndProgress();
 
     const auto installedMp = ss2::assets::listMultiplayerMissions(gameDir);
     std::vector<ss2::GoldMissionEntry> mpEntries;
@@ -370,6 +382,7 @@ std::optional<FrontEndResult> runFrontEnd(SDL_Window* window, ss2::ValidationRep
             if (persistSettings) {
                 (void)ss2::saveUserSettings(ss2::defaultSettingsPath(), settings);
             }
+            refreshFrontEndProgress();
         }
         if (auto delPath = goldFe.takeDeleteSaveRequest()) {
             std::error_code ec;
@@ -438,7 +451,9 @@ std::optional<FrontEndResult> runFrontEnd(SDL_Window* window, ss2::ValidationRep
                     setup.autoEngage = true;
                     started = hs.startHost(goldFe.state().mpPort(), std::move(setup));
                 } else {
-                    started = hs.startJoin(goldFe.state().mpHostAddress(), goldFe.state().mpPort());
+                    const std::string playerName = settings.activeProfile.empty()
+                        ? std::string("Player 2") : settings.activeProfile;
+                    started = hs.startJoin(goldFe.state().mpHostAddress(), goldFe.state().mpPort(), playerName);
                 }
             } catch (const std::exception& e) {
                 goldFe.handleKey(SDLK_ESCAPE);
@@ -669,6 +684,18 @@ int main(int argc, char** argv) try {
             }
         }
         if (installed.empty()) std::cout << "  (none found)\n";
+        const auto custom = ss2::assets::listCustomCampaigns(directory, ss2::defaultCustomCampaignsDir());
+        if (!custom.empty()) {
+            std::cout << "Custom Campaigns (" << custom.size() << "):\n";
+            for (const auto& c : custom) {
+                std::cout << "  " << c.name << " (" << c.missions.size() << "):\n";
+                for (const auto& m : c.missions) {
+                    const char* schemeName = m.scheme == 2 ? "Beach" : "Summer";
+                    std::cout << "    [" << m.code << "] " << m.title << " [" << m.width << 'x' << m.height
+                              << ", " << schemeName << "]\n";
+                }
+            }
+        }
         return 0;
     }
     if (listMultiplayer) {
@@ -689,6 +716,18 @@ int main(int argc, char** argv) try {
             }
         }
         if (installed.empty()) std::cout << "  (none found)\n";
+        const auto custom = ss2::assets::listCustomCampaigns(directory, ss2::defaultCustomCampaignsDir());
+        if (!custom.empty()) {
+            std::cout << "Custom Campaigns (" << custom.size() << "):\n";
+            for (const auto& c : custom) {
+                std::cout << "  " << c.name << " (" << c.missions.size() << "):\n";
+                for (const auto& m : c.missions) {
+                    const char* schemeName = m.scheme == 2 ? "Beach" : "Summer";
+                    std::cout << "    [" << m.code << "] " << m.title << " [" << m.width << 'x' << m.height
+                              << ", " << schemeName << "]\n";
+                }
+            }
+        }
         return 0;
     }
     if (parsedReplay && mission.empty() && campaignQuery.empty() && !parsedReplay->mission.empty()) {
@@ -703,7 +742,11 @@ int main(int argc, char** argv) try {
         const auto directory = resolveGameDir();
         if (directory.empty())
             throw std::invalid_argument("--campaign requires a game directory: pass --game-dir or set SS2_GAME_DIR");
-        const auto found = ss2::assets::findCampaignMission(directory, campaignQuery);
+        auto found = ss2::assets::findCampaignMission(directory, campaignQuery);
+        if (!found) {
+            found = ss2::assets::findCustomCampaignMission(
+                directory, campaignQuery, false, ss2::defaultCustomCampaignsDir());
+        }
         if (!found) throw std::invalid_argument("Unknown campaign mission: " + campaignQuery);
         std::cout << "Selected campaign mission: " << found->title << " [" << found->code
                   << ", " << found->width << 'x' << found->height << "] (" << found->path << ")\n";

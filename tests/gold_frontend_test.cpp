@@ -196,6 +196,32 @@ void testFallbackInteraction() {
     cfe.renderToBuffer(1280, 720, buf);
     check(buf.size() == 1280u * 720u * 4u, "fallback Campaigns buffer size");
 
+    // Empty Custom Campaigns -> Cancel -> populated Custom Campaigns -> ccampaign:0 -> Esc back.
+    cfe.handleMouseDown(188.0, 529.0, 1);  // Custom [118,512,140,35]
+    check(cfe.state().screen() == ss2::FrontEnd::Screen::CustomCampaigns, "clicked Custom -> CustomCampaigns");
+    cfe.renderToBuffer(1280, 720, buf);
+    check(buf.size() == 1280u * 720u * 4u, "fallback empty CustomCampaigns buffer size");
+    cfe.handleMouseDown(600.0, 529.0, 1);  // Cancel [542,512,118,35]
+    check(cfe.state().screen() == ss2::FrontEnd::Screen::Campaigns, "Cancel from CustomCampaigns returns to Campaigns");
+
+    cfe.setCustomCampaigns({
+        {"Operation SeaLion", {
+            {"01_dover", "1. Dover Crossing", "/nonexistent/custom/01_dover.ssc",
+             "/nonexistent/custom/EASY/01_dover.ssc", "Cross the channel.", "256x256 Summer", 256u, 256u, 1u, false, 0},
+        }},
+    });
+    cfe.handleMouseDown(188.0, 529.0, 1);  // Custom
+    check(cfe.state().screen() == ss2::FrontEnd::Screen::CustomCampaigns, "re-entered CustomCampaigns");
+    cfe.renderToBuffer(1280, 720, buf);
+    check(buf.size() == 1280u * 720u * 4u, "fallback populated CustomCampaigns buffer size");
+    cfe.handleMouseDown(188.0, 128.0, 1);  // ccampaign:0 [78,111,220,35]
+    check(cfe.state().screen() == ss2::FrontEnd::Screen::CampaignMissions && cfe.state().inCustomCampaign(),
+          "clicked ccampaign:0 -> custom CampaignMissions");
+    cfe.handleKey(SDLK_ESCAPE);
+    check(cfe.state().screen() == ss2::FrontEnd::Screen::CustomCampaigns, "Esc returns to CustomCampaigns");
+    cfe.handleKey(SDLK_ESCAPE);
+    check(cfe.state().screen() == ss2::FrontEnd::Screen::Campaigns, "Esc returns from CustomCampaigns to Campaigns");
+
     cfe.handleMouseDown(188.0, 128.0, 1);  // Germany button [78,111,220,35]
     check(cfe.state().screen() == ss2::FrontEnd::Screen::CampaignMissions, "clicked Germany -> CampaignMissions");
     cfe.renderToBuffer(1280, 720, buf);
@@ -223,6 +249,59 @@ void testFallbackInteraction() {
     check(cfe.state().screen() == ss2::FrontEnd::Screen::Launch &&
           cfe.state().launchPath() == "/nonexistent/campaign/EASY/023001.ssc",
           "Campaign Briefing launches EASY mission path");
+
+    // Synthetic SinglePlayer multi-profile flow: last-profile guard, Esc cancel edit, New, Rename, Switch, Delete.
+    {
+        ss2::GoldFrontEnd pfe(nullptr, {});
+        pfe.handleMouseDown(188.0, 128.0, 1);  // SinglePlayer
+        check(pfe.state().screen() == ss2::FrontEnd::Screen::SinglePlayer &&
+              pfe.settings().activeProfile == "YourID" && pfe.settings().profiles.size() == 1,
+              "SinglePlayer starts with default YourID profile");
+        pfe.handleMouseDown(521.0, 475.0, 1);  // profile_delete [480,462,82,27]
+        check(pfe.settings().profiles.size() == 1 && !pfe.activeNotice().empty(),
+              "Delete on last profile keeps YourID and shows notice");
+        pfe.handleMouseDown(333.0, 110.0, 1);  // profile_new [305,97,56,27]
+        pfe.handleKey(SDLK_ESCAPE);
+        check(pfe.state().screen() == ss2::FrontEnd::Screen::SinglePlayer,
+              "Esc while editing new profile cancels edit without leaving SinglePlayer");
+
+        pfe.handleMouseDown(333.0, 110.0, 1);  // profile_new
+        {
+            SDL_Event te{};
+            te.type = SDL_EVENT_TEXT_INPUT;
+            te.text.text = "Rommel";
+            pfe.handleEvent(te);
+        }
+        pfe.handleKey(SDLK_RETURN);
+        check(pfe.settings().activeProfile == "Rommel" && pfe.settings().profiles.size() == 2 &&
+              pfe.takeSettingsSaved(),
+              "New profile creates Rommel and saves settings");
+
+        pfe.handleMouseDown(118.0, 141.0, 1);  // profile_rename [69,126,98,30]
+        for (int b = 0; b < 6; ++b) pfe.handleKey(SDLK_BACKSPACE);
+        {
+            SDL_Event re{};
+            re.type = SDL_EVENT_TEXT_INPUT;
+            re.text.text = "Manstein";
+            pfe.handleEvent(re);
+        }
+        pfe.handleKey(SDLK_RETURN);
+        check(pfe.settings().activeProfile == "Manstein" && pfe.takeSettingsSaved(),
+              "Rename updates active profile to Manstein");
+
+        pfe.handleMouseDown(550.0, 111.0, 1);  // profile_row:0 [466,101..121]
+        check(pfe.settings().activeProfile == "YourID" && pfe.takeSettingsSaved(),
+              "Clicking profile_row:0 switches back to YourID");
+        pfe.handleMouseDown(550.0, 131.0, 1);  // profile_row:1 [466,121..141]
+        check(pfe.settings().activeProfile == "Manstein" && pfe.takeSettingsSaved(),
+              "Clicking profile_row:1 selects Manstein");
+        pfe.renderToBuffer(1280, 720, buf);
+        check(buf.size() == 1280u * 720u * 4u, "fallback SinglePlayer profile buffer size");
+        pfe.handleMouseDown(521.0, 475.0, 1);  // profile_delete
+        check(pfe.settings().profiles.size() == 1 && pfe.settings().activeProfile == "YourID" &&
+              pfe.takeSettingsSaved(),
+              "Deleting Manstein restores YourID");
+    }
 
     // Synthetic Ratings + Credits flow (tabs, scrolling, auto-scroll, pause/resume, Esc/Cancel).
     ss2::GoldFrontEnd rfe(nullptr, {});
@@ -475,6 +554,14 @@ void testRetailGoldAssets(const std::filesystem::path& gameDir) {
     fe.renderToBuffer(1280, 720, frame);
     if (!capDir.empty()) writePng(capDir / "screen2b_campaigns.png", 1280, 720, frame);
 
+    // Screen 2c: Custom Campaigns (retail empty state)
+    fe.handleMouseDown(188.0, 529.0, 1);  // Custom [118,512,140,35]
+    check(fe.state().screen() == ss2::FrontEnd::Screen::CustomCampaigns, "retail CustomCampaigns");
+    fe.renderToBuffer(1280, 720, frame);
+    if (!capDir.empty()) writePng(capDir / "screen2c_custom_campaigns.png", 1280, 720, frame);
+    fe.handleKey(SDLK_ESCAPE);
+    check(fe.state().screen() == ss2::FrontEnd::Screen::Campaigns, "Esc returns from CustomCampaigns");
+
     // Screen 3b: German Campaign missions + Difficulty switch (Normal -> Hard -> Easy)
     fe.handleKey(SDLK_G);
     check(fe.state().screen() == ss2::FrontEnd::Screen::CampaignMissions &&
@@ -619,7 +706,7 @@ void testVulkanWindowOverlay(bool validate, const std::filesystem::path& gameDir
     fe.setCampaigns(makeSyntheticCampaigns());
     fe.setMultiplayerMissions(makeSyntheticMissions(3));
     const ss2::Snapshot empty{};
-    for (int i = 0; i < 21; ++i) {
+    for (int i = 0; i < 23; ++i) {
         if (i == 1) fe.handleKey(SDLK_O);       // Options
         if (i == 2) fe.handleKey(SDLK_ESCAPE);  // Back to MainMenu
         if (i == 3) fe.handleKey(SDLK_P);       // Replays
@@ -634,12 +721,14 @@ void testVulkanWindowOverlay(bool validate, const std::filesystem::path& gameDir
         if (i == 12) fe.handleKey(SDLK_L);      // Load Game
         if (i == 13) fe.handleKey(SDLK_ESCAPE); // Back to Single Player
         if (i == 14) fe.handleKey(SDLK_C);      // Campaigns
-        if (i == 15) fe.handleKey(SDLK_G);      // German Campaign missions
-        if (i == 16) fe.handleKey(SDLK_D);      // Cycle difficulty
-        if (i == 17) fe.handleKey(SDLK_RETURN); // Campaign Briefing
-        if (i == 18) { fe.handleKey(SDLK_ESCAPE); fe.handleKey(SDLK_ESCAPE); fe.handleKey(SDLK_ESCAPE); fe.handleKey(SDLK_ESCAPE); } // Back to MainMenu
-        if (i == 19) fe.handleKey(SDLK_M);      // Multiplayer
-        if (i == 20) fe.handleKey(SDLK_ESCAPE); // Back to MainMenu
+        if (i == 15) fe.handleKey(SDLK_C);      // Custom Campaigns
+        if (i == 16) fe.handleKey(SDLK_ESCAPE); // Back to Campaigns
+        if (i == 17) fe.handleKey(SDLK_G);      // German Campaign missions
+        if (i == 18) fe.handleKey(SDLK_D);      // Cycle difficulty
+        if (i == 19) fe.handleKey(SDLK_RETURN); // Campaign Briefing
+        if (i == 20) { fe.handleKey(SDLK_ESCAPE); fe.handleKey(SDLK_ESCAPE); fe.handleKey(SDLK_ESCAPE); fe.handleKey(SDLK_ESCAPE); } // Back to MainMenu
+        if (i == 21) fe.handleKey(SDLK_M);      // Multiplayer
+        if (i == 22) fe.handleKey(SDLK_ESCAPE); // Back to MainMenu
         fe.draw(renderer);
         renderer.present(empty);
     }

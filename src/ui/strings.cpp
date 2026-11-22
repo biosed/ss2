@@ -879,6 +879,14 @@ constexpr Entry table[] = {
     {"Abandon order queued.", "Ordre d'abandon envoyé.", "Orden de abandono en cola."},
     {"Connecting...", "Connexion...", "Conectando..."},
     {"Enter address", "Entrer l'adresse", "Introducir dirección"},
+    {"Custom Campaigns", "Campagnes personnalisées", "Campañas personalizadas"},
+    {"No custom campaigns installed.", "Aucune campagne personnalisée installée.", "No hay campañas personalizadas instaladas."},
+    {"Enter player name", "Entrer un nom de joueur", "Introducir nombre de jugador"},
+    {"Profile created.", "Profil créé.", "Perfil creado."},
+    {"Profile renamed.", "Profil renommé.", "Perfil renombrado."},
+    {"Profile deleted.", "Profil supprimé.", "Perfil eliminado."},
+    {"Profile already exists.", "Ce profil existe déjà.", "El perfil ya existe."},
+    {"Cannot delete the last profile.", "Impossible de supprimer le dernier profil.", "No se puede eliminar el último perfil."},
 };
 
 std::atomic<Language> current{Language::english};

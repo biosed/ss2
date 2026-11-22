@@ -143,4 +143,10 @@ std::vector<CampaignSummary> listCampaigns(const std::filesystem::path& gameDir)
 std::optional<CampaignMissionSummary> findCampaignMission(const std::filesystem::path& gameDir,
                                                           std::string_view query,
                                                           bool easy = false);
+std::vector<CampaignSummary> listCustomCampaigns(const std::filesystem::path& gameDir,
+                                                 const std::filesystem::path& userDir = {});
+std::optional<CampaignMissionSummary> findCustomCampaignMission(const std::filesystem::path& gameDir,
+                                                                std::string_view query,
+                                                                bool easy = false,
+                                                                const std::filesystem::path& userDir = {});
 }

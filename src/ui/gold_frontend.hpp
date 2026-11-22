@@ -71,6 +71,7 @@ public:
 
     void setMissions(std::vector<GoldMissionEntry> missions);
     void setCampaigns(std::vector<GoldCampaignEntry> campaigns);
+    void setCustomCampaigns(std::vector<GoldCampaignEntry> campaigns);
     void setReplays(std::vector<FrontEnd::ReplayEntry> replays);
     void setSaves(std::vector<FrontEnd::SaveEntry> saves);
     void setMultiplayerMissions(std::vector<GoldMissionEntry> missions);
@@ -123,7 +124,9 @@ private:
     std::size_t activeListSelected() const;
     void selectActiveRow(std::size_t index);
     const char* activeRowPrefix() const;
-    std::size_t previewCampaignIndex() const;
+    const std::vector<GoldCampaignEntry>& activeCampaignList() const;
+    std::size_t activeCampaignIndex() const;
+    std::size_t previewCampaignIndex(bool custom = false) const;
     std::size_t ratingsRowCount() const;
     void ensureSelectionVisible();
     void scrollBy(int deltaRows);
@@ -141,12 +144,17 @@ private:
     FrontEnd fe_;
     std::vector<GoldMissionEntry> missions_;
     std::vector<GoldCampaignEntry> campaigns_;
+    std::vector<GoldCampaignEntry> customCampaigns_;
     std::vector<FrontEnd::ReplayEntry> replays_;
     std::vector<FrontEnd::SaveEntry> saves_;
     std::vector<GoldMissionEntry> mpMissions_;
     enum class MpEditField { None, HostAddress, Port };
     MpEditField mpEditField_{MpEditField::None};
     std::string mpPortDraft_{"27015"};
+    enum class ProfileEditMode { None, New, Rename };
+    ProfileEditMode profileEditMode_{ProfileEditMode::None};
+    std::string profileNameDraft_{"YourID"};
+    int profileScroll_{0};
     std::optional<std::string> pendingDeleteSave_;
     UserSettings settings_{};
     UserSettings optionsDraft_{};

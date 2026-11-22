@@ -30,10 +30,13 @@ void testSightAndLosControls() {
     assert(effectiveSightRadius(smg, 0, false, 0, 2) == 11);
     assert(effectiveSightRadius(dg, 0, false, 0, 2) == 12);
     assert(effectiveSightRadius(off, 0, false, 0, 2) == 13);
-    // Easy difficulty (d=1, 1.3x player bonus)
+    // Easy difficulty (d=0 or d=1, 1.3x player bonus)
     assert(effectiveSightRadius(smg, 0, false, 0, 1) == 14);
     assert(effectiveSightRadius(dg, 0, false, 0, 1) == 15);
     assert(effectiveSightRadius(off, 0, false, 0, 1) == 16);
+    assert(effectiveSightRadius(smg, 0, false, 0, 0) == 14);
+    assert(effectiveSightRadius(dg, 0, false, 0, 0) == 15);
+    assert(effectiveSightRadius(off, 0, false, 0, 0) == 16);
     // Gold CSoldier::GetSightRadius (0x100212c0): moving -1 before weather before Easy 1.3x.
     assert(effectiveSightRadius(dg, 0, false, 0, 2, true, 100) == 11);
     assert(effectiveSightRadius(off, 0, false, 0, 1, false, 50) == 7);

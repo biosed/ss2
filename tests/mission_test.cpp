@@ -988,6 +988,80 @@ void testSyntheticMissions() {
         check(listSinglePlayerMissions(gameDir).size() == 3,
               "listSinglePlayerMissions remains unaffected by Maps/mPlay archives");
     }
+
+    // Synthetic Custom Campaigns: Maps/Custom_Campaign/ + userDir, campaign.seq ordering, EASY/, and ignored dummy.txt.
+    {
+        auto makeSpec = [](std::uint8_t scheme, std::uint16_t w, std::uint16_t h, std::string desc) {
+            MissionSpec s{};
+            s.scheme = scheme;
+            s.width = w;
+            s.height = h;
+            s.rawDescription = std::move(desc);
+            return s;
+        };
+
+        const auto ccDir = gameDir / "mApS" / "Custom_Campaign";
+        const auto userCcDir = tmp.path / "user_custom_campaigns";
+        std::filesystem::create_directories(ccDir);
+        {
+            std::ofstream dummy(ccDir / "dummy.txt");
+            dummy << "dummy";
+        }
+        check(listCustomCampaigns(gameDir, userCcDir).empty(),
+              "dummy.txt alone produces zero custom campaigns");
+
+        writeMissionFile(ccDir / "Loose_Op.ssc", makeSpec(0, 128, 128, "Loose briefing"));
+
+        const auto seaLionDir = ccDir / "Operation_SeaLion";
+        std::filesystem::create_directories(seaLionDir / "EASY");
+        {
+            std::ofstream seq(seaLionDir / "campaign.seq");
+            seq << "# ordered custom sequence\nsecond.ssc\nfirst.ssc\n";
+        }
+        writeMissionFile(seaLionDir / "first.ssc", makeSpec(1, 256, 256, "Normal SeaLion 1"));
+        writeMissionFile(seaLionDir / "EASY" / "first.ssc", makeSpec(1, 256, 256, "Easy SeaLion 1"));
+        writeMissionFile(seaLionDir / "second.ssc", makeSpec(1, 256, 256, "Normal SeaLion 2"));
+
+        const auto desertDir = userCcDir / "Desert_Fox";
+        writeMissionFile(desertDir / "01_tobruk.ssm", makeSpec(2, 128, 128, "Tobruk assault"));
+        writeMissionFile(desertDir / "02_alamein.ssc", makeSpec(2, 128, 128, "El Alamein"));
+
+        const auto retailSeqDir = userCcDir / "Retail_Seq";
+        std::filesystem::create_directories(retailSeqDir);
+        {
+            std::ofstream seq(retailSeqDir / "campaign.seq");
+            seq << ">Retail Styled\nm1>1. Custom Title\n";
+        }
+        writeMissionFile(retailSeqDir / "m1.ssc", makeSpec(0, 128, 128, "Ignored title"));
+
+        const auto customCamps = listCustomCampaigns(gameDir, userCcDir);
+        check(customCamps.size() == 4, "listCustomCampaigns finds root + game folder + user folders");
+        check(customCamps[0].name == "Custom Campaign" && customCamps[0].missions.size() == 1,
+              "loose root custom .ssc grouped under Custom Campaign");
+        check(customCamps[1].name == "Desert_Fox" && customCamps[1].missions.size() == 2 &&
+              customCamps[1].missions[0].code == "01_tobruk",
+              "userDir custom folder missions listed in stem order");
+        check(customCamps[2].name == "Operation_SeaLion" && customCamps[2].missions.size() == 2 &&
+              customCamps[2].missions[0].code == "second" &&
+              customCamps[2].missions[1].code == "first" &&
+              customCamps[2].missions[1].easyPath == seaLionDir / "EASY" / "first.ssc" &&
+              customCamps[2].missions[0].easyPath.empty(),
+              "campaign.seq overrides file sort and binds sibling EASY path");
+        check(customCamps[3].name == "Retail Styled" && customCamps[3].missions.size() == 1 &&
+              customCamps[3].missions[0].code == "m1" &&
+              customCamps[3].missions[0].title == "1. Custom Title",
+              "retail-style >Name and code>Title campaign.seq overrides campaign and mission titles");
+
+        const auto byCustomIdx = findCustomCampaignMission(gameDir, "Operation_SeaLion:2", true, userCcDir);
+        check(byCustomIdx.has_value() && byCustomIdx->path == seaLionDir / "EASY" / "first.ssc",
+              "findCustomCampaignMission resolves campaign:N easy variant");
+        const auto byCustomFallback = findCustomCampaignMission(gameDir, "Operation_SeaLion:1", true, userCcDir);
+        check(byCustomFallback.has_value() && byCustomFallback->path == seaLionDir / "second.ssc",
+              "findCustomCampaignMission falls back to normal .ssc when EASY variant missing");
+        const auto byCustomStem = findCustomCampaignMission(gameDir, "01_tobruk", false, userCcDir);
+        check(byCustomStem.has_value() && byCustomStem->path == desertDir / "01_tobruk.ssm",
+              "findCustomCampaignMission resolves stem match across userDir");
+    }
 }
 
 void testSueAndPaths() {
@@ -1194,6 +1268,8 @@ void testOptionalRetailSweep() {
               !retailCampaigns[0].missions[0].description.empty() &&
               !retailCampaigns[0].missions[0].easyPath.empty(),
               "listCampaigns populates mission I-DESC descriptions and EASY paths");
+        check(ss2::assets::listCustomCampaigns(gameDir, {}).empty(),
+              "listCustomCampaigns ignores retail maps/custom_campaign/dummy.txt");
         const auto arnhem = ss2::assets::findCampaignMission(gameDir, "031000");
         check(arnhem.has_value(), "findCampaignMission finds 031000");
         const auto arnhemData = ss2::assets::readMissionData(arnhem->path);

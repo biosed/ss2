@@ -336,8 +336,43 @@ int main() {
               camp.shortcutId('r') == "campaign:4" && camp.shortcutId('c') == "custom",
               "Campaigns nation + Custom shortcuts resolve accurately without US/Russian collision");
         camp.activate(camp.shortcutId('c'));
-        check(camp.screen() == FrontEnd::Screen::Campaigns && !camp.takeNotice().empty(),
-              "Custom stays on Campaigns and emits a notice");
+        check(camp.screen() == FrontEnd::Screen::CustomCampaigns,
+              "Custom opens CustomCampaigns screen");
+        check(!camp.items().empty() && !camp.items()[0].selectable &&
+              camp.items()[0].label == "No custom campaigns installed.",
+              "Empty CustomCampaigns advertises non-selectable empty message");
+        camp.back();
+        check(camp.screen() == FrontEnd::Screen::Campaigns, "Esc from empty CustomCampaigns returns to Campaigns");
+
+        camp.setCustomCampaigns({
+            {
+                "Operation SeaLion",
+                {
+                    {"01_dover", "1. Dover Landing", "/custom/sealion/01_dover.ssc",
+                     "/custom/sealion/EASY/01_dover.ssc", "Channel crossing.", "256x256 Summer"},
+                },
+            },
+        });
+        camp.activate("custom");
+        check(camp.screen() == FrontEnd::Screen::CustomCampaigns && hasId(camp.items(), "ccampaign:0"),
+              "Populated CustomCampaigns lists ccampaign:0");
+        camp.activate("ccampaign:0");
+        check(camp.screen() == FrontEnd::Screen::CampaignMissions && camp.inCustomCampaign() &&
+              camp.selectedCustomCampaign() == 0,
+              "Choosing ccampaign:0 opens CampaignMissions in custom mode");
+        check(camp.launchPath() == "/custom/sealion/01_dover.ssc", "Custom campaign Normal launchPath matches");
+        camp.activate(camp.shortcutId('s'));
+        check(camp.screen() == FrontEnd::Screen::Briefing && camp.briefingFromCampaign(),
+              "Custom campaign Start enters Briefing");
+        camp.back();
+        check(camp.screen() == FrontEnd::Screen::CampaignMissions && camp.inCustomCampaign(),
+              "Back from custom campaign Briefing keeps custom CampaignMissions");
+        camp.back();
+        check(camp.screen() == FrontEnd::Screen::CustomCampaigns,
+              "Back from custom CampaignMissions returns to CustomCampaigns");
+        camp.back();
+        check(camp.screen() == FrontEnd::Screen::Campaigns,
+              "Back from CustomCampaigns returns to Campaigns");
         camp.activate(camp.shortcutId('g'));
         check(camp.screen() == FrontEnd::Screen::CampaignMissions && camp.selectedCampaign() == 0,
               "G opens German Campaign missions");
