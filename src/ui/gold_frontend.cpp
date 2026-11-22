@@ -160,6 +160,12 @@ constexpr std::array<ButtonSpec, 2> kReplayButtons{{
     {"cancel", "Cancel", '\0', {542, 512, 118, 35}, true},
 }};
 
+constexpr std::array<ButtonSpec, 3> kLoadGameButtons{{
+    {"load_start", "Load", 'L', {118, 512, 120, 35}, true},
+    {"load_delete", "Delete", 'D', {324, 512, 130, 35}, true},
+    {"cancel", "Cancel", '\0', {542, 512, 118, 35}, true},
+}};
+
 constexpr std::array<ButtonSpec, 4> kBriefingButtons{{
     {"brief_restart", "Restart", 'R', {577, 211, 186, 33}, false},
     {"brief_pause", "Pause", 'P', {627, 253, 136, 33}, false},
@@ -820,6 +826,23 @@ void GoldFrontEnd::setReplays(std::vector<FrontEnd::ReplayEntry> replays) {
     dirty_ = true;
 }
 
+void GoldFrontEnd::setSaves(std::vector<FrontEnd::SaveEntry> saves) {
+    saves_ = saves;
+    fe_.setSaves(std::move(saves));
+    if (fe_.screen() == FrontEnd::Screen::LoadGame) {
+        scrollOffset_ = 0;
+        ensureSelectionVisible();
+        ensureFocusedValid();
+    }
+    dirty_ = true;
+}
+
+std::optional<std::string> GoldFrontEnd::takeDeleteSaveRequest() {
+    auto req = std::move(pendingDeleteSave_);
+    pendingDeleteSave_.reset();
+    return req;
+}
+
 void GoldFrontEnd::setDifficulty(int difficulty) {
     fe_.setDifficulty(difficulty);
     settings_.difficulty = fe_.difficulty();
@@ -921,6 +944,9 @@ std::size_t GoldFrontEnd::activeListCount() const {
     if (fe_.screen() == FrontEnd::Screen::Replays) {
         return replays_.size();
     }
+    if (fe_.screen() == FrontEnd::Screen::LoadGame) {
+        return saves_.size();
+    }
     return missions_.size();
 }
 
@@ -931,6 +957,9 @@ std::size_t GoldFrontEnd::activeListSelected() const {
     if (fe_.screen() == FrontEnd::Screen::Replays) {
         return fe_.selectedReplay();
     }
+    if (fe_.screen() == FrontEnd::Screen::LoadGame) {
+        return fe_.selectedSave();
+    }
     return fe_.selected();
 }
 
@@ -939,6 +968,8 @@ void GoldFrontEnd::selectActiveRow(std::size_t index) {
         fe_.selectCampaignMission(index);
     } else if (fe_.screen() == FrontEnd::Screen::Replays) {
         fe_.selectReplay(index);
+    } else if (fe_.screen() == FrontEnd::Screen::LoadGame) {
+        fe_.selectSave(index);
     } else {
         fe_.select(index);
     }
@@ -947,6 +978,7 @@ void GoldFrontEnd::selectActiveRow(std::size_t index) {
 const char* GoldFrontEnd::activeRowPrefix() const {
     if (fe_.screen() == FrontEnd::Screen::CampaignMissions) return "cmission:";
     if (fe_.screen() == FrontEnd::Screen::Replays) return "replay:";
+    if (fe_.screen() == FrontEnd::Screen::LoadGame) return "save:";
     return "mission:";
 }
 
@@ -1015,12 +1047,16 @@ void GoldFrontEnd::ensureFocusedValid() {
         case FrontEnd::Screen::Replays:
             focusedId_ = replays_.empty() ? "cancel" : "replay_start";
             break;
+        case FrontEnd::Screen::LoadGame:
+            focusedId_ = saves_.empty() ? "cancel" : "load_start";
+            break;
         case FrontEnd::Screen::Ratings:
         case FrontEnd::Screen::Credits:
             focusedId_ = "cancel";
             break;
         case FrontEnd::Screen::Launch:
         case FrontEnd::Screen::LaunchReplay:
+        case FrontEnd::Screen::LaunchSave:
         case FrontEnd::Screen::Quit:
             focusedId_.clear();
             break;
@@ -1076,7 +1112,8 @@ void GoldFrontEnd::onScreenChanged(FrontEnd::Screen previous) {
             if (ci < campaigns_.size() && mi < campaigns_[ci].missions.size()) {
                 ensureOverviewLoaded(campaigns_[ci].missions[mi].path);
             }
-        } else if (fe_.screen() == FrontEnd::Screen::Replays) {
+        } else if (fe_.screen() == FrontEnd::Screen::Replays ||
+                   fe_.screen() == FrontEnd::Screen::LoadGame) {
             scrollOffset_ = 0;
             ensureSelectionVisible();
         } else if (fe_.screen() == FrontEnd::Screen::Options) {
@@ -1166,13 +1203,16 @@ std::string GoldFrontEnd::hitTestStage(double sx, double sy) const {
         }
         case FrontEnd::Screen::SingleMissions:
         case FrontEnd::Screen::CampaignMissions:
-        case FrontEnd::Screen::Replays: {
+        case FrontEnd::Screen::Replays:
+        case FrontEnd::Screen::LoadGame: {
             if (fe_.screen() == FrontEnd::Screen::CampaignMissions &&
                 kDifficultyButtonRect.contains(sx, sy)) {
                 return "difficulty";
             }
             if (fe_.screen() == FrontEnd::Screen::Replays) {
                 if (const auto id = checkButtons(kReplayButtons); !id.empty()) return id;
+            } else if (fe_.screen() == FrontEnd::Screen::LoadGame) {
+                if (const auto id = checkButtons(kLoadGameButtons); !id.empty()) return id;
             } else {
                 if (const auto id = checkButtons(kSingleMissionButtons); !id.empty()) return id;
             }
@@ -1243,6 +1283,7 @@ std::string GoldFrontEnd::hitTestStage(double sx, double sy) const {
         }
         case FrontEnd::Screen::Launch:
         case FrontEnd::Screen::LaunchReplay:
+        case FrontEnd::Screen::LaunchSave:
         case FrontEnd::Screen::Quit:
             return {};
     }
@@ -1315,6 +1356,15 @@ void GoldFrontEnd::activateId(const std::string& id) {
         return;
     }
 
+    if (prev == FrontEnd::Screen::LoadGame && id == "load_delete") {
+        if (const auto* s = fe_.selectedSaveEntry()) {
+            pendingDeleteSave_ = s->path;
+        } else {
+            showNotice(tr("No saved games yet."));
+        }
+        return;
+    }
+
     fe_.activate(id);
     onScreenChanged(prev);
 }
@@ -1331,8 +1381,7 @@ void GoldFrontEnd::handleKey(SDL_Keycode key) {
 
     if (key >= SDLK_A && key <= SDLK_Z) {
         if (const std::string id = fe_.shortcutId(char('a' + (key - SDLK_A))); !id.empty()) {
-            fe_.activate(id);
-            onScreenChanged(prev);
+            activateId(id);
             return;
         }
     }
@@ -1384,7 +1433,12 @@ void GoldFrontEnd::handleKey(SDL_Keycode key) {
         }
         case FrontEnd::Screen::SingleMissions:
         case FrontEnd::Screen::CampaignMissions:
-        case FrontEnd::Screen::Replays: {
+        case FrontEnd::Screen::Replays:
+        case FrontEnd::Screen::LoadGame: {
+            if (fe_.screen() == FrontEnd::Screen::LoadGame && key == SDLK_DELETE) {
+                activateId("load_delete");
+                break;
+            }
             const std::size_t count = activeListCount();
             auto loadSelectedOverview = [&] {
                 if (fe_.screen() == FrontEnd::Screen::CampaignMissions) {
@@ -1442,12 +1496,17 @@ void GoldFrontEnd::handleKey(SDL_Keycode key) {
                     cycleFocus({"start", "difficulty", "cancel"}, step);
                 } else if (fe_.screen() == FrontEnd::Screen::Replays) {
                     cycleFocus({"replay_start", "cancel"}, step);
+                } else if (fe_.screen() == FrontEnd::Screen::LoadGame) {
+                    cycleFocus({"load_start", "load_delete", "cancel"}, step);
                 } else {
                     cycleFocus({"start", "cancel"}, step);
                 }
             } else if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
                 if (fe_.screen() == FrontEnd::Screen::Replays) {
                     activateId(focusedId_ == "cancel" ? "cancel" : "replay_start");
+                } else if (fe_.screen() == FrontEnd::Screen::LoadGame) {
+                    if (focusedId_ == "cancel" || focusedId_ == "load_delete") activateId(focusedId_);
+                    else activateId("load_start");
                 } else if (focusedId_ == "cancel" || (fe_.screen() == FrontEnd::Screen::CampaignMissions && focusedId_ == "difficulty")) {
                     activateId(focusedId_);
                 } else {
@@ -1535,6 +1594,7 @@ void GoldFrontEnd::handleKey(SDL_Keycode key) {
         }
         case FrontEnd::Screen::Launch:
         case FrontEnd::Screen::LaunchReplay:
+        case FrontEnd::Screen::LaunchSave:
         case FrontEnd::Screen::Quit:
             break;
     }
@@ -1544,7 +1604,8 @@ void GoldFrontEnd::handleMouseMove(double stageX, double stageY) {
     if (draggingThumb_) {
         if ((fe_.screen() == FrontEnd::Screen::SingleMissions ||
              fe_.screen() == FrontEnd::Screen::CampaignMissions ||
-             fe_.screen() == FrontEnd::Screen::Replays)) {
+             fe_.screen() == FrontEnd::Screen::Replays ||
+             fe_.screen() == FrontEnd::Screen::LoadGame)) {
             const std::size_t count = activeListCount();
             if (int(count) > kVisibleMissionRows) {
                 const double travel = std::max(1.0, kTrackH - kThumbH);
@@ -1593,7 +1654,8 @@ void GoldFrontEnd::handleMouseDown(double stageX, double stageY, std::uint8_t cl
 
     if (fe_.screen() == FrontEnd::Screen::SingleMissions ||
         fe_.screen() == FrontEnd::Screen::CampaignMissions ||
-        fe_.screen() == FrontEnd::Screen::Replays) {
+        fe_.screen() == FrontEnd::Screen::Replays ||
+        fe_.screen() == FrontEnd::Screen::LoadGame) {
         std::size_t idx = 0;
         if (parseIndexAfter(hit, activeRowPrefix(), idx) && idx < activeListCount()) {
             const bool alreadySelected = (idx == activeListSelected());
@@ -1606,7 +1668,8 @@ void GoldFrontEnd::handleMouseDown(double stageX, double stageY, std::uint8_t cl
             } else if (fe_.screen() == FrontEnd::Screen::SingleMissions && idx < missions_.size()) {
                 ensureOverviewLoaded(missions_[idx].path);
             }
-            focusedId_ = (fe_.screen() == FrontEnd::Screen::Replays) ? "replay_start" : "start";
+            focusedId_ = (fe_.screen() == FrontEnd::Screen::Replays) ? "replay_start"
+                       : (fe_.screen() == FrontEnd::Screen::LoadGame) ? "load_start" : "start";
             dirty_ = true;
             if (clicks >= 2 || (clicks == 0 && alreadySelected)) {
                 activateId(hit);
@@ -1626,7 +1689,8 @@ void GoldFrontEnd::handleMouseUp() {
 void GoldFrontEnd::handleMouseWheel(float dy) {
     if ((fe_.screen() == FrontEnd::Screen::SingleMissions ||
          fe_.screen() == FrontEnd::Screen::CampaignMissions ||
-         fe_.screen() == FrontEnd::Screen::Replays) &&
+         fe_.screen() == FrontEnd::Screen::Replays ||
+         fe_.screen() == FrontEnd::Screen::LoadGame) &&
         dy != 0.0f) {
         scrollBy(dy > 0 ? -3 : 3);
     } else if (fe_.screen() == FrontEnd::Screen::Briefing && dy != 0.0f) {
@@ -2363,122 +2427,184 @@ void GoldFrontEnd::renderToBuffer(int pixelW, int pixelH, std::vector<std::uint8
                                   hoveredId_ == "ok", focusedId_ == "ok", true, 24.0);
             drawGoldStencilButton(cr, pangoCtx, kOptionsCancelRect, tr("Cancel"), '\0',
                                   hoveredId_ == "cancel", focusedId_ == "cancel", true, 24.0);
-        } else if (screen == FrontEnd::Screen::Replays) {
-            drawHeading(cr, pangoCtx, tr("Replay Game"), {200, 38, 400, 28}, 17.0);
-            drawHeading(cr, pangoCtx, tr("Replays:"), {130, 110, 150, 20}, 15.0);
-            drawHeading(cr, pangoCtx, tr("Details:"), {520, 110, 144, 20}, 15.0);
+        } else if (screen == FrontEnd::Screen::Replays || screen == FrontEnd::Screen::LoadGame) {
+            struct DetailRow {
+                std::string k;
+                std::string v;
+            };
+            auto renderDetailBrowser = [&](const std::string& heading, const std::string& leftHeading,
+                                           const char* rowPrefix, std::size_t rowCount, std::size_t selectedRow,
+                                           const std::string& emptyMsg, const std::string& emptyHint,
+                                           auto rowNameFn, auto detailsFn, auto captionFn,
+                                           const auto& buttons, auto buttonEnabledFn) {
+                drawHeading(cr, pangoCtx, heading, {200, 38, 400, 28}, 17.0);
+                drawHeading(cr, pangoCtx, leftHeading, {130, 110, 150, 20}, 15.0);
+                drawHeading(cr, pangoCtx, tr("Details:"), {520, 110, 144, 20}, 15.0);
 
-            drawBronzeBox(cr, kListX, kListY, kListW, kListH, 0.88);
-            cairo_save(cr);
-            cairo_rectangle(cr, kListX + 4, kListY + 4, kListW - 8, kListH - 8);
-            cairo_clip(cr);
+                drawBronzeBox(cr, kListX, kListY, kListW, kListH, 0.88);
+                cairo_save(cr);
+                cairo_rectangle(cr, kListX + 4, kListY + 4, kListW - 8, kListH - 8);
+                cairo_clip(cr);
 
-            const std::size_t rowCount = replays_.size();
-            const std::size_t selectedRow = fe_.selectedReplay();
-            if (rowCount == 0) {
-                auto emptyLbl = makeTextLayout(pangoCtx, tr("No replays recorded yet."), 14.0, false);
-                cairo_move_to(cr, kListX + 16, kListY + 18);
-                cairo_set_source_rgb(cr, 180.0 / 255.0, 180.0 / 255.0, 165.0 / 255.0);
-                pango_cairo_show_layout(cr, emptyLbl.get());
-            } else {
-                const int endIdx = std::min(int(rowCount), scrollOffset_ + kVisibleMissionRows);
-                for (int idx = scrollOffset_; idx < endIdx; ++idx) {
-                    const int row = idx - scrollOffset_;
-                    const double ry = kListY + 6.0 + row * kRowH;
-                    const bool isSelected = (std::size_t(idx) == selectedRow);
-                    const bool isHovered = (hoveredId_ == "replay:" + std::to_string(idx));
-                    if (isSelected) {
-                        cairo_set_source_rgba(cr, 98.0 / 255.0, 114.0 / 255.0, 72.0 / 255.0, 0.38);
-                        cairo_rectangle(cr, kListX + 5, ry, kListW - 10, kRowH - 1.0);
-                        cairo_fill(cr);
-                    } else if (isHovered) {
-                        cairo_set_source_rgba(cr, 72.0 / 255.0, 96.0 / 255.0, 56.0 / 255.0, 0.22);
-                        cairo_rectangle(cr, kListX + 5, ry, kListW - 10, kRowH - 1.0);
-                        cairo_fill(cr);
+                if (rowCount == 0) {
+                    auto emptyLbl = makeTextLayout(pangoCtx, emptyMsg, 14.0, false);
+                    cairo_move_to(cr, kListX + 16, kListY + 18);
+                    cairo_set_source_rgb(cr, 180.0 / 255.0, 180.0 / 255.0, 165.0 / 255.0);
+                    pango_cairo_show_layout(cr, emptyLbl.get());
+                } else {
+                    const int endIdx = std::min(int(rowCount), scrollOffset_ + kVisibleMissionRows);
+                    for (int idx = scrollOffset_; idx < endIdx; ++idx) {
+                        const int row = idx - scrollOffset_;
+                        const double ry = kListY + 6.0 + row * kRowH;
+                        const bool isSelected = (std::size_t(idx) == selectedRow);
+                        const bool isHovered = (hoveredId_ == std::string(rowPrefix) + std::to_string(idx));
+                        if (isSelected) {
+                            cairo_set_source_rgba(cr, 98.0 / 255.0, 114.0 / 255.0, 72.0 / 255.0, 0.38);
+                            cairo_rectangle(cr, kListX + 5, ry, kListW - 10, kRowH - 1.0);
+                            cairo_fill(cr);
+                        } else if (isHovered) {
+                            cairo_set_source_rgba(cr, 72.0 / 255.0, 96.0 / 255.0, 56.0 / 255.0, 0.22);
+                            cairo_rectangle(cr, kListX + 5, ry, kListW - 10, kRowH - 1.0);
+                            cairo_fill(cr);
+                        }
+
+                        auto rowLayout = makeTextLayout(pangoCtx, rowNameFn(std::size_t(idx)), 13.0, isSelected);
+                        pango_layout_set_width(rowLayout.get(), int((kListW - 22.0) * PANGO_SCALE));
+                        pango_layout_set_ellipsize(rowLayout.get(), PANGO_ELLIPSIZE_END);
+                        cairo_move_to(cr, kListX + 12, ry + 2.0);
+                        if (isSelected) cairo_set_source_rgb(cr, 245.0 / 255.0, 245.0 / 255.0, 245.0 / 255.0);
+                        else if (isHovered) cairo_set_source_rgb(cr, 128.0 / 255.0, 224.0 / 255.0, 138.0 / 255.0);
+                        else cairo_set_source_rgb(cr, 49.0 / 255.0, 174.0 / 255.0, 74.0 / 255.0);
+                        pango_cairo_show_layout(cr, rowLayout.get());
                     }
-
-                    auto rowLayout = makeTextLayout(pangoCtx, replays_[std::size_t(idx)].name, 13.0, isSelected);
-                    pango_layout_set_width(rowLayout.get(), int((kListW - 22.0) * PANGO_SCALE));
-                    pango_layout_set_ellipsize(rowLayout.get(), PANGO_ELLIPSIZE_END);
-                    cairo_move_to(cr, kListX + 12, ry + 2.0);
-                    if (isSelected) cairo_set_source_rgb(cr, 245.0 / 255.0, 245.0 / 255.0, 245.0 / 255.0);
-                    else if (isHovered) cairo_set_source_rgb(cr, 128.0 / 255.0, 224.0 / 255.0, 138.0 / 255.0);
-                    else cairo_set_source_rgb(cr, 49.0 / 255.0, 174.0 / 255.0, 74.0 / 255.0);
-                    pango_cairo_show_layout(cr, rowLayout.get());
                 }
-            }
-            cairo_restore(cr);
+                cairo_restore(cr);
 
-            drawGoldScrollbar(kScrollX, kScrollY, kScrollW, kScrollH, kVisibleMissionRows,
-                              true, rowCount, scrollOffset_,
-                              hoveredId_ == "scroll_up", hoveredId_ == "scroll_down",
-                              hoveredId_ == "scroll_thumb" || draggingThumb_);
+                drawGoldScrollbar(kScrollX, kScrollY, kScrollW, kScrollH, kVisibleMissionRows,
+                                  true, rowCount, scrollOffset_,
+                                  hoveredId_ == "scroll_up", hoveredId_ == "scroll_down",
+                                  hoveredId_ == "scroll_thumb" || draggingThumb_);
 
-            drawBronzeBox(cr, 438, 134, 330, 352, 0.86);
-            if (selectedRow < rowCount) {
-                const auto& r = replays_[selectedRow];
-                drawHeading(cr, pangoCtx, r.name, {450, 146, 306, 26}, 15.5);
-                cairo_set_source_rgba(cr, 182.0 / 255.0, 174.0 / 255.0, 146.0 / 255.0, 0.55);
-                cairo_set_line_width(cr, 1.0);
-                cairo_move_to(cr, 452, 180);
-                cairo_line_to(cr, 754, 180);
-                cairo_stroke(cr);
+                drawBronzeBox(cr, 438, 134, 330, 352, 0.86);
+                if (selectedRow < rowCount) {
+                    drawHeading(cr, pangoCtx, rowNameFn(selectedRow), {450, 146, 306, 26}, 15.5);
+                    cairo_set_source_rgba(cr, 182.0 / 255.0, 174.0 / 255.0, 146.0 / 255.0, 0.55);
+                    cairo_set_line_width(cr, 1.0);
+                    cairo_move_to(cr, 452, 180);
+                    cairo_line_to(cr, 754, 180);
+                    cairo_stroke(cr);
 
-                const std::string missionStem = r.mission.empty()
-                    ? std::string("-")
-                    : std::filesystem::path(r.mission).stem().string();
-                const unsigned secs = r.endTick / 25u;
+                    const auto details = detailsFn(selectedRow);
+                    for (std::size_t i = 0; i < details.size(); ++i) {
+                        const double dy = 196.0 + double(i) * 38.0;
+                        auto kl = makeTextLayout(pangoCtx, details[i].k + ":", 13.0, false);
+                        cairo_move_to(cr, 454, dy);
+                        cairo_set_source_rgb(cr, 200.0 / 255.0, 194.0 / 255.0, 166.0 / 255.0);
+                        pango_cairo_show_layout(cr, kl.get());
+
+                        auto vl = makeTextLayout(pangoCtx, details[i].v, 13.0, true, 184.0, PANGO_ALIGN_RIGHT);
+                        pango_layout_set_ellipsize(vl.get(), PANGO_ELLIPSIZE_END);
+                        cairo_move_to(cr, 570, dy);
+                        cairo_set_source_rgb(cr, 245.0 / 255.0, 224.0 / 255.0, 145.0 / 255.0);
+                        pango_cairo_show_layout(cr, vl.get());
+                    }
+                    const std::string caption = captionFn(selectedRow);
+                    if (!caption.empty()) {
+                        auto pathLbl = makeTextLayout(pangoCtx, caption, 11.0, false, 302.0);
+                        pango_layout_set_ellipsize(pathLbl.get(), PANGO_ELLIPSIZE_START);
+                        cairo_move_to(cr, 452, 446.0);
+                        cairo_set_source_rgba(cr, 188.0 / 255.0, 192.0 / 255.0, 174.0 / 255.0, 0.85);
+                        pango_cairo_show_layout(cr, pathLbl.get());
+                    }
+                } else {
+                    drawHeading(cr, pangoCtx, emptyMsg, {452, 240, 302, 32}, 14.5);
+                    auto hint = makeTextLayout(pangoCtx, emptyHint, 12.5, false, 302.0, PANGO_ALIGN_CENTER);
+                    cairo_move_to(cr, 452, 286);
+                    cairo_set_source_rgb(cr, 188.0 / 255.0, 192.0 / 255.0, 174.0 / 255.0);
+                    pango_cairo_show_layout(cr, hint.get());
+                }
+
+                for (const auto& b : buttons) {
+                    const bool enabled = buttonEnabledFn(std::string_view(b.id), b.enabled);
+                    drawGoldStencilButton(cr, pangoCtx, b.rect, tr(b.enLabel), b.shortcut,
+                                          hoveredId_ == b.id, focusedId_ == b.id, enabled, 24.0);
+                }
+            };
+
+            auto formatTickTime = [](std::uint32_t ticks) {
+                const unsigned secs = ticks / 25u;
                 const unsigned mins = secs / 60u;
                 const unsigned remS = secs % 60u;
-                const std::string durStr = (mins < 10u ? "0" : "") + std::to_string(mins) + ":" +
-                    (remS < 10u ? "0" : "") + std::to_string(remS) +
-                    " (" + std::to_string(r.endTick) + "t)";
+                return (mins < 10u ? "0" : "") + std::to_string(mins) + ":" +
+                       (remS < 10u ? "0" : "") + std::to_string(remS) +
+                       " (" + std::to_string(ticks) + "t)";
+            };
 
-                struct DetailRow {
-                    std::string k;
-                    std::string v;
-                };
-                const std::array<DetailRow, 6> details{{
-                    {tr("Mission"), missionStem},
-                    {tr("Duration"), durStr},
-                    {tr("Commands"), std::to_string(r.commandCount)},
-                    {tr("Difficulty"), tr(difficultyKey(r.difficulty))},
-                    {tr("Auto-engage"), tr(r.autoEngage ? "On" : "Off")},
-                    {tr("State hash"), r.hashHex.empty() ? std::string("-") : r.hashHex},
-                }};
-                for (std::size_t i = 0; i < details.size(); ++i) {
-                    const double dy = 196.0 + double(i) * 38.0;
-                    auto kl = makeTextLayout(pangoCtx, details[i].k + ":", 13.0, false);
-                    cairo_move_to(cr, 454, dy);
-                    cairo_set_source_rgb(cr, 200.0 / 255.0, 194.0 / 255.0, 166.0 / 255.0);
-                    pango_cairo_show_layout(cr, kl.get());
-
-                    auto vl = makeTextLayout(pangoCtx, details[i].v, 13.0, true, 184.0, PANGO_ALIGN_RIGHT);
-                    pango_layout_set_ellipsize(vl.get(), PANGO_ELLIPSIZE_END);
-                    cairo_move_to(cr, 570, dy);
-                    cairo_set_source_rgb(cr, 245.0 / 255.0, 224.0 / 255.0, 145.0 / 255.0);
-                    pango_cairo_show_layout(cr, vl.get());
-                }
-                if (!r.mission.empty()) {
-                    auto pathLbl = makeTextLayout(pangoCtx, r.mission, 11.0, false, 302.0);
-                    pango_layout_set_ellipsize(pathLbl.get(), PANGO_ELLIPSIZE_START);
-                    cairo_move_to(cr, 452, 446.0);
-                    cairo_set_source_rgba(cr, 188.0 / 255.0, 192.0 / 255.0, 174.0 / 255.0, 0.85);
-                    pango_cairo_show_layout(cr, pathLbl.get());
-                }
+            if (screen == FrontEnd::Screen::Replays) {
+                const std::size_t rowCount = replays_.size();
+                renderDetailBrowser(
+                    tr("Replay Game"), tr("Replays:"), "replay:", rowCount, fe_.selectedReplay(),
+                    tr("No replays recorded yet."), "--record FILE\n~/.local/share/ss2/replays/",
+                    [&](std::size_t idx) { return replays_[idx].name; },
+                    [&](std::size_t idx) -> std::array<DetailRow, 6> {
+                        const auto& r = replays_[idx];
+                        const std::string missionStem = r.mission.empty()
+                            ? std::string("-")
+                            : std::filesystem::path(r.mission).stem().string();
+                        return {{
+                            {tr("Mission"), missionStem},
+                            {tr("Duration"), formatTickTime(r.endTick)},
+                            {tr("Commands"), std::to_string(r.commandCount)},
+                            {tr("Difficulty"), tr(difficultyKey(r.difficulty))},
+                            {tr("Auto-engage"), tr(r.autoEngage ? "On" : "Off")},
+                            {tr("State hash"), r.hashHex.empty() ? std::string("-") : r.hashHex},
+                        }};
+                    },
+                    [&](std::size_t idx) { return replays_[idx].mission; },
+                    kReplayButtons,
+                    [rowCount](std::string_view id, bool def) {
+                        return id == "replay_start" ? (rowCount > 0) : def;
+                    });
             } else {
-                drawHeading(cr, pangoCtx, tr("No replays recorded yet."), {452, 240, 302, 32}, 14.5);
-                auto hint = makeTextLayout(pangoCtx, "--record FILE\n~/.local/share/ss2/replays/",
-                                           12.5, false, 302.0, PANGO_ALIGN_CENTER);
-                cairo_move_to(cr, 452, 286);
-                cairo_set_source_rgb(cr, 188.0 / 255.0, 192.0 / 255.0, 174.0 / 255.0);
-                pango_cairo_show_layout(cr, hint.get());
-            }
-
-            for (const auto& b : kReplayButtons) {
-                const bool enabled = (std::string_view(b.id) == "replay_start") ? (rowCount > 0) : b.enabled;
-                drawGoldStencilButton(cr, pangoCtx, b.rect, tr(b.enLabel), b.shortcut,
-                                      hoveredId_ == b.id, focusedId_ == b.id, enabled, 24.0);
+                const std::size_t rowCount = saves_.size();
+                renderDetailBrowser(
+                    tr("Load Game"), tr("Saved Games:"), "save:", rowCount, fe_.selectedSave(),
+                    tr("No saved games yet."), "F9 / Save / Load\n~/.local/share/ss2/saves/",
+                    [&](std::size_t idx) { return saves_[idx].name; },
+                    [&](std::size_t idx) -> std::array<DetailRow, 6> {
+                        const auto& s = saves_[idx];
+                        const std::string missionName = !s.missionTitle.empty()
+                            ? s.missionTitle
+                            : (s.mission.empty() ? std::string("-")
+                                                 : std::filesystem::path(s.mission).stem().string());
+                        const std::string slotDisplay = s.slotLabel.empty()
+                            ? std::string("-")
+                            : ((s.slotLabel == "Auto-Save" || s.slotLabel == "Quick Save")
+                                   ? tr(s.slotLabel)
+                                   : s.slotLabel);
+                        return {{
+                            {tr("Mission"), missionName},
+                            {tr("Slot"), slotDisplay},
+                            {tr("Battle time"), formatTickTime(s.tick)},
+                            {tr("Forces"), std::to_string(s.playerSoldiers) + " / " + std::to_string(s.playerVehicles)},
+                            {tr("Difficulty"), tr(difficultyKey(s.difficulty))},
+                            {tr("Saved"), s.timestamp.empty() ? std::string("-") : s.timestamp},
+                        }};
+                    },
+                    [&](std::size_t idx) {
+                        const auto& s = saves_[idx];
+                        std::string caption = s.mission;
+                        if (s.fileBytes > 0) {
+                            const auto kb = std::max<std::uint64_t>(1u, s.fileBytes / 1024u);
+                            if (!caption.empty()) caption += "  |  ";
+                            caption += std::to_string(kb) + " KB";
+                        }
+                        return caption;
+                    },
+                    kLoadGameButtons,
+                    [rowCount](std::string_view id, bool def) {
+                        return (id == "load_start" || id == "load_delete") ? (rowCount > 0) : def;
+                    });
             }
         }
     }

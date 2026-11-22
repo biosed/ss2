@@ -80,6 +80,16 @@ inline std::filesystem::path defaultReplaysDir() {
     return {};
 }
 
+inline std::filesystem::path defaultSavesDir() {
+    if (const char* xdg = std::getenv("XDG_DATA_HOME"); xdg && *xdg) {
+        return std::filesystem::path(xdg) / "ss2" / "saves";
+    }
+    if (const char* home = std::getenv("HOME"); home && *home) {
+        return std::filesystem::path(home) / ".local" / "share" / "ss2" / "saves";
+    }
+    return {};
+}
+
 inline std::string serializeUserSettings(const UserSettings& s) {
     std::ostringstream out;
     if (s.language) {

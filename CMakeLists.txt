@@ -65,9 +65,9 @@ target_include_directories(ss2_video PUBLIC src)
 target_link_libraries(ss2_video PUBLIC SDL3::SDL3 ss2_assets PkgConfig::FFMPEG)
 target_compile_options(ss2_video PRIVATE ${SS2_WARNINGS})
 add_library(ss2_session STATIC
-    src/session/session_setup.cpp src/session/session_audio.cpp src/session/session_menus.cpp
-    src/session/session_orders.cpp src/session/session_tick.cpp src/session/session_input.cpp
-    src/session/session_hud.cpp src/session/session_view.cpp
+    src/session/save_file.cpp src/session/session_setup.cpp src/session/session_audio.cpp
+    src/session/session_menus.cpp src/session/session_orders.cpp src/session/session_tick.cpp
+    src/session/session_input.cpp src/session/session_hud.cpp src/session/session_view.cpp
     src/ui/tutorial_selection.cpp src/audio/sound_player.cpp)
 target_link_libraries(ss2_session PUBLIC ss2_window ss2_briefing ss2_sim)
 target_compile_options(ss2_session PRIVATE ${SS2_WARNINGS})
@@ -98,6 +98,10 @@ if(BUILD_TESTING)
   target_link_libraries(gold_frontend_test PRIVATE ss2_gold_frontend PNG::PNG)
   target_compile_options(gold_frontend_test PRIVATE ${SS2_WARNINGS} ${SS2_ENABLE_ASSERTIONS})
   add_test(NAME gold_frontend COMMAND gold_frontend_test)
+  add_executable(save_file_test tests/save_file_test.cpp src/session/save_file.cpp)
+  target_link_libraries(save_file_test PRIVATE ss2_sim)
+  target_compile_options(save_file_test PRIVATE ${SS2_WARNINGS} ${SS2_ENABLE_ASSERTIONS})
+  add_test(NAME save_file COMMAND save_file_test)
   add_executable(hidpi_test tests/hidpi_test.cpp)
   target_include_directories(hidpi_test PRIVATE src)
   target_compile_options(hidpi_test PRIVATE ${SS2_WARNINGS} ${SS2_ENABLE_ASSERTIONS})
@@ -197,6 +201,9 @@ if(BUILD_TESTING)
     "-DARGS=--frames;0" "-DEXPECTED=--frames requires a positive integer" -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_failure.cmake)
   add_test(NAME invalid_replay_flags COMMAND ${CMAKE_COMMAND} -DPROGRAM=$<TARGET_FILE:ss2>
     "-DARGS=--record;a.ss2rep;--replay;b.ss2rep" "-DEXPECTED=Choose either --record or --replay"
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_failure.cmake)
+  add_test(NAME invalid_load_save_flags COMMAND ${CMAKE_COMMAND} -DPROGRAM=$<TARGET_FILE:ss2>
+    "-DARGS=--load-save;a.ss2save;--replay;b.ss2rep" "-DEXPECTED=--load-save cannot be combined with"
     -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_failure.cmake)
   option(SS2_TEST_WINDOW "Present frames during CTest (requires Vulkan WSI)" OFF)
   if(SS2_TEST_WINDOW)

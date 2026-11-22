@@ -1,6 +1,7 @@
 #include "assets/mission.hpp"
 #include "render/window.hpp"
 #include "session/game_session.hpp"
+#include "session/save_file.hpp"
 #include "sim/command.hpp"
 #include "ui/frontend.hpp"
 #include "ui/gold_frontend.hpp"
@@ -82,14 +83,131 @@ std::vector<ss2::FrontEnd::ReplayEntry> scanSavedReplays() {
     return out;
 }
 
+std::filesystem::path resolveSaveMissionPath(
+    const std::filesystem::path& gameDir,
+    const ss2::SaveFileMetadata& meta,
+    const std::filesystem::path& savePath,
+    const std::vector<ss2::assets::MissionSummary>& singleMissions,
+    const std::vector<ss2::assets::CampaignSummary>& campaigns) {
+    if (gameDir.empty()) return {};
+    if (!meta.mission.empty()) {
+        const auto candidate = ss2::assets::resolveCaseInsensitivePath(gameDir, meta.mission);
+        std::error_code ec;
+        if (!candidate.empty() && std::filesystem::is_regular_file(candidate, ec)) return candidate;
+    }
+    const std::string baseStem = ss2::stripSaveSlotSuffix(savePath.stem().string());
+    if (baseStem.empty()) return {};
+    if (ss2::assets::equalsIgnoreCaseAscii(baseStem, "tutorial1") ||
+        ss2::assets::equalsIgnoreCaseAscii(baseStem, "--- TUTORIAL I ---")) {
+        const auto tut = ss2::assets::resolveCaseInsensitivePath(gameDir, "maps/single/--- TUTORIAL I ---.SSM");
+        std::error_code ec;
+        if (!tut.empty() && std::filesystem::is_regular_file(tut, ec)) return tut;
+    }
+    for (const auto& m : singleMissions) {
+        if (ss2::assets::equalsIgnoreCaseAscii(m.path.stem().string(), baseStem) ||
+            ss2::assets::equalsIgnoreCaseAscii(m.name, baseStem)) {
+            return m.path;
+        }
+    }
+    for (const auto& c : campaigns) {
+        for (const auto& m : c.missions) {
+            if (ss2::assets::equalsIgnoreCaseAscii(m.code, baseStem) ||
+                ss2::assets::equalsIgnoreCaseAscii(m.path.stem().string(), baseStem)) {
+                if (meta.difficulty == 1 && !m.easyPath.empty()) return m.easyPath;
+                return m.path;
+            }
+        }
+    }
+    return {};
+}
+
+std::vector<ss2::FrontEnd::SaveEntry> scanSavedGames(
+    const std::filesystem::path& gameDir,
+    const std::vector<ss2::assets::MissionSummary>& singleMissions,
+    const std::vector<ss2::assets::CampaignSummary>& campaigns) {
+    struct SortItem {
+        std::int64_t epoch{0};
+        ss2::FrontEnd::SaveEntry entry;
+    };
+    std::vector<SortItem> items;
+    const auto dir = ss2::defaultSavesDir();
+    if (dir.empty()) return {};
+    std::error_code ec;
+    if (!std::filesystem::is_directory(dir, ec) || ec) return {};
+
+    for (std::filesystem::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
+        std::error_code fileEc;
+        if (!it->is_regular_file(fileEc) || fileEc) continue;
+        const auto ext = it->path().extension().string();
+        if (!ss2::assets::equalsIgnoreCaseAscii(ext, ".ss2save")) continue;
+        const auto decoded = ss2::readSaveFile(it->path());
+        if (!decoded) continue;
+
+        const auto& meta = decoded->meta;
+        const std::string fileStem = it->path().stem().string();
+        const std::string slotLabel = ss2::inferSaveSlotLabel(fileStem);
+        std::string missionTitle = meta.missionTitle;
+        const std::string baseStem = ss2::stripSaveSlotSuffix(fileStem);
+
+        if (missionTitle.empty()) {
+            const auto resolved = resolveSaveMissionPath(gameDir, meta, it->path(), singleMissions, campaigns);
+            const std::string matchStem = !resolved.empty() ? resolved.stem().string() : baseStem;
+            for (const auto& m : singleMissions) {
+                if (ss2::assets::equalsIgnoreCaseAscii(m.path.stem().string(), matchStem)) {
+                    missionTitle = m.name;
+                    break;
+                }
+            }
+            if (missionTitle.empty()) {
+                for (const auto& c : campaigns) {
+                    for (const auto& m : c.missions) {
+                        if (ss2::assets::equalsIgnoreCaseAscii(m.code, matchStem) ||
+                            ss2::assets::equalsIgnoreCaseAscii(m.path.stem().string(), matchStem)) {
+                            missionTitle = m.title;
+                            break;
+                        }
+                    }
+                    if (!missionTitle.empty()) break;
+                }
+            }
+            if (missionTitle.empty()) missionTitle = baseStem;
+        }
+
+        ss2::FrontEnd::SaveEntry entry;
+        entry.name = !missionTitle.empty() ? (missionTitle + " \xE2\x80\x94 " + slotLabel) : fileStem;
+        entry.path = it->path().string();
+        entry.mission = meta.mission;
+        entry.missionTitle = missionTitle;
+        entry.slotLabel = slotLabel;
+        entry.timestamp = ss2::formatSaveTimestamp(meta.savedEpochSec);
+        entry.tick = meta.tick;
+        entry.playerSoldiers = meta.playerSoldiers;
+        entry.playerVehicles = meta.playerVehicles;
+        entry.difficulty = meta.difficulty;
+        entry.fileBytes = meta.fileBytes;
+        items.push_back(SortItem{meta.savedEpochSec, std::move(entry)});
+    }
+
+    std::ranges::sort(items, [](const SortItem& a, const SortItem& b) {
+        if (a.epoch != b.epoch) return a.epoch > b.epoch;
+        return a.entry.name < b.entry.name;
+    });
+    std::vector<ss2::FrontEnd::SaveEntry> out;
+    out.reserve(items.size());
+    for (auto& item : items) out.push_back(std::move(item.entry));
+    return out;
+}
+
 struct FrontEndResult {
     std::filesystem::path missionPath;
     std::optional<ss2::cmd::ReplayFile> replayFile;
+    std::filesystem::path savePath;
+    std::optional<int> saveDifficulty;
 };
 
 // The Gold frontend shown on ordinary launch, before any mission loads. Reuses the mission
-// browser, the Menu/Briefing/Options/Replay panels and (through the caller's runGameSession loop)
-// the loader, all on the same window. Returns the chosen mission/replay, or nullopt when quitting.
+// browser, the Menu/Briefing/Options/Replay/Load panels and (through the caller's runGameSession loop)
+// the loader, all on the same window. Returns the chosen mission/replay/save, or nullopt when quitting.
 std::optional<FrontEndResult> runFrontEnd(SDL_Window* window, ss2::ValidationReport* report,
                                           const std::filesystem::path& gameDir,
                                           ss2::UserSettings& settings, bool persistSettings) {
@@ -97,8 +215,9 @@ std::optional<FrontEndResult> runFrontEnd(SDL_Window* window, ss2::ValidationRep
     ss2::GoldFrontEnd goldFe(window, gameDir);
     goldFe.setSettings(settings);
 
+    const auto installedMissions = ss2::assets::listSinglePlayerMissions(gameDir);
     std::vector<ss2::GoldMissionEntry> entries;
-    for (const auto& m : ss2::assets::listSinglePlayerMissions(gameDir)) {
+    for (const auto& m : installedMissions) {
         std::string tag = std::to_string(m.width) + "x" + std::to_string(m.height) +
                           (m.scheme == 2 ? " Beach" : " Summer");
         const std::string key = ss2::normalizeMissionKey(m.path.stem().string());
@@ -115,8 +234,9 @@ std::optional<FrontEndResult> runFrontEnd(SDL_Window* window, ss2::ValidationRep
     }
     goldFe.setMissions(std::move(entries));
 
+    const auto installedCampaigns = ss2::assets::listCampaigns(gameDir);
     std::vector<ss2::GoldCampaignEntry> campaignEntries;
-    for (const auto& c : ss2::assets::listCampaigns(gameDir)) {
+    for (const auto& c : installedCampaigns) {
         ss2::GoldCampaignEntry ce;
         ce.name = c.name;
         ce.missions.reserve(c.missions.size());
@@ -144,6 +264,7 @@ std::optional<FrontEndResult> runFrontEnd(SDL_Window* window, ss2::ValidationRep
     }
     goldFe.setCampaigns(std::move(campaignEntries));
     goldFe.setReplays(scanSavedReplays());
+    goldFe.setSaves(scanSavedGames(gameDir, installedMissions, installedCampaigns));
 
     const ss2::Snapshot empty{};
     std::uint64_t lastTick = SDL_GetTicksNS();
@@ -165,6 +286,19 @@ std::optional<FrontEndResult> runFrontEnd(SDL_Window* window, ss2::ValidationRep
                 (void)ss2::saveUserSettings(ss2::defaultSettingsPath(), settings);
             }
         }
+        if (auto delPath = goldFe.takeDeleteSaveRequest()) {
+            std::error_code ec;
+            const auto savesRoot = std::filesystem::weakly_canonical(ss2::defaultSavesDir(), ec);
+            const auto cand = std::filesystem::weakly_canonical(*delPath, ec);
+            if (!savesRoot.empty() && cand.parent_path() == savesRoot &&
+                std::filesystem::is_regular_file(cand, ec) &&
+                std::filesystem::remove(cand, ec)) {
+                goldFe.setSaves(scanSavedGames(gameDir, installedMissions, installedCampaigns));
+                goldFe.showNotice(ss2::tr("Saved game deleted."));
+            } else {
+                goldFe.showNotice(ss2::tr("Could not delete saved game."));
+            }
+        }
 
         const auto screen = goldFe.state().screen();
         if (screen == ss2::FrontEnd::Screen::Launch) {
@@ -174,13 +308,30 @@ std::optional<FrontEndResult> runFrontEnd(SDL_Window* window, ss2::ValidationRep
                     (void)ss2::saveUserSettings(ss2::defaultSettingsPath(), settings);
                 }
             }
-            return FrontEndResult{std::filesystem::path(goldFe.state().launchPath()), std::nullopt};
+            return FrontEndResult{std::filesystem::path(goldFe.state().launchPath()), std::nullopt, {}, std::nullopt};
         }
         if (screen == ss2::FrontEnd::Screen::LaunchReplay) {
             if (auto loaded = loadReplayFileFromDisk(goldFe.state().launchReplayPath())) {
-                return FrontEndResult{resolveReplayMissionPath(gameDir, loaded->mission), std::move(*loaded)};
+                return FrontEndResult{resolveReplayMissionPath(gameDir, loaded->mission), std::move(*loaded), {}, std::nullopt};
             }
             goldFe.state().back();
+        }
+        if (screen == ss2::FrontEnd::Screen::LaunchSave) {
+            const std::filesystem::path savePath(goldFe.state().launchSavePath());
+            if (auto decoded = ss2::readSaveFile(savePath)) {
+                const auto resolved = resolveSaveMissionPath(
+                    gameDir, decoded->meta, savePath, installedMissions, installedCampaigns);
+                if (!resolved.empty()) {
+                    return FrontEndResult{
+                        resolved,
+                        std::nullopt,
+                        savePath,
+                        decoded->meta.hasMetadata ? std::optional<int>(decoded->meta.difficulty) : std::nullopt
+                    };
+                }
+            }
+            goldFe.handleKey(SDLK_ESCAPE);
+            goldFe.showNotice(ss2::tr("Failed to load saved game."));
         }
         if (screen == ss2::FrontEnd::Screen::Quit) return std::nullopt;
 
@@ -191,7 +342,7 @@ std::optional<FrontEndResult> runFrontEnd(SDL_Window* window, ss2::ValidationRep
 }
 
 int main(int argc, char** argv) try {
-    std::filesystem::path gameDir, mission, hdPack, recordPath, replayPath;
+    std::filesystem::path gameDir, mission, hdPack, recordPath, replayPath, loadSavePath;
     std::string campaignQuery;
     int limit = 0;
     bool fourK = false, validate = false, timing = false;
@@ -208,7 +359,7 @@ int main(int argc, char** argv) try {
     for (int i = 1; i < argc; ++i) {
         const std::string_view arg(argv[i]);
         if (arg == "--help") {
-            std::cout << "ss2 [--game-dir DIR] [--mission FILE.ssm|NAME|INDEX] [--campaign QUERY] [--overview] [--list-missions] [--list-campaigns] [--hd-pack DIR] [--original-infantry] [--no-auto-engage] [--difficulty easy|normal|hard] [--record FILE | --replay FILE] [--4k] [--fullscreen | --windowed] [--lang en|fr|es] [--frames N] [--no-movies] [--validate] [--timing]\n"
+            std::cout << "ss2 [--game-dir DIR] [--mission FILE.ssm|NAME|INDEX] [--campaign QUERY] [--overview] [--list-missions] [--list-campaigns] [--hd-pack DIR] [--original-infantry] [--no-auto-engage] [--difficulty easy|normal|hard] [--record FILE | --replay FILE | --load-save FILE] [--4k] [--fullscreen | --windowed] [--lang en|fr|es] [--frames N] [--no-movies] [--validate] [--timing]\n"
                          "--game-dir opens Tutorial I (or --mission) from an extracted Gold 2.2 game directory.\n"
                          "--list-missions lists all installed single-player missions, their map sizes and descriptions.\n"
                          "--list-campaigns lists all installed campaigns and missions.\n"
@@ -217,6 +368,7 @@ int main(int argc, char** argv) try {
                          "--overview displays only the mission's JPEG overview instead of launching playable.\n"
                          "--record writes a deterministic command log and final stateHash to FILE on exit.\n"
                          "--replay replays a recorded command log on a manual clock and verifies its final stateHash.\n"
+                         "--load-save launches a saved mission snapshot (.ss2save) directly into playable simulation.\n"
                          "--no-movies skips the opening logo and intro Bink movies.\n"
                          "--original-infantry uses the original infantry size. The default is 125%.\n"
                          "--no-auto-engage disables automatic firing on spotted enemies (manual attack orders only).\n"
@@ -230,6 +382,7 @@ int main(int argc, char** argv) try {
         else if (arg == "--campaign" && i + 1 < argc) campaignQuery = argv[++i];
         else if (arg == "--record" && i + 1 < argc) recordPath = argv[++i];
         else if (arg == "--replay" && i + 1 < argc) replayPath = argv[++i];
+        else if (arg == "--load-save" && i + 1 < argc) loadSavePath = argv[++i];
         else if (arg == "--list-missions") listMissions = true;
         else if (arg == "--list-campaigns") listCampaigns = true;
         else if (arg == "--overview") overviewOnly = true;
@@ -270,6 +423,13 @@ int main(int argc, char** argv) try {
         throw std::invalid_argument("--overview cannot be combined with --record or --replay");
     if (timing && !replayPath.empty())
         throw std::invalid_argument("--timing cannot be combined with --replay");
+    if (!loadSavePath.empty() && (!recordPath.empty() || !replayPath.empty() || overviewOnly || timing))
+        throw std::invalid_argument("--load-save cannot be combined with --record, --replay, --overview or --timing");
+    std::optional<ss2::DecodedSaveFile> parsedSave;
+    if (!loadSavePath.empty()) {
+        parsedSave = ss2::readSaveFile(loadSavePath);
+        if (!parsedSave) throw std::runtime_error("Malformed or unreadable --load-save file: " + loadSavePath.string());
+    }
     std::optional<ss2::cmd::ReplayFile> parsedReplay;
     if (!replayPath.empty()) {
         parsedReplay = loadReplayFileFromDisk(replayPath);
@@ -362,11 +522,22 @@ int main(int argc, char** argv) try {
                 std::filesystem::is_directory(installed / "infantry-art")) hdPack = installed;
         }
     }
-    if ((!recordPath.empty() || parsedReplay) && gameDir.empty()) {
+    if ((!recordPath.empty() || parsedReplay || parsedSave) && gameDir.empty()) {
         gameDir = resolveGameDir();
         if (gameDir.empty())
-            throw std::invalid_argument((!recordPath.empty() ? std::string("--record") : std::string("--replay")) +
+            throw std::invalid_argument((!recordPath.empty() ? std::string("--record")
+                                        : parsedReplay ? std::string("--replay")
+                                                       : std::string("--load-save")) +
                                         " requires a game directory: pass --game-dir or set SS2_GAME_DIR");
+    }
+    if (parsedSave && mission.empty() && campaignQuery.empty()) {
+        mission = resolveSaveMissionPath(
+            gameDir, parsedSave->meta, loadSavePath,
+            ss2::assets::listSinglePlayerMissions(gameDir),
+            ss2::assets::listCampaigns(gameDir));
+        if (mission.empty()) {
+            throw std::runtime_error("Could not determine mission for saved game: " + loadSavePath.string());
+        }
     }
     const auto settingsPath = ss2::defaultSettingsPath();
     const bool persistSettings = !limit && !timing && !overviewOnly && recordPath.empty() && !parsedReplay &&
@@ -374,6 +545,9 @@ int main(int argc, char** argv) try {
     ss2::UserSettings settings = persistSettings ? ss2::loadUserSettings(settingsPath) : ss2::UserSettings{};
     if (!languageChosen && settings.language) {
         ss2::setLanguage(*settings.language);
+    }
+    if (parsedSave && !cliDifficulty && parsedSave->meta.hasMetadata) {
+        settings.difficulty = std::clamp(parsedSave->meta.difficulty, 1, 3);
     }
     if (cliDifficulty) {
         settings.difficulty = *cliDifficulty;
@@ -383,7 +557,7 @@ int main(int argc, char** argv) try {
         if (parsedReplay->autoEngage) autoEngage = *parsedReplay->autoEngage;
     }
     SDLSession sdl;
-    if (!noMovies && !settings.skipIntro && !gameDir.empty() && !limit && !timing && !overviewOnly && !parsedReplay)
+    if (!noMovies && !settings.skipIntro && !gameDir.empty() && !limit && !timing && !overviewOnly && !parsedReplay && !parsedSave)
         ss2::playOpeningMovies(gameDir, fullscreen.value_or(false), hdPack);
     auto flags = SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
     if (fullscreen.value_or(false)) flags |= SDL_WINDOW_FULLSCREEN;
@@ -400,7 +574,7 @@ int main(int argc, char** argv) try {
     if (!window) throw std::runtime_error(SDL_GetError());
     ss2::ValidationReport report;
     int result = 0;
-    if (mission.empty() && !gameDir.empty() && !overviewOnly && !limit && !timing && !parsedReplay) {
+    if (mission.empty() && !gameDir.empty() && !overviewOnly && !limit && !timing && !parsedReplay && !parsedSave) {
         auto chosen = runFrontEnd(window.get(), validate ? &report : nullptr, gameDir, settings, persistSettings);
         if (!chosen) return 0;
         mission = std::move(chosen->missionPath);
@@ -409,12 +583,19 @@ int main(int argc, char** argv) try {
             if (parsedReplay->difficulty) settings.difficulty = *parsedReplay->difficulty;
             if (parsedReplay->autoEngage) autoEngage = *parsedReplay->autoEngage;
         }
+        if (!chosen->savePath.empty()) {
+            loadSavePath = std::move(chosen->savePath);
+            if (!cliDifficulty && chosen->saveDifficulty) {
+                settings.difficulty = std::clamp(*chosen->saveDifficulty, 1, 3);
+            }
+        }
     }
     for (;;) {
         std::optional<std::filesystem::path> nextMission;
         result = ss2::runGameSession(window.get(), validate ? &report : nullptr, limit, timing, gameDir, mission, hdPack,
                            originalInfantry, autoEngage, settings, persistSettings, overviewOnly, &nextMission,
-                           recordPath, parsedReplay ? &*parsedReplay : nullptr);
+                           recordPath, parsedReplay ? &*parsedReplay : nullptr, false, loadSavePath);
+        loadSavePath.clear();
         if (!nextMission || result != 0 || !recordPath.empty() || parsedReplay) break;
         mission = std::move(*nextMission);
         overviewOnly = false;

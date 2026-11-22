@@ -48,7 +48,8 @@ int runGameSession(SDL_Window* window, ValidationReport* report, int limit, bool
                    bool overviewOnly = false, std::optional<std::filesystem::path>* nextMissionOut = nullptr,
                    const std::filesystem::path& recordPath = {},
                    const cmd::ReplayFile* replayFile = nullptr,
-                   bool manualClock = false);
+                   bool manualClock = false,
+                   const std::filesystem::path& loadSavePath = {});
 
 class FrameSample {
     using Clock = std::chrono::steady_clock;
@@ -145,6 +146,7 @@ struct GameSession {
     const std::filesystem::path& recordPath;
     const cmd::ReplayFile* replayFile;
     bool manualClock = false;
+    std::filesystem::path loadSavePath;
 
     float refreshRate = 0.0f;
     VulkanWindow renderer;
@@ -223,6 +225,7 @@ struct GameSession {
     bool manualBriefingOpen = false;
     std::optional<std::filesystem::path> nextCampaignMissionPath;
     std::string nextCampaignMissionTitle;
+    std::string currentMissionTitle;
     std::filesystem::path currentMissionPath;
     unsigned hudMapW = 0, hudMapH = 0;
     assets::MapImage baseMinimap;
@@ -285,7 +288,7 @@ struct GameSession {
                 UserSettings& settings, bool persistSettings,
                 bool overviewOnly, std::optional<std::filesystem::path>* nextMissionOut,
                 const std::filesystem::path& recordPath, const cmd::ReplayFile* replayFile,
-                bool manualClock = false);
+                bool manualClock = false, const std::filesystem::path& loadSavePath = {});
 
     int run();
 
@@ -353,6 +356,8 @@ struct GameSession {
     void openMissionBriefing();
     std::filesystem::path quickSavePath(int slot) const;
     void doSaveSlot(int slot);
+    bool loadSaveFromPath(const std::filesystem::path& path, const std::string& loadedNotice,
+                          bool isStartupLoad = false);
     void doLoadSlot(int slot);
     void doQuickSave();
     void doQuickLoad();

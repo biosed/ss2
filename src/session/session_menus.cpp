@@ -1,6 +1,8 @@
 #include "session/game_session.hpp"
+#include "session/save_file.hpp"
 #include <algorithm>
 #include <charconv>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
@@ -473,41 +475,51 @@ void GameSession::openMissionBriefing() {
 }
 
 std::filesystem::path GameSession::quickSavePath(int slot) const {
-    std::filesystem::path base;
-    if (const char* xdg = std::getenv("XDG_DATA_HOME"); xdg && *xdg) {
-        base = std::filesystem::path(xdg);
-    } else if (const char* home = std::getenv("HOME"); home && *home) {
-        base = std::filesystem::path(home) / ".local" / "share";
-    } else {
-        base = std::filesystem::temp_directory_path();
+    std::filesystem::path dir = ss2::defaultSavesDir();
+    if (dir.empty()) {
+        dir = std::filesystem::temp_directory_path() / "ss2" / "saves";
     }
     const std::string stem = currentMissionPath.empty() ? std::string("tutorial1")
                                                         : currentMissionPath.stem().string();
     const std::string fname = (slot < 0)
         ? (stem + "_autosave.ss2save")
         : (slot == 0 ? (stem + ".ss2save") : (stem + "_slot" + std::to_string(slot) + ".ss2save"));
-    return base / "ss2" / "saves" / fname;
+    return dir / fname;
 }
 
 void GameSession::doSaveSlot(int slot) {
     if (!simulation) return;
     const auto path = quickSavePath(slot);
-    std::error_code ec;
-    std::filesystem::create_directories(path.parent_path(), ec);
-    if (ec) {
-        orderNotice.show(ss2::tr("Could not create save directory."), ss2::NoticeKind::blocked);
-        return;
+    SaveFileMetadata meta{};
+    meta.hasMetadata = true;
+    if (!currentMissionPath.empty()) {
+        std::error_code relEc;
+        const auto rel = !gameDir.empty() ? std::filesystem::relative(currentMissionPath, gameDir, relEc)
+                                          : std::filesystem::path{};
+        meta.mission = (!relEc && !rel.empty() && !rel.native().starts_with(".."))
+            ? rel.generic_string()
+            : currentMissionPath.filename().string();
+    } else {
+        meta.mission = "maps/single/--- TUTORIAL I ---.SSM";
     }
-    const auto bytes = ss2::TutorialUnits::serializeSnapshot(simulation->takeSnapshot());
-    std::ofstream out(path, std::ios::binary | std::ios::trunc);
-    if (!out) {
+    meta.missionTitle = !currentMissionTitle.empty()
+        ? currentMissionTitle
+        : (currentMissionPath.empty() ? std::string("Tutorial I") : currentMissionPath.stem().string());
+    meta.difficulty = std::clamp(settings.difficulty, 1, 3);
+    meta.savedEpochSec = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    meta.enemyInfKilled = enemyInfKilled;
+    meta.enemyVehDestroyed = enemyVehDestroyed;
+    meta.enemyTanksDestroyed = enemyTanksDestroyed;
+    meta.enemyGunsDestroyed = enemyGunsDestroyed;
+    meta.enemyPlanesShotDown = enemyPlanesShotDown;
+    meta.buildingsDemolished = buildingsDemolished;
+    meta.airSortiesFlown = airSortiesFlown;
+    meta.enemyScoreEarned = enemyScoreEarned;
+    meta.friendlyScoreLost = friendlyScoreLost;
+
+    if (!ss2::writeSaveFile(path, meta, simulation->takeSnapshot())) {
         orderNotice.show(ss2::tr("Could not write quick-save file."), ss2::NoticeKind::blocked);
-        return;
-    }
-    out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
-    out.flush();
-    if (!out) {
-        orderNotice.show(ss2::tr("Quick-save write failed."), ss2::NoticeKind::blocked);
         return;
     }
     if (slot < 0) {
@@ -522,34 +534,29 @@ void GameSession::doSaveSlot(int slot) {
     }
 }
 
-void GameSession::doLoadSlot(int slot) {
-    if (!simulation || !scene || !selection) return;
-    const auto path = quickSavePath(slot);
+bool GameSession::loadSaveFromPath(const std::filesystem::path& path, const std::string& loadedNotice,
+                                   bool isStartupLoad) {
+    if (!simulation || !scene || !selection) return false;
     std::error_code ec;
     if (!std::filesystem::is_regular_file(path, ec)) {
-        orderNotice.show(ss2::tr("No quick-save found for this mission."), ss2::NoticeKind::unsupported);
-        return;
+        if (!isStartupLoad) {
+            orderNotice.show(ss2::tr("No quick-save found for this mission."), ss2::NoticeKind::unsupported);
+        }
+        return false;
     }
-    std::ifstream in(path, std::ios::binary | std::ios::ate);
-    if (!in) {
-        orderNotice.show(ss2::tr("Could not read quick-save file."), ss2::NoticeKind::blocked);
-        return;
+    const auto decoded = ss2::readSaveFile(path);
+    if (!decoded) {
+        if (!isStartupLoad) {
+            orderNotice.show(ss2::tr("Quick-save file is empty or corrupt."), ss2::NoticeKind::blocked);
+        }
+        return false;
     }
-    const auto endPos = in.tellg();
-    if (endPos <= 0) {
-        orderNotice.show(ss2::tr("Quick-save file is empty or corrupt."), ss2::NoticeKind::blocked);
-        return;
-    }
-    std::vector<std::uint8_t> bytes(static_cast<std::size_t>(endPos));
-    in.seekg(0);
-    if (!in.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()))) {
-        orderNotice.show(ss2::tr("Could not read quick-save file."), ss2::NoticeKind::blocked);
-        return;
-    }
-    const auto snap = ss2::TutorialUnits::deserializeSnapshot(bytes);
-    if (!snap || !simulation->loadSnapshot(*snap)) {
-        orderNotice.show(ss2::tr("Quick-save data is incompatible with this mission."), ss2::NoticeKind::blocked);
-        return;
+    const auto& snap = decoded->snapshot;
+    if (!simulation->loadSnapshot(snap)) {
+        if (!isStartupLoad) {
+            orderNotice.show(ss2::tr("Quick-save data is incompatible with this mission."), ss2::NoticeKind::blocked);
+        }
+        return false;
     }
 
     fallenSoldiers.clear();
@@ -565,15 +572,27 @@ void GameSession::doLoadSlot(int slot) {
     eventHistoryCursor = 0;
     syncMarkers();
     selectedBuilding.reset();
-    enemyInfKilled = 0;
-    enemyVehDestroyed = 0;
-    buildingsDemolished = 0;
-    airSortiesFlown = 0;
-    enemyScoreEarned = 0;
-    friendlyScoreLost = 0;
-    enemyTanksDestroyed = 0;
-    enemyGunsDestroyed = 0;
-    enemyPlanesShotDown = 0;
+    if (decoded->meta.hasMetadata) {
+        enemyInfKilled = decoded->meta.enemyInfKilled;
+        enemyVehDestroyed = decoded->meta.enemyVehDestroyed;
+        enemyTanksDestroyed = decoded->meta.enemyTanksDestroyed;
+        enemyGunsDestroyed = decoded->meta.enemyGunsDestroyed;
+        enemyPlanesShotDown = decoded->meta.enemyPlanesShotDown;
+        buildingsDemolished = decoded->meta.buildingsDemolished;
+        airSortiesFlown = decoded->meta.airSortiesFlown;
+        enemyScoreEarned = decoded->meta.enemyScoreEarned;
+        friendlyScoreLost = decoded->meta.friendlyScoreLost;
+    } else {
+        enemyInfKilled = 0;
+        enemyVehDestroyed = 0;
+        buildingsDemolished = 0;
+        airSortiesFlown = 0;
+        enemyScoreEarned = 0;
+        friendlyScoreLost = 0;
+        enemyTanksDestroyed = 0;
+        enemyGunsDestroyed = 0;
+        enemyPlanesShotDown = 0;
+    }
     vehicleCrewImpaired.clear();
     vehicleMoveImpaired.clear();
     vehicleSuppressed.clear();
@@ -592,15 +611,15 @@ void GameSession::doLoadSlot(int slot) {
     vehicleHoldFireUnits.clear();
     camouflagedUnits.clear();
     suppressedUnits.clear();
-    missionPlayerTeams = snap->playerTeams;
-    for (std::size_t i = 0; i < snap->soldiers.size(); ++i) {
-        const auto& ss = snap->soldiers[i];
+    missionPlayerTeams = snap.playerTeams;
+    for (std::size_t i = 0; i < snap.soldiers.size(); ++i) {
+        const auto& ss = snap.soldiers[i];
         if (ss.crouched) crouchedUnits.insert(i);
         if (ss.holdFire) holdFireUnits.insert(i);
         if (ss.binoculars) binocularUnits.insert(i);
     }
-    for (std::size_t i = 0; i < snap->vehicles.size(); ++i) {
-        if (snap->vehicles[i].holdFire) vehicleHoldFireUnits.insert(i);
+    for (std::size_t i = 0; i < snap.vehicles.size(); ++i) {
+        if (snap.vehicles[i].holdFire) vehicleHoldFireUnits.insert(i);
     }
 
     if (auto fogSnap = simulation->pollFog()) {
@@ -683,14 +702,28 @@ void GameSession::doLoadSlot(int slot) {
     (void)simulation->poll();
     syncGpuSprites();
     nextAutoSaveTick = simulation->simTick() + 7500u;
-    if (audio) audio->playGroup("accept", 0.45f);
-    if (slot < 0) {
-        showNotice(ss2::tr("Loaded Auto-Save."), ss2::NoticeKind::accepted);
-    } else if (slot == 0) {
-        showNotice(ss2::tr("Quick-loaded mission state (F10)."), ss2::NoticeKind::accepted);
+    if (isStartupLoad) {
+        std::cout << "Loaded saved game: " << path << " (tick " << simulation->simTick()
+                  << ", " << decoded->meta.playerSoldiers << " infantry, "
+                  << decoded->meta.playerVehicles << " vehicles)\n";
+        if (!loadedNotice.empty()) {
+            showNotice(loadedNotice, ss2::NoticeKind::accepted);
+        }
     } else {
-        showNotice(ss2::trf("Loaded mission state from Slot {0}.", {std::to_string(slot)}), ss2::NoticeKind::accepted);
+        if (audio) audio->playGroup("accept", 0.45f);
+        if (!loadedNotice.empty()) {
+            showNotice(loadedNotice, ss2::NoticeKind::accepted);
+        }
     }
+    return true;
+}
+
+void GameSession::doLoadSlot(int slot) {
+    const std::string notice = (slot < 0)
+        ? ss2::tr("Loaded Auto-Save.")
+        : (slot == 0 ? ss2::tr("Quick-loaded mission state (F10).")
+                     : ss2::trf("Loaded mission state from Slot {0}.", {std::to_string(slot)}));
+    (void)loadSaveFromPath(quickSavePath(slot), notice, false);
 }
 
 void GameSession::doQuickSave() { doSaveSlot(0); }

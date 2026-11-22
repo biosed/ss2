@@ -77,6 +77,25 @@ std::string FrontEnd::launchReplayPath() const {
     return r ? r->path : std::string{};
 }
 
+void FrontEnd::setSaves(std::vector<SaveEntry> saves) {
+    saves_ = std::move(saves);
+    if (saves_.empty()) selectedSave_ = 0;
+    else if (selectedSave_ >= saves_.size()) selectedSave_ = saves_.size() - 1;
+}
+
+void FrontEnd::selectSave(std::size_t index) {
+    selectedSave_ = saves_.empty() ? 0 : (index < saves_.size() ? index : saves_.size() - 1);
+}
+
+const FrontEnd::SaveEntry* FrontEnd::selectedSaveEntry() const {
+    return selectedSave_ < saves_.size() ? &saves_[selectedSave_] : nullptr;
+}
+
+std::string FrontEnd::launchSavePath() const {
+    const auto* s = selectedSaveEntry();
+    return s ? s->path : std::string{};
+}
+
 void FrontEnd::select(std::size_t index) {
     selected_ = missions_.empty() ? 0 : (index < missions_.size() ? index : missions_.size() - 1);
 }
@@ -166,9 +185,11 @@ std::string FrontEnd::title() const {
         case Screen::Options: return tr("Options");
         case Screen::Ratings: return tr("Ratings");
         case Screen::Replays: return tr("Replay Game");
+        case Screen::LoadGame: return tr("Load Game");
         case Screen::Credits: return tr("Credits");
         case Screen::Launch:
         case Screen::LaunchReplay:
+        case Screen::LaunchSave:
         case Screen::Quit: break;
     }
     return {};
@@ -253,11 +274,24 @@ std::vector<MenuItem> FrontEnd::items() const {
             items.push_back({"replay_start", tr("Replay"), "R", !replays_.empty()});
             items.push_back({"cancel", tr("Cancel"), "Esc", true});
             break;
+        case Screen::LoadGame:
+            for (std::size_t i = 0; i < saves_.size(); ++i) {
+                items.push_back({"save:" + std::to_string(i), saves_[i].name,
+                                 saves_[i].slotLabel, true});
+            }
+            if (saves_.empty()) {
+                items.push_back({"", tr("No saved games yet."), "", false});
+            }
+            items.push_back({"load_start", tr("Load"), "L", !saves_.empty()});
+            items.push_back({"load_delete", tr("Delete"), "D", !saves_.empty()});
+            items.push_back({"cancel", tr("Cancel"), "Esc", true});
+            break;
         case Screen::Credits:
             items.push_back({"cancel", tr("Cancel"), "Esc", true});
             break;
         case Screen::Launch:
         case Screen::LaunchReplay:
+        case Screen::LaunchSave:
         case Screen::Quit:
             break;
     }
@@ -295,6 +329,13 @@ void FrontEnd::activate(const std::string& id) {
         }
         return;
     }
+    if (std::size_t index = 0; parseTailIndex(id, "save:", index)) {
+        if (index < saves_.size()) {
+            selectSave(index);
+            screen_ = Screen::LaunchSave;
+        }
+        return;
+    }
 
     switch (screen_) {
         case Screen::MainMenu:
@@ -315,7 +356,7 @@ void FrontEnd::activate(const std::string& id) {
             } else if (id == "cancel" || id == "back") {
                 screen_ = Screen::MainMenu;
             } else if (id == "load") {
-                notice_ = tr("Not implemented yet.");
+                screen_ = Screen::LoadGame;
             }
             break;
         case Screen::SingleMissions:
@@ -374,11 +415,22 @@ void FrontEnd::activate(const std::string& id) {
                 screen_ = Screen::MainMenu;
             }
             break;
+        case Screen::LoadGame:
+            if (id == "load_start") {
+                if (selectedSaveEntry()) screen_ = Screen::LaunchSave;
+                else notice_ = tr("No saved games yet.");
+            } else if (id == "load_delete") {
+                if (!selectedSaveEntry()) notice_ = tr("No saved games yet.");
+            } else if (id == "cancel" || id == "back") {
+                screen_ = Screen::SinglePlayer;
+            }
+            break;
         case Screen::Credits:
             if (id == "cancel" || id == "back") screen_ = Screen::MainMenu;
             break;
         case Screen::Launch:
         case Screen::LaunchReplay:
+        case Screen::LaunchSave:
         case Screen::Quit:
             break;
     }
@@ -393,6 +445,12 @@ void FrontEnd::back() {
         case Screen::CampaignMissions: screen_ = Screen::Campaigns; break;
         case Screen::Briefing:
             screen_ = briefingFromCampaign_ ? Screen::CampaignMissions : Screen::SingleMissions;
+            break;
+        case Screen::LoadGame:
+            screen_ = Screen::SinglePlayer;
+            break;
+        case Screen::LaunchSave:
+            screen_ = Screen::LoadGame;
             break;
         case Screen::Options:
         case Screen::Ratings:
@@ -454,10 +512,15 @@ std::string FrontEnd::shortcutId(char letter) const {
         case Screen::Replays:
             if (c == 'r') return "replay_start";
             break;
+        case Screen::LoadGame:
+            if (c == 'l') return "load_start";
+            if (c == 'd') return "load_delete";
+            break;
         case Screen::Options:
         case Screen::Credits:
         case Screen::Launch:
         case Screen::LaunchReplay:
+        case Screen::LaunchSave:
         case Screen::Quit:
             break;
     }

@@ -4,7 +4,10 @@ set -euo pipefail
 # Build and run sim_determinism_test and combat_parity_test across:
 #   1) Native ARM64 GCC
 #   2) Native ARM64 Clang
-#   3) Cross-compiled x86-64 (zig c++ -target x86_64-linux-musl) under qemu-x86_64-static
+#   3) Cross-compiled baseline x86-64 (zig c++ -target x86_64-linux-musl) under qemu-x86_64-static
+#   4) Cross-compiled FMA-capable x86-64-v3 (zig c++ -target x86_64-linux-musl -mcpu=x86_64_v3)
+# Plus an explicit x86-64-v3 FMA negative-control probe verifying -ffp-contract=off
+# actively prevents FMA contraction divergence relative to -ffp-contract=fast.
 # Verifies bit-for-bit identical 64-bit simulation stateHash() across compilers and ISAs.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -96,18 +99,65 @@ run_toolchain() {
 run_toolchain "arm64_gcc" "" g++ -O3
 run_toolchain "arm64_clang" "" clang++ -O2
 run_toolchain "x86_64_musl" "qemu-x86_64-static" zig c++ -target x86_64-linux-musl -O2
+run_toolchain "x86_64_v3_musl" "qemu-x86_64-static" zig c++ -target x86_64-linux-musl -mcpu=x86_64_v3 -O2
 
 h_gcc="$(cat "$TMP/hash_arm64_gcc")"
 h_clang="$(cat "$TMP/hash_arm64_clang")"
 h_x86="$(cat "$TMP/hash_x86_64_musl")"
+h_x86_v3="$(cat "$TMP/hash_x86_64_v3_musl")"
 
 echo "=== Cross-ISA Comparison ==="
-echo "ARM64 GCC  : $h_gcc"
-echo "ARM64 Clang: $h_clang"
-echo "x86-64 Zig : $h_x86"
+echo "ARM64 GCC     : $h_gcc"
+echo "ARM64 Clang   : $h_clang"
+echo "x86-64 Zig    : $h_x86"
+echo "x86-64-v3 Zig : $h_x86_v3"
 
-if [ "$h_gcc" != "$h_clang" ] || [ "$h_gcc" != "$h_x86" ]; then
+if [ "$h_gcc" != "$h_clang" ] || [ "$h_gcc" != "$h_x86" ] || [ "$h_gcc" != "$h_x86_v3" ]; then
     echo "ERROR: Cross-ISA simulation stateHash mismatch!" >&2
+    exit 1
+fi
+
+cat > "$TMP/fma_probe.cpp" << 'EOF'
+#include "sim/det_math.hpp"
+#include "sim/state_hash.hpp"
+#include <cstdint>
+#include <iostream>
+
+int main() {
+    ss2::StateHasher h;
+    for (int i = 0; i < 2048; ++i) {
+        const double angle = (static_cast<double>(i) * 6.28318530717958647692) / 2048.0;
+        const auto [s, c] = ss2::det::detSinCos(angle);
+        h.add(s);
+        h.add(c);
+        const double dx = s * 137.3 + 0.125;
+        const double dy = c * 91.7 - 0.375;
+        h.add(ss2::det::detHypot(dx, dy));
+    }
+    std::cout << "0x" << std::hex << h.value() << '\n';
+    return 0;
+}
+EOF
+
+g++ -std=c++20 -O3 -ffp-contract=off -I"$ROOT/src" "$TMP/fma_probe.cpp" -o "$TMP/fma_arm64_off"
+zig c++ -target x86_64-linux-musl -mcpu=x86_64_v3 -O2 -ffp-contract=off -std=c++20 -I"$ROOT/src" "$TMP/fma_probe.cpp" -o "$TMP/fma_x86_v3_off"
+zig c++ -target x86_64-linux-musl -mcpu=x86_64_v3 -O2 -ffp-contract=fast -std=c++20 -I"$ROOT/src" "$TMP/fma_probe.cpp" -o "$TMP/fma_x86_v3_fast"
+
+p_arm="$("$TMP/fma_arm64_off")"
+p_v3_off="$(qemu-x86_64-static "$TMP/fma_x86_v3_off")"
+p_v3_fast="$(qemu-x86_64-static "$TMP/fma_x86_v3_fast")"
+
+echo "=== x86-64-v3 FMA Negative-Control Probe ==="
+echo "ARM64 GCC (-ffp-contract=off)     : $p_arm"
+echo "x86-64-v3 (-ffp-contract=off)     : $p_v3_off"
+echo "x86-64-v3 (-ffp-contract=fast)    : $p_v3_fast"
+
+if [ "$p_arm" != "$p_v3_off" ]; then
+    echo "ERROR: x86-64-v3 strict hash diverged from ARM64 GCC!" >&2
+    exit 1
+fi
+if [ "$p_v3_fast" = "$p_v3_off" ]; then
+    echo "ERROR: x86-64-v3 -ffp-contract=fast did not trigger FMA contraction divergence!" >&2
     exit 1
 fi
 echo "Cross-ISA bit-for-bit determinism PASSED"

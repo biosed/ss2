@@ -72,6 +72,9 @@ public:
     void setMissions(std::vector<GoldMissionEntry> missions);
     void setCampaigns(std::vector<GoldCampaignEntry> campaigns);
     void setReplays(std::vector<FrontEnd::ReplayEntry> replays);
+    void setSaves(std::vector<FrontEnd::SaveEntry> saves);
+    std::optional<std::string> takeDeleteSaveRequest();
+    void showNotice(std::string text);
     void setDifficulty(int difficulty);
     int difficulty() const { return fe_.difficulty(); }
 
@@ -130,7 +133,6 @@ private:
     void cancelOptionsEdit();
     std::string hitTestStage(double sx, double sy) const;
     void activateId(const std::string& id);
-    void showNotice(std::string text);
     void ensureOverviewLoaded(const std::string& path);
 
     SDL_Window* window_{};
@@ -139,6 +141,8 @@ private:
     std::vector<GoldMissionEntry> missions_;
     std::vector<GoldCampaignEntry> campaigns_;
     std::vector<FrontEnd::ReplayEntry> replays_;
+    std::vector<FrontEnd::SaveEntry> saves_;
+    std::optional<std::string> pendingDeleteSave_;
     UserSettings settings_{};
     UserSettings optionsDraft_{};
     Language optionsBackupLanguage_{Language::english};

@@ -152,7 +152,7 @@ int main() {
         quit.activate("quit");
         check(quit.screen() == FrontEnd::Screen::Quit, "Quit row exits");
 
-        // Deferred branches stay put and report a notice.
+        // Deferred branch stays put and reports a notice; Load opens LoadGame browser.
         FrontEnd def;
         def.activate("multi");
         check(def.screen() == FrontEnd::Screen::MainMenu, "Multiplayer is deferred, stays on Main Menu");
@@ -160,8 +160,44 @@ int main() {
         check(def.takeNotice().empty(), "notice is cleared after reading");
         def.activate("single");
         def.activate("load");
-        check(def.screen() == FrontEnd::Screen::SinglePlayer, "Load is deferred, stays on Single Player");
-        check(!def.takeNotice().empty(), "Load reports a notice");
+        check(def.screen() == FrontEnd::Screen::LoadGame && def.title() == "Load Game",
+              "Load opens Load Game screen");
+        def.activate("load_start");
+        check(def.screen() == FrontEnd::Screen::LoadGame && !def.takeNotice().empty(),
+              "Empty Load Start stays on Load Game and emits a notice");
+        def.activate("load_delete");
+        check(def.screen() == FrontEnd::Screen::LoadGame && !def.takeNotice().empty(),
+              "Empty Load Delete stays on Load Game and emits a notice");
+        def.setSaves({
+            {"Tutorial I — Quick Save", "/home/user/.local/share/ss2/saves/tutorial1.ss2save",
+             "maps/single/--- TUTORIAL I ---.SSM", "Tutorial I", "Quick Save",
+             "2026-11-22 01:00", 1200u, 29u, 0u, 2, 4096u},
+            {"1. Starting Position — Slot 1", "/home/user/.local/share/ss2/saves/023000_slot1.ss2save",
+             "maps/campaign/023000.ssc", "1. Starting Position", "Slot 1",
+             "2026-11-22 01:15", 2400u, 18u, 4u, 3, 8192u},
+        });
+        check(def.shortcutId('l') == "load_start" && def.shortcutId('d') == "load_delete",
+              "Load Game advertises L and D shortcuts");
+        check(hasId(def.items(), "save:0") && hasId(def.items(), "save:1"),
+              "Load Game lists saved game items");
+        def.selectSave(1);
+        def.activate(def.shortcutId('l'));
+        check(def.screen() == FrontEnd::Screen::LaunchSave &&
+              def.launchSavePath() == "/home/user/.local/share/ss2/saves/023000_slot1.ss2save",
+              "L launches selected saved game");
+        def.back();
+        check(def.screen() == FrontEnd::Screen::LoadGame, "Back from LaunchSave returns to Load Game");
+        def.activate("save:0");
+        check(def.screen() == FrontEnd::Screen::LaunchSave &&
+              def.selectedSave() == 0 &&
+              def.launchSavePath() == "/home/user/.local/share/ss2/saves/tutorial1.ss2save",
+              "save:0 selects and launches first save");
+        def.back();
+        def.activate("cancel");
+        check(def.screen() == FrontEnd::Screen::SinglePlayer, "Cancel from Load Game returns to Single Player");
+        def.activate("load");
+        def.back();
+        check(def.screen() == FrontEnd::Screen::SinglePlayer, "Esc from Load Game returns to Single Player");
 
         // Options (O) and Replays (P) navigation, shortcuts, and launch/cancel flows.
         {

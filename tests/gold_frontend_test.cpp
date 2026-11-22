@@ -273,7 +273,7 @@ void testFallbackInteraction() {
           "Empty Replay button stays on Replays with a notice");
     ofe.setReplays({
         {"tutorial1_full", "/tmp/tutorial1_full.ss2rep", "maps/single/--- TUTORIAL I ---.SSM",
-         "0xb72cfe2bbab46f1a", 12, 3734, 2, true},
+         "0x1627b0e8d45be6ea", 12, 3862, 2, true},
         {"russian1_smoke", "/tmp/russian1_smoke.ss2rep", "maps/campaign/000000.ssc",
          "0x1234abcd", 6, 150, 3, false},
     });
@@ -285,6 +285,38 @@ void testFallbackInteraction() {
     check(ofe.state().screen() == ss2::FrontEnd::Screen::LaunchReplay &&
           ofe.state().launchReplayPath() == "/tmp/russian1_smoke.ss2rep",
           "Double clicking replay launches selected replay");
+
+    // Synthetic Load Game browser flow: SinglePlayer -> Load -> empty notice -> populate 2 saves -> delete request -> double-click launch -> Esc back.
+    ss2::GoldFrontEnd lfe(nullptr, {});
+    lfe.handleMouseDown(188.0, 128.0, 1);  // SinglePlayer
+    lfe.handleMouseDown(188.0, 329.0, 1);  // Load [134,312,108,35]
+    check(lfe.state().screen() == ss2::FrontEnd::Screen::LoadGame, "clicked Load -> LoadGame");
+    lfe.renderToBuffer(1280, 720, buf);
+    lfe.handleKey(SDLK_L);
+    check(lfe.state().screen() == ss2::FrontEnd::Screen::LoadGame && !lfe.activeNotice().empty(),
+          "Empty Load button stays on LoadGame with a notice");
+    lfe.setSaves({
+        {"Tutorial I — Quick Save", "/tmp/tutorial1.ss2save", "maps/single/--- TUTORIAL I ---.SSM",
+         "Tutorial I", "Quick Save", "2026-11-22 01:20", 1414u, 29u, 0u, 2, 12288u},
+        {"1. Starting Position — Slot 1", "/tmp/023000_slot1.ss2save", "maps/campaign/023000.ssc",
+         "1. Starting Position", "Slot 1", "2026-11-22 01:15", 800u, 18u, 4u, 3, 24576u},
+    });
+    lfe.renderToBuffer(1280, 720, buf);
+    check(buf.size() == 1280u * 720u * 4u, "fallback LoadGame buffer size");
+    lfe.handleMouseDown(120.0, 168.0, 1);  // Row 1
+    check(lfe.state().selectedSave() == 1, "clicked save row 1");
+    lfe.handleKey(SDLK_D);
+    const auto delReq = lfe.takeDeleteSaveRequest();
+    check(delReq && *delReq == "/tmp/023000_slot1.ss2save", "D key emits delete save request for selected save");
+    check(!lfe.takeDeleteSaveRequest().has_value(), "takeDeleteSaveRequest clears pending request");
+    lfe.handleMouseDown(120.0, 148.0, 2);  // Double click Row 0 -> LaunchSave
+    check(lfe.state().screen() == ss2::FrontEnd::Screen::LaunchSave &&
+          lfe.state().launchSavePath() == "/tmp/tutorial1.ss2save",
+          "Double clicking save launches selected save");
+    lfe.handleKey(SDLK_ESCAPE);
+    check(lfe.state().screen() == ss2::FrontEnd::Screen::LoadGame, "Esc from LaunchSave returns to LoadGame");
+    lfe.handleKey(SDLK_ESCAPE);
+    check(lfe.state().screen() == ss2::FrontEnd::Screen::SinglePlayer, "Esc from LoadGame returns to SinglePlayer");
 }
 
 void testRetailGoldAssets(const std::filesystem::path& gameDir) {
@@ -491,7 +523,7 @@ void testRetailGoldAssets(const std::filesystem::path& gameDir) {
     if (!capDir.empty()) writePng(capDir / "screen8_replays_empty.png", 1280, 720, frame);
     fe.setReplays({
         {"tutorial1_p7_full", "/tmp/tutorial1_p7_full.ss2rep", "maps/single/--- TUTORIAL I ---.SSM",
-         "0xb72cfe2bbab46f1a", 12, 3734, 2, true},
+         "0x1627b0e8d45be6ea", 12, 3862, 2, true},
         {"russian1_campaign", "/tmp/russian1_campaign.ss2rep", "maps/campaign/000000.ssc",
          "0x7f13a8c901234567", 4, 150, 3, true},
     });
@@ -499,6 +531,25 @@ void testRetailGoldAssets(const std::filesystem::path& gameDir) {
     if (!capDir.empty()) writePng(capDir / "screen8_replays.png", 1280, 720, frame);
     fe.handleKey(SDLK_ESCAPE);
     check(fe.state().screen() == ss2::FrontEnd::Screen::MainMenu, "returned from Replays to MainMenu");
+
+    // Capture Load Game browser screen (empty & populated)
+    fe.handleKey(SDLK_S);
+    check(fe.state().screen() == ss2::FrontEnd::Screen::SinglePlayer, "S opens SinglePlayer");
+    fe.handleKey(SDLK_L);
+    check(fe.state().screen() == ss2::FrontEnd::Screen::LoadGame, "retail LoadGame empty");
+    fe.renderToBuffer(1280, 720, frame);
+    if (!capDir.empty()) writePng(capDir / "screen9_load_empty.png", 1280, 720, frame);
+    fe.setSaves({
+        {"Tutorial I — Quick Save", "/tmp/tutorial1.ss2save", "maps/single/--- TUTORIAL I ---.SSM",
+         "Tutorial I", "Quick Save", "2026-11-22 01:20", 1414u, 29u, 0u, 2, 12288u},
+        {"1. Starting Position — Auto-Save", "/tmp/023000_autosave.ss2save", "maps/campaign/023000.ssc",
+         "1. Starting Position", "Auto-Save", "2026-11-22 01:10", 7500u, 24u, 6u, 2, 24576u},
+    });
+    fe.renderToBuffer(1280, 720, frame);
+    if (!capDir.empty()) writePng(capDir / "screen9_load.png", 1280, 720, frame);
+    fe.handleKey(SDLK_ESCAPE);
+    fe.handleKey(SDLK_ESCAPE);
+    check(fe.state().screen() == ss2::FrontEnd::Screen::MainMenu, "returned from LoadGame to MainMenu");
 }
 
 void testVulkanWindowOverlay(bool validate, const std::filesystem::path& gameDir) {
@@ -516,7 +567,7 @@ void testVulkanWindowOverlay(bool validate, const std::filesystem::path& gameDir
     fe.setMissions(makeSyntheticMissions(3));
     fe.setCampaigns(makeSyntheticCampaigns());
     const ss2::Snapshot empty{};
-    for (int i = 0; i < 16; ++i) {
+    for (int i = 0; i < 19; ++i) {
         if (i == 1) fe.handleKey(SDLK_O);       // Options
         if (i == 2) fe.handleKey(SDLK_ESCAPE);  // Back to MainMenu
         if (i == 3) fe.handleKey(SDLK_P);       // Replays
@@ -528,10 +579,12 @@ void testVulkanWindowOverlay(bool validate, const std::filesystem::path& gameDir
         if (i == 9) fe.advance(std::chrono::milliseconds(200));
         if (i == 10) fe.handleKey(SDLK_ESCAPE); // Back to MainMenu
         if (i == 11) fe.handleKey(SDLK_S);      // Single Player
-        if (i == 12) fe.handleKey(SDLK_C);      // Campaigns
-        if (i == 13) fe.handleKey(SDLK_G);      // German Campaign missions
-        if (i == 14) fe.handleKey(SDLK_D);      // Cycle difficulty
-        if (i == 15) fe.handleKey(SDLK_RETURN); // Campaign Briefing
+        if (i == 12) fe.handleKey(SDLK_L);      // Load Game
+        if (i == 13) fe.handleKey(SDLK_ESCAPE); // Back to Single Player
+        if (i == 14) fe.handleKey(SDLK_C);      // Campaigns
+        if (i == 15) fe.handleKey(SDLK_G);      // German Campaign missions
+        if (i == 16) fe.handleKey(SDLK_D);      // Cycle difficulty
+        if (i == 17) fe.handleKey(SDLK_RETURN); // Campaign Briefing
         fe.draw(renderer);
         renderer.present(empty);
     }

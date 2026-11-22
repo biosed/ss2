@@ -10,14 +10,15 @@
 namespace ss2 {
 
 // The Gold frontend navigation graph, decoupled from SDL rendering and game assets so it
-// can be regression-tested headless. The caller feeds the mission/campaign/replay entries,
+// can be regression-tested headless. The caller feeds the mission/campaign/replay/save entries,
 // builds a Menu from items()/title(), shows briefingText() on the Briefing screen, and
-// reacts to screen(): Launch means load launchPath(), LaunchReplay means replay launchReplayPath().
+// reacts to screen(): Launch means load launchPath(), LaunchReplay means replay launchReplayPath(),
+// LaunchSave means launch saved game at launchSavePath().
 class FrontEnd {
 public:
     enum class Screen {
         MainMenu, SinglePlayer, SingleMissions, Campaigns, CampaignMissions,
-        Briefing, Options, Ratings, Replays, Credits, Launch, LaunchReplay, Quit
+        Briefing, Options, Ratings, Replays, LoadGame, Credits, Launch, LaunchReplay, LaunchSave, Quit
     };
     enum class RatingsMode { Campaigns, SingleMissions };
 
@@ -30,6 +31,20 @@ public:
         std::uint32_t endTick{};
         int difficulty{2};
         bool autoEngage{true};
+    };
+
+    struct SaveEntry {
+        std::string name;
+        std::string path;
+        std::string mission;
+        std::string missionTitle;
+        std::string slotLabel;
+        std::string timestamp;
+        std::uint32_t tick{};
+        std::uint32_t playerSoldiers{};
+        std::uint32_t playerVehicles{};
+        int difficulty{2};
+        std::uint64_t fileBytes{};
     };
 
     struct Entry {
@@ -53,6 +68,7 @@ public:
     void setMissions(std::vector<Entry> missions);
     void setCampaigns(std::vector<CampaignEntry> campaigns);
     void setReplays(std::vector<ReplayEntry> replays);
+    void setSaves(std::vector<SaveEntry> saves);
 
     Screen screen() const { return screen_; }
     std::string title() const;
@@ -91,6 +107,12 @@ public:
     const ReplayEntry* selectedReplayEntry() const;
     std::string launchReplayPath() const;
 
+    const std::vector<SaveEntry>& saves() const { return saves_; }
+    std::size_t selectedSave() const { return selectedSave_; }
+    void selectSave(std::size_t index);
+    const SaveEntry* selectedSaveEntry() const;
+    std::string launchSavePath() const;
+
     // A deferred branch was chosen; the message stays on the current screen. Cleared on read.
     std::string takeNotice();
 
@@ -105,10 +127,12 @@ private:
     std::vector<Entry> missions_;
     std::vector<CampaignEntry> campaigns_;
     std::vector<ReplayEntry> replays_;
+    std::vector<SaveEntry> saves_;
     std::size_t selected_ = 0;
     std::size_t selectedCampaign_ = 0;
     std::size_t selectedCampaignMission_ = 0;
     std::size_t selectedReplay_ = 0;
+    std::size_t selectedSave_ = 0;
     bool briefingFromCampaign_ = false;
     int difficulty_ = 2;
     RatingsMode ratingsMode_ = RatingsMode::Campaigns;

@@ -3,9 +3,12 @@
 // command recording, pause gating, Pause Menu Esc toggle, and full Replay parity
 // on a second GameSession without opening a visible window.
 #include "session/game_session.hpp"
+#include "session/save_file.hpp"
 #include "sim/command.hpp"
 
 #include <SDL3/SDL.h>
+#include <chrono>
+#include <filesystem>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -233,6 +236,66 @@ int main(int argc, char** argv) try {
                 "Replay GameSession snapshot diverged from live input session");
         replaySession.updateHudAndBeams();
         replaySession.renderer.present(replaySession.empty);
+    }
+
+    // Save SS2SAVE1 snapshot with non-zero battle stats and verify headless startup --load-save restoration.
+    {
+        const auto nonce = std::chrono::steady_clock::now().time_since_epoch().count();
+        const auto savePath = std::filesystem::temp_directory_path() /
+                              ("ss2_session_input_" + std::to_string(nonce) + ".ss2save");
+        struct SaveCleanup {
+            std::filesystem::path p;
+            ~SaveCleanup() {
+                std::error_code ec;
+                std::filesystem::remove(p, ec);
+            }
+        } cleanup{savePath};
+
+        ss2::SaveFileMetadata meta{};
+        meta.hasMetadata = true;
+        meta.mission = "maps/single/--- TUTORIAL I ---.SSM";
+        meta.missionTitle = "Tutorial I";
+        meta.difficulty = 2;
+        meta.savedEpochSec = 1795251234;
+        meta.enemyInfKilled = 7;
+        meta.enemyVehDestroyed = 2;
+        meta.enemyTanksDestroyed = 1;
+        meta.enemyGunsDestroyed = 1;
+        meta.enemyPlanesShotDown = 1;
+        meta.buildingsDemolished = 3;
+        meta.airSortiesFlown = 2;
+        meta.enemyScoreEarned = 3400;
+        meta.friendlyScoreLost = 200;
+        require(ss2::writeSaveFile(savePath, meta, endSnap), "writeSaveFile failed for session_input_test");
+
+        ss2::UserSettings loadSettings{};
+        ss2::GameSession loadedSession(
+            win, validate ? &report : nullptr,
+            0, false, gameDir, {}, {}, false, true,
+            loadSettings, false, false, nullptr, {}, nullptr, true, savePath);
+        require(loadedSession.simulation != std::nullopt, "Loaded GameSession missing simulation");
+        require(loadedSession.simulation->simTick() == endTick,
+                "Loaded GameSession tick diverged from saved snapshot");
+        const auto loadedSnap = loadedSession.simulation->takeSnapshot();
+        require(loadedSnap.tick == endSnap.tick &&
+                    loadedSnap.playerTeams == endSnap.playerTeams &&
+                    loadedSnap.mines == endSnap.mines &&
+                    loadedSnap.soldiers == endSnap.soldiers &&
+                    loadedSnap.vehicles == endSnap.vehicles &&
+                    loadedSnap.buildings == endSnap.buildings &&
+                    loadedSnap.airReady == endSnap.airReady &&
+                    loadedSnap.fog.size() == endSnap.fog.size(),
+                "Loaded GameSession core snapshot state diverged from saved snapshot");
+        require(loadedSession.enemyInfKilled == 7u && loadedSession.enemyVehDestroyed == 2u &&
+                    loadedSession.enemyTanksDestroyed == 1u && loadedSession.enemyGunsDestroyed == 1u &&
+                    loadedSession.enemyPlanesShotDown == 1u && loadedSession.buildingsDemolished == 3u &&
+                    loadedSession.airSortiesFlown == 2u && loadedSession.enemyScoreEarned == 3400 &&
+                    loadedSession.friendlyScoreLost == 200,
+                "Loaded GameSession did not restore SS2SAVE1 battle/debrief stats");
+        require(!loadedSession.briefing.active(),
+                "Startup save load must not reopen opening mission briefing");
+        loadedSession.updateHudAndBeams();
+        loadedSession.renderer.present(loadedSession.empty);
     }
 
     require(report.errors.load() == 0, "Vulkan validation errors observed during GameSession input test");

@@ -852,6 +852,18 @@ constexpr Entry table[] = {
     {"State hash", "Empreinte d'état", "Hash de estado"},
     {"Replays:", "Replays :", "Repeticiones:"},
     {"Details:", "Détails :", "Detalles:"},
+    {"Load", "Charger", "Cargar"},
+    {"Delete", "Supprimer", "Eliminar"},
+    {"Saved Games:", "Parties sauvegardées :", "Partidas guardadas:"},
+    {"No saved games yet.", "Aucune partie sauvegardée.", "Aún no hay partidas guardadas."},
+    {"Slot", "Emplacement", "Ranura"},
+    {"Auto-Save", "Sauvegarde auto", "Autoguardado"},
+    {"Forces", "Forces", "Fuerzas"},
+    {"Saved", "Enregistrée", "Guardada"},
+    {"Saved game deleted.", "Partie sauvegardée supprimée.", "Partida guardada eliminada."},
+    {"Could not delete saved game.", "Impossible de supprimer la sauvegarde.", "No se pudo eliminar la partida guardada."},
+    {"Failed to load saved game.", "Impossible de charger la sauvegarde.", "Error al cargar la partida guardada."},
+    {"Loaded saved game.", "Partie sauvegardée chargée.", "Partida guardada cargada."},
 };
 
 std::atomic<Language> current{Language::english};

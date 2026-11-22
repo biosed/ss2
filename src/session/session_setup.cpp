@@ -68,7 +68,7 @@ GameSession::GameSession(SDL_Window* win, ValidationReport* rep, int lim, bool t
                          UserSettings& cfg, bool persistCfg,
                          bool ovOnly, std::optional<std::filesystem::path>* nextOut,
                          const std::filesystem::path& recPath, const cmd::ReplayFile* repFile,
-                         bool manualClk)
+                         bool manualClk, const std::filesystem::path& loadSave)
     : window(win),
       report(rep),
       limit(lim),
@@ -85,6 +85,7 @@ GameSession::GameSession(SDL_Window* win, ValidationReport* rep, int lim, bool t
       recordPath(recPath),
       replayFile(repFile),
       manualClock(manualClk),
+      loadSavePath(loadSave),
       renderer(window, report),
       menu(window),
       tooltip(window),
@@ -129,22 +130,39 @@ void GameSession::initializeMission() {
             std::error_code normEc;
             const auto normCur = std::filesystem::weakly_canonical(missionPath, normEc);
             for (const auto& c : ss2::assets::listCampaigns(gameDir)) {
-                for (std::size_t mi = 0; mi + 1 < c.missions.size(); ++mi) {
+                for (std::size_t mi = 0; mi < c.missions.size(); ++mi) {
                     const auto normM = std::filesystem::weakly_canonical(c.missions[mi].path, normEc);
                     const auto normE = !c.missions[mi].easyPath.empty()
                         ? std::filesystem::weakly_canonical(c.missions[mi].easyPath, normEc)
                         : std::filesystem::path{};
                     if (normM == normCur || (!normE.empty() && normE == normCur)) {
+                        currentMissionTitle = c.missions[mi].title;
                         const bool isEasy = (!normE.empty() && normE == normCur);
-                        nextCampaignMissionPath = (isEasy && !c.missions[mi + 1].easyPath.empty())
-                            ? c.missions[mi + 1].easyPath
-                            : c.missions[mi + 1].path;
-                        nextCampaignMissionTitle = c.missions[mi + 1].title;
+                        if (mi + 1 < c.missions.size()) {
+                            nextCampaignMissionPath = (isEasy && !c.missions[mi + 1].easyPath.empty())
+                                ? c.missions[mi + 1].easyPath
+                                : c.missions[mi + 1].path;
+                            nextCampaignMissionTitle = c.missions[mi + 1].title;
+                        }
                         break;
                     }
                 }
-                if (nextCampaignMissionPath) break;
+                if (!currentMissionTitle.empty()) break;
             }
+            if (currentMissionTitle.empty()) {
+                for (const auto& m : ss2::assets::listSinglePlayerMissions(gameDir)) {
+                    const auto normM = std::filesystem::weakly_canonical(m.path, normEc);
+                    if (normM == normCur) {
+                        currentMissionTitle = m.name;
+                        break;
+                    }
+                }
+            }
+            if (currentMissionTitle.empty()) {
+                currentMissionTitle = missionPath.stem().string();
+            }
+        } else {
+            currentMissionTitle = "Tutorial I";
         }
         auto data = ss2::assets::readMissionData(missionPath);
         if (!data.description.empty()) {
@@ -505,7 +523,28 @@ void GameSession::initializeMission() {
                 std::cout << "Air Support ready: " << airReadyCount << " sorties\n";
             }
         }
-        if (!isTutorial1) {
+        if (!loadSavePath.empty()) {
+            if (!loadSaveFromPath(loadSavePath, ss2::tr("Loaded saved game."), true)) {
+                throw std::runtime_error("Failed to load saved game: " + loadSavePath.string());
+            }
+            pendingMissionBriefing.clear();
+            bool focused = false;
+            for (const auto& u : scene->units()) {
+                if (u.owner == 0 && u.hp > 0 && u.visible) {
+                    renderer.focusMap(static_cast<double>(u.x * mapScale), static_cast<double>(u.y * mapScale));
+                    focused = true;
+                    break;
+                }
+            }
+            if (!focused && vehicleScene) {
+                for (const auto& v : vehicleScene->vehicles()) {
+                    if (v.alive && v.hp > 0 && v.owner == 0) {
+                        renderer.focusMap(static_cast<double>(v.x * mapScale), static_cast<double>(v.y * mapScale));
+                        break;
+                    }
+                }
+            }
+        } else if (!isTutorial1) {
             bool focused = false;
             for (const auto& u : infantry) {
                 if (u.owner == 0) {
@@ -580,10 +619,11 @@ int runGameSession(SDL_Window* window, ValidationReport* report, int limit, bool
                    bool overviewOnly, std::optional<std::filesystem::path>* nextMissionOut,
                    const std::filesystem::path& recordPath,
                    const cmd::ReplayFile* replayFile,
-                   bool manualClock) {
+                   bool manualClock,
+                   const std::filesystem::path& loadSavePath) {
     GameSession session(window, report, limit, timing, gameDir, mission, hdPack, originalInfantry,
                         autoEngage, settings, persistSettings, overviewOnly, nextMissionOut,
-                        recordPath, replayFile, manualClock);
+                        recordPath, replayFile, manualClock, loadSavePath);
     return session.run();
 }
 
