@@ -86,6 +86,63 @@ int main() try {
     badRun.back() = 0x05;
     try { ss2::assets::drawShadowFrame(shMap, 0, 0, badRun); return 1; }
     catch (const std::runtime_error&) {}
+
+    // Synthetic 0xa9 alpha-indexed frame + 0xCA000002 .ANI sequence (n2Cad800.dll 0x10008c38..0x10008f1b).
+    std::array<std::uint8_t, 1024> pal1024{};
+    for (std::size_t e = 0u; e < 256u; ++e) pal1024[e * 4u + 2u] = 0xfeu; // default bgWeight5=31 transparent
+    // [1]: 100% opaque pure red (0xf800, bgWeight5=0).
+    pal1024[1u * 4u + 0u] = 0x00u;
+    pal1024[1u * 4u + 1u] = 0xf8u;
+    pal1024[1u * 4u + 2u] = 0x00u;
+    // [2]: 50% black drop shadow (premul=0x0000, byte2=0x80 -> bgWeight5=16).
+    pal1024[2u * 4u + 0u] = 0x00u;
+    pal1024[2u * 4u + 1u] = 0x00u;
+    pal1024[2u * 4u + 2u] = 0x80u;
+    // [3]: 100% transparent fringe (bgWeight5=31).
+    pal1024[3u * 4u + 2u] = 0xf8u;
+
+    const std::vector<std::uint8_t> a9Frame{
+        0xff, 0xff, 0xfe, 0xff, 3, 0, 1, 0, 0xa9, // dx=-1, dy=-2, w=3, h=1
+        4, 0, 0x03, 1, 2, 3                        // literal [1, 2, 3]
+    };
+    ss2::assets::MapImage a9Bg{3, 1, {100, 120, 140, 255, 100, 120, 140, 255, 100, 120, 140, 255}};
+    ss2::assets::drawAlphaIndexedFrame(a9Bg, 1, 2, a9Frame, pal1024);
+    if (a9Bg.rgba[0] != 255 || a9Bg.rgba[1] != 0 || a9Bg.rgba[2] != 0 || a9Bg.rgba[3] != 255) return 1;
+    if (a9Bg.rgba[4] != 50 || a9Bg.rgba[5] != 60 || a9Bg.rgba[6] != 70 || a9Bg.rgba[7] != 255) return 1;
+    if (a9Bg.rgba[8] != 100 || a9Bg.rgba[9] != 120 || a9Bg.rgba[10] != 140 || a9Bg.rgba[11] != 255) return 1;
+
+    // Pack two 0xa9 frames into a 0xCA000002 .ANI container and verify union canvas & hotspot.
+    const std::vector<std::uint8_t> a9Frame2{
+        0x00, 0x00, 0x00, 0x00, 2, 0, 2, 0, 0xa9, // dx=0, dy=0, w=2, h=2
+        2, 0, 0x82, 1,                             // row 0: repeat 2x [1]
+        2, 0, 0x82, 0                              // row 1: skip 2
+    };
+    std::vector<std::uint8_t> ani;
+    const auto pushU32 = [&](std::uint32_t v) {
+        ani.push_back(std::uint8_t(v & 0xffu));
+        ani.push_back(std::uint8_t((v >> 8u) & 0xffu));
+        ani.push_back(std::uint8_t((v >> 16u) & 0xffu));
+        ani.push_back(std::uint8_t((v >> 24u) & 0xffu));
+    };
+    pushU32(0xca000002u);
+    pushU32(2u);
+    const std::uint32_t off0 = 8u + 3u * 4u;
+    const std::uint32_t off1 = off0 + std::uint32_t(a9Frame.size());
+    const std::uint32_t off2 = off1 + std::uint32_t(a9Frame2.size());
+    pushU32(off0);
+    pushU32(off1);
+    pushU32(off2);
+    ani.insert(ani.end(), a9Frame.begin(), a9Frame.end());
+    ani.insert(ani.end(), a9Frame2.begin(), a9Frame2.end());
+
+    if (ss2::assets::aniFrameCount(ani) != 2u) return 1;
+    const auto seq = ss2::assets::decodeAniSequence(ani, pal1024);
+    // Union of [-1..2)x[-2..0) and [0..2)x[0..2) -> [-1..2)x[-2..2) => 3x4, hot=(1, 2).
+    if (seq.hotX != 1 || seq.hotY != 2 || seq.width != 3u || seq.height != 4u || seq.frames.size() != 2u) return 1;
+    // Frame 0 pixel (0,0) = index [1] opaque red; (1,0) = index [2] 50% black shadow (alpha 128); (2,0) = transparent.
+    if (seq.frames[0].rgba[0] != 255 || seq.frames[0].rgba[3] != 255) return 1;
+    if (seq.frames[0].rgba[4] != 0 || seq.frames[0].rgba[7] != 128) return 1;
+    if (seq.frames[0].rgba[11] != 0) return 1;
     return 0;
 } catch (const std::exception& e) {
     std::cerr << e.what() << '\n';

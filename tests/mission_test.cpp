@@ -2328,7 +2328,7 @@ void testVehiclesAndShadows() {
                     minR = std::min(minR, portrait->rgba[p]);
                     maxR = std::max(maxR, portrait->rgba[p]);
                 }
-                check(maxR - minR > 12u, "7-frame portrait has non-uniform sprite detail: " + id);
+                check(maxR - minR > 12, "7-frame portrait has non-uniform sprite detail: " + id);
             }
         }
     }
@@ -2452,6 +2452,35 @@ void testVehiclesAndShadows() {
               "DATG.RS2 renders 3 distinct German/Japanese/French AT-rifle uniforms");
         check(medImg.rgba != bg.rgba && medPort.has_value(),
               "ALRUSMED.RS2 cmedic renders SoldClr 2 medic uniform and portrait");
+    }
+
+    // Verify retail 0xCA000001..4 .ANI containers & 0xa9 alpha-blended tactical cursor sequences.
+    {
+        const auto gameCommon = ss2::assets::resolveCaseInsensitivePath(gameDir, "game_common.sue");
+        for (const char* stem : {
+                 "C1FIELD", "C2OWN", "C3FRIEND", "C4ENEMY", "C5SCROLL", "C6NO", "C7UNLOAD",
+                 "C8MOVE", "C9ATTACK", "C10AGRND", "C11AMOVE", "C12KATFR", "C13HOWFR", "C14RELD",
+                 "C15ROTAT", "C16PCKUG", "C16PCKUP", "C17GOLN", "C18FLY", "C19BOMB", "C20PARA",
+                 "C21SPY", "C26CURE", "C27MINE", "C28BINOC", "C29FIXBR", "VZRV_TNK", "a_rain"}) {
+            const auto ani = ss2::assets::readSueEntry(gameCommon, std::string(stem) + ".ANI");
+            const auto col = ss2::assets::readSueEntry(gameCommon, std::string(stem) + ".COL");
+            const auto seq = ss2::assets::decodeAniSequence(ani, col);
+            check(!seq.frames.empty() && seq.width >= 10u && seq.height >= 10u &&
+                      seq.hotX >= 0 && seq.hotX < int(seq.width) &&
+                      seq.hotY >= 0 && seq.hotY < int(seq.height),
+                  std::string("decodeAniSequence valid bounds & hotspot for ") + stem);
+            bool anyVisible = false;
+            for (const auto& fr : seq.frames) {
+                for (std::size_t p = 3u; p < fr.rgba.size(); p += 4u) {
+                    if (fr.rgba[p] > 0u) {
+                        anyVisible = true;
+                        break;
+                    }
+                }
+                if (anyVisible) break;
+            }
+            check(anyVisible, std::string("decodeAniSequence decodes visible pixels for ") + stem);
+        }
     }
 }
 

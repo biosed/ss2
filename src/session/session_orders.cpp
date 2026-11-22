@@ -1,4 +1,5 @@
 #include "session/game_session.hpp"
+#include "ui/cursor_bank.hpp"
 #include <algorithm>
 #include <charconv>
 #include <cmath>
@@ -25,10 +26,12 @@ void GameSession::armAirSupportKind(assets::AirMissionKind kind) {
     patrolArmed = false;
     faceArmed = false;
     armedAirSupport = kind;
-    const bool strike = kind == ss2::assets::AirMissionKind::Bomber ||
-                        kind == ss2::assets::AirMissionKind::Fighter;
-    SDL_SetCursor(strike ? (attackCursor ? attackCursor.get() : SDL_GetDefaultCursor())
-                         : (moveCursor ? moveCursor.get() : SDL_GetDefaultCursor()));
+    const TacticalCursorKind airCur =
+        kind == ss2::assets::AirMissionKind::Bomber ? TacticalCursorKind::AirBomb :
+        kind == ss2::assets::AirMissionKind::Recon ? TacticalCursorKind::AirSpy :
+        kind == ss2::assets::AirMissionKind::Paratrooper ? TacticalCursorKind::AirPara :
+        TacticalCursorKind::AirFly;
+    applyTacticalCursor(window, airCur, moveCursor.get(), attackCursor.get());
     orderNotice.show(ss2::trf("{0} ({1} ready): left-click target area.",
                               {ss2::tr(airKindLabel(kind)), std::to_string(slots[idx].ready)}),
                      ss2::NoticeKind::accepted);
@@ -187,7 +190,7 @@ void GameSession::doArmAttackMove() {
     armedAirSupport.reset();
     attackMoveArmed = !attackMoveArmed;
     if (attackMoveArmed) {
-        SDL_SetCursor(attackCursor ? attackCursor.get() : SDL_GetDefaultCursor());
+        applyTacticalCursor(window, TacticalCursorKind::AttackMove, moveCursor.get(), attackCursor.get());
         orderNotice.show(ss2::tr("Attack-move: click target location."), ss2::NoticeKind::accepted);
     } else {
         resetCursor();
@@ -203,7 +206,7 @@ void GameSession::doArmPatrol() {
     armedAirSupport.reset();
     patrolArmed = !patrolArmed;
     if (patrolArmed) {
-        SDL_SetCursor(attackCursor ? attackCursor.get() : SDL_GetDefaultCursor());
+        applyTacticalCursor(window, TacticalCursorKind::AttackMove, moveCursor.get(), attackCursor.get());
         orderNotice.show(ss2::tr("Patrol: click destination on map (Esc/right-click to cancel)."),
                          ss2::NoticeKind::accepted);
     } else {
@@ -224,7 +227,21 @@ void GameSession::doArmAttackGround() {
     armedAirSupport.reset();
     attackGroundArmed = !attackGroundArmed;
     if (attackGroundArmed) {
-        SDL_SetCursor(attackCursor ? attackCursor.get() : SDL_GetDefaultCursor());
+        bool anyRocket = false;
+        bool anyHowitzer = hasBombardInf;
+        if (unitCatalog && vehicleScene) {
+            for (const size_t vid : selection->selectedVehicles()) {
+                if (vid >= vehicleScene->vehicles().size()) continue;
+                if (const auto* spec = unitCatalog->find(vehicleScene->vehicles()[vid].id)) {
+                    if (spec->isRocketArtillery()) anyRocket = true;
+                    else if (spec->isArtillery()) anyHowitzer = true;
+                }
+            }
+        }
+        const TacticalCursorKind gndCur = anyRocket ? TacticalCursorKind::KatyushaFire
+                                        : anyHowitzer ? TacticalCursorKind::HowitzerFire
+                                                      : TacticalCursorKind::AttackGround;
+        applyTacticalCursor(window, gndCur, moveCursor.get(), attackCursor.get());
         orderNotice.show(ss2::tr("Attack-ground: click coordinates to bombard."), ss2::NoticeKind::accepted);
     } else {
         resetCursor();

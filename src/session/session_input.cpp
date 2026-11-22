@@ -1,5 +1,6 @@
 #include "session/game_session.hpp"
 #include "session/save_file.hpp"
+#include "ui/cursor_bank.hpp"
 #include <algorithm>
 #include <charconv>
 #include <cmath>
@@ -476,7 +477,12 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
             selection->handle(mKey);
             std::cout << "Tutorial I HUD Mission marker jump\n";
         }
-        if (hr.consumed) return;
+        if (hr.consumed) {
+            if (event.type == SDL_EVENT_MOUSE_MOTION) {
+                applyTacticalCursor(window, TacticalCursorKind::Field, moveCursor.get(), attackCursor.get());
+            }
+            return;
+        }
     }
     orderNotice.handle(event);
     if (event.type == SDL_EVENT_QUIT || event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) {
@@ -592,7 +598,7 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
             armedAirSupport.reset();
             reverseMoveArmed = !reverseMoveArmed;
             if (reverseMoveArmed) {
-                SDL_SetCursor(moveCursor ? moveCursor.get() : SDL_GetDefaultCursor());
+                applyTacticalCursor(window, TacticalCursorKind::Move, moveCursor.get(), attackCursor.get());
                 orderNotice.show(ss2::tr("Reverse move: click destination (keeps front armor facing away)."),
                                  ss2::NoticeKind::accepted);
             } else {
@@ -607,7 +613,7 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
             armedAirSupport.reset();
             faceArmed = !faceArmed;
             if (faceArmed) {
-                SDL_SetCursor(moveCursor ? moveCursor.get() : SDL_GetDefaultCursor());
+                applyTacticalCursor(window, TacticalCursorKind::Rotate, moveCursor.get(), attackCursor.get());
                 orderNotice.show(ss2::tr("Face direction: click map point to rotate front armor."),
                                  ss2::NoticeKind::accepted);
             } else {
@@ -1448,23 +1454,79 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
         const bool canDisarmHover =
             !ids.empty() && !targetInf && !targetVeh && simulation->canDisarmMineAt(ids, simX, simY);
         if (armedAirSupport) {
-            const bool strike = *armedAirSupport == ss2::assets::AirMissionKind::Bomber ||
-                                *armedAirSupport == ss2::assets::AirMissionKind::Fighter;
-            SDL_SetCursor(strike ? (attackCursor ? attackCursor.get() : SDL_GetDefaultCursor())
-                                 : (moveCursor ? moveCursor.get() : SDL_GetDefaultCursor()));
-        } else if (attackMoveArmed || attackGroundArmed || patrolArmed || validInfTarget || validVehTarget || validBldTarget) {
-            SDL_SetCursor(attackCursor ? attackCursor.get() : SDL_GetDefaultCursor());
-        } else if (reverseMoveArmed || faceArmed || canSupportHover || canEscortHover || canDisarmHover) {
-            SDL_SetCursor(moveCursor ? moveCursor.get() : SDL_GetDefaultCursor());
-        } else if (canTowHover || canGarrisonHover ||
-                   (!ids.empty() && targetVeh && vehicleScene &&
-                    ((vehicleScene->vehicles().at(*targetVeh).owner == localOwner() && simulation->canBoardVehicle(*targetVeh)) ||
-                     (vehicleScene->vehicles().at(*targetVeh).owner == 3 && simulation->canCaptureVehicle(*targetVeh))))) {
-            SDL_SetCursor(moveCursor ? moveCursor.get() : SDL_GetDefaultCursor());
+            const TacticalCursorKind airCur =
+                *armedAirSupport == ss2::assets::AirMissionKind::Bomber ? TacticalCursorKind::AirBomb :
+                *armedAirSupport == ss2::assets::AirMissionKind::Recon ? TacticalCursorKind::AirSpy :
+                *armedAirSupport == ss2::assets::AirMissionKind::Paratrooper ? TacticalCursorKind::AirPara :
+                TacticalCursorKind::AirFly;
+            applyTacticalCursor(window, airCur, moveCursor.get(), attackCursor.get());
+        } else if (attackGroundArmed) {
+            bool anyRocket = false;
+            bool anyHowitzer = scene && std::ranges::any_of(picked, [&](size_t id) {
+                return id < scene->units().size() && isBombardInfantryId(scene->units()[id].id);
+            });
+            if (unitCatalog && vehicleScene) {
+                for (const size_t vid : pickedVeh) {
+                    if (vid >= vehicleScene->vehicles().size()) continue;
+                    if (const auto* spec = unitCatalog->find(vehicleScene->vehicles()[vid].id)) {
+                        if (spec->isRocketArtillery()) anyRocket = true;
+                        else if (spec->isArtillery()) anyHowitzer = true;
+                    }
+                }
+            }
+            const TacticalCursorKind gndCur = anyRocket ? TacticalCursorKind::KatyushaFire
+                                            : anyHowitzer ? TacticalCursorKind::HowitzerFire
+                                                          : TacticalCursorKind::AttackGround;
+            applyTacticalCursor(window, gndCur, moveCursor.get(), attackCursor.get());
+        } else if (attackMoveArmed || patrolArmed) {
+            applyTacticalCursor(window, TacticalCursorKind::AttackMove, moveCursor.get(), attackCursor.get());
+        } else if (validInfTarget || validVehTarget || validBldTarget) {
+            applyTacticalCursor(window, TacticalCursorKind::AttackUnit, moveCursor.get(), attackCursor.get());
+        } else if (faceArmed) {
+            applyTacticalCursor(window, TacticalCursorKind::Rotate, moveCursor.get(), attackCursor.get());
+        } else if (reverseMoveArmed) {
+            applyTacticalCursor(window, TacticalCursorKind::Move, moveCursor.get(), attackCursor.get());
+        } else if (canSupportHover || canEscortHover || canDisarmHover) {
+            TacticalCursorKind supCur = TacticalCursorKind::Move;
+            if (!pvids.empty() && hoverBridge && simulation->canSupportBridge(pvids, *hoverBridge)) {
+                supCur = TacticalCursorKind::FixBridge;
+            } else if (hasAny && targetInf && scene->units().at(*targetInf).owner == 0 &&
+                       simulation->canHealSoldier(ids, pvids, *targetInf)) {
+                supCur = TacticalCursorKind::Heal;
+            } else if (canDisarmHover) {
+                supCur = TacticalCursorKind::Mine;
+            } else if (canSupportHover) {
+                supCur = TacticalCursorKind::Reload;
+            }
+            applyTacticalCursor(window, supCur, moveCursor.get(), attackCursor.get());
+        } else if (canTowHover) {
+            applyTacticalCursor(window, TacticalCursorKind::TowGun, moveCursor.get(), attackCursor.get());
+        } else if (canGarrisonHover) {
+            applyTacticalCursor(window, TacticalCursorKind::EnterBuilding, moveCursor.get(), attackCursor.get());
+        } else if (!ids.empty() && targetVeh && vehicleScene &&
+                   ((vehicleScene->vehicles().at(*targetVeh).owner == localOwner() && simulation->canBoardVehicle(*targetVeh)) ||
+                    (vehicleScene->vehicles().at(*targetVeh).owner == 3 && simulation->canCaptureVehicle(*targetVeh)))) {
+            applyTacticalCursor(window, TacticalCursorKind::Pickup, moveCursor.get(), attackCursor.get());
         } else if ((!ids.empty() && simulation->canMove(ids, simX, simY)) || !pickedVeh.empty()) {
-            SDL_SetCursor(moveCursor ? moveCursor.get() : SDL_GetDefaultCursor());
+            applyTacticalCursor(window, TacticalCursorKind::Move, moveCursor.get(), attackCursor.get());
         } else {
-            SDL_SetCursor(SDL_GetDefaultCursor());
+            TacticalCursorKind idleCur = TacticalCursorKind::Field;
+            int hoverOwner = -1;
+            if (targetInf && scene && *targetInf < scene->units().size()) {
+                hoverOwner = scene->units()[*targetInf].owner;
+            } else if (targetVeh && vehicleScene && *targetVeh < vehicleScene->vehicles().size()) {
+                hoverOwner = vehicleScene->vehicles()[*targetVeh].owner;
+            } else if (hoverBld && *hoverBld < liveBuildings.size() && liveBuildings[*hoverBld].occupantCount > 0) {
+                hoverOwner = liveBuildings[*hoverBld].owner;
+            }
+            if (hoverOwner >= 0) {
+                idleCur = (hoverOwner == localOwner()) ? TacticalCursorKind::OwnUnit
+                        : isHostileOwner(hoverOwner)   ? TacticalCursorKind::EnemyUnit
+                                                       : TacticalCursorKind::FriendUnit;
+            } else if (hasAny) {
+                idleCur = TacticalCursorKind::Forbidden;
+            }
+            applyTacticalCursor(window, idleCur, moveCursor.get(), attackCursor.get());
         }
     }
     if (selection) {

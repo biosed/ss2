@@ -1,4 +1,5 @@
 #include "session/game_session.hpp"
+#include "ui/cursor_bank.hpp"
 #include "ui/gold_frontend.hpp"
 #include <algorithm>
 #include <charconv>
@@ -109,7 +110,9 @@ GameSession::GameSession(SDL_Window* win, ValidationReport* rep, int lim, bool t
         std::cout << "Window pixel density " << SDL_GetWindowPixelDensity(window) << '\n';
         if (const char* desktop = std::getenv("XDG_CURRENT_DESKTOP")) std::cout << "Desktop " << desktop << '\n';
     }
+    installTacticalCursorBank(window, gameDir);
     initializeMission();
+    resetCursor();
     if (!pendingMissionBriefing.empty()) {
         logHud(pendingMissionBriefing);
         briefing.open(pendingMissionBriefing);
@@ -1214,7 +1217,13 @@ void GameSession::updateMinimapFog(const std::vector<std::uint8_t>& fogGrid, boo
     lastMinimapFogUpdate = now;
 }
 
-void GameSession::resetCursor() { SDL_SetCursor(SDL_GetDefaultCursor()); }
+void GameSession::resetCursor() {
+    if (auto* bank = getTacticalCursorBank(window)) {
+        bank->resetToField(moveCursor.get(), attackCursor.get());
+        return;
+    }
+    SDL_SetCursor(SDL_GetDefaultCursor());
+}
 
 void GameSession::recordEventPos(double x, double y) {
     if (!eventHistory.empty()) {
