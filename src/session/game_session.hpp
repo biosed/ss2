@@ -138,8 +138,13 @@ struct GameSession {
         bool destroyed{false};
         int ruinLeft{}, ruinTop{};
         assets::MapImage ruinedPatch{};
+        assets::MapImage basePatch{};
         assets::MapImage intactPatch{};
-        bool rubbleStamped{false};
+        std::array<std::uint8_t, 512> palette{};
+        std::array<std::vector<std::uint8_t>, 16> stageBlocks{};
+        int stampedStage{0};
+        assets::SpriteCoverage lastShadowCoverage{};
+        bool hasLastShadow{false};
         std::vector<size_t> occupantIds;
     };
     struct LiveBridge {
@@ -373,8 +378,7 @@ struct GameSession {
     bool isHostileOwner(int owner) const;
     static const char* veterancyRank(int expa);
     int initialGrenadesForId(std::string_view id) const;
-    void applyBuildingRubble(std::size_t bIdx);
-    void restoreBuildingIntact(std::size_t bIdx);
+    void applyBuildingStage(std::size_t bIdx, int stage);
     void applyBridgeStage(std::size_t brIdx, int stage);
     void stampBattleCrater(int simX, int simY, bool large);
     int initialMinesForId(std::string_view id) const;

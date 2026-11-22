@@ -1298,22 +1298,51 @@ void testOptionalRetailSweep() {
             (void)ss2::assets::drawMissionScenery(bldMap, gameDir, arnhem->path, nullptr, &blds);
             check(blds.size() >= 50, "retail 031000.ssc drawMissionScenery extracts >= 50 houses");
             std::size_t ruinCount = 0;
+            std::size_t progressiveCount = 0;
             bool anyRuinOpaque = false;
+            const auto hashRgba = [](const std::vector<std::uint8_t>& bytes) {
+                std::uint64_t h = 14695981039346656037ull;
+                for (std::uint8_t v : bytes) {
+                    h ^= v;
+                    h *= 1099511628211ull;
+                }
+                return h;
+            };
             for (const auto& b : blds) {
                 check(b.capacity >= 2 && b.capacity <= 16 && b.maxHp >= 250 && b.width > 0 && b.height > 0,
                       "retail 031000.ssc house capacity/bounds valid");
                 if (b.ruinedPatch.width > 0 && b.ruinedPatch.height > 0) {
                     ++ruinCount;
+                    check(b.basePatch.width == b.ruinedPatch.width && b.basePatch.height == b.ruinedPatch.height,
+                          "retail 031000.ssc house basePatch matches ruinedPatch size");
                     for (std::size_t pi = 3; pi < b.ruinedPatch.rgba.size(); pi += 4u) {
                         if (b.ruinedPatch.rgba[pi] > 0) {
                             anyRuinOpaque = true;
                             break;
                         }
                     }
+                    const auto s0 = ss2::assets::renderHouseStage(
+                        b.x, b.y, b.ruinLeft, b.ruinTop, b.basePatch, b.palette, b.stageBlocks, 0);
+                    const auto s1 = ss2::assets::renderHouseStage(
+                        b.x, b.y, b.ruinLeft, b.ruinTop, b.basePatch, b.palette, b.stageBlocks, 1);
+                    const auto s2 = ss2::assets::renderHouseStage(
+                        b.x, b.y, b.ruinLeft, b.ruinTop, b.basePatch, b.palette, b.stageBlocks, 2);
+                    const auto s3 = ss2::assets::renderHouseStage(
+                        b.x, b.y, b.ruinLeft, b.ruinTop, b.basePatch, b.palette, b.stageBlocks, 3);
+                    const auto h0 = hashRgba(s0.image.rgba);
+                    const auto h1 = hashRgba(s1.image.rgba);
+                    const auto h2 = hashRgba(s2.image.rgba);
+                    const auto h3 = hashRgba(s3.image.rgba);
+                    if (h0 != h1 && h1 != h2 && h2 != h3 && h0 != h3 &&
+                        s0.bodyCount > 0u && s1.bodyCount > 0u && s2.bodyCount > 0u && s3.bodyCount == 0u) {
+                        ++progressiveCount;
+                    }
                 }
             }
             check(ruinCount >= 40 && anyRuinOpaque,
                   "retail 031000.ssc pre-renders dom.res ruinedPatch on houses");
+            check(progressiveCount == ruinCount && progressiveCount >= 40,
+                  "retail 031000.ssc renders distinct 4-stage dom.res damage states on houses");
         }
         const auto beach = ss2::assets::findCampaignMission(gameDir, "002000");
         check(beach.has_value(), "findCampaignMission finds 002000");
@@ -2407,6 +2436,23 @@ void testVehiclesAndShadows() {
         }
         check(exactShadowPixels > 10000u,
               "Tutorial I scenery paints >10000 exact 0xa3 tree/stand ground shadow pixels");
+        std::size_t tutProg = 0u;
+        for (const auto& b : tutBlds) {
+            if (b.basePatch.width == 0u || b.basePatch.height == 0u) continue;
+            const auto s0 = ss2::assets::renderHouseStage(
+                b.x, b.y, b.ruinLeft, b.ruinTop, b.basePatch, b.palette, b.stageBlocks, 0);
+            const auto s1 = ss2::assets::renderHouseStage(
+                b.x, b.y, b.ruinLeft, b.ruinTop, b.basePatch, b.palette, b.stageBlocks, 1);
+            const auto s2 = ss2::assets::renderHouseStage(
+                b.x, b.y, b.ruinLeft, b.ruinTop, b.basePatch, b.palette, b.stageBlocks, 2);
+            const auto s3 = ss2::assets::renderHouseStage(
+                b.x, b.y, b.ruinLeft, b.ruinTop, b.basePatch, b.palette, b.stageBlocks, 3);
+            if (s0.image.rgba != s1.image.rgba && s1.image.rgba != s2.image.rgba &&
+                s2.image.rgba != s3.image.rgba && s3.bodyCount == 0u) {
+                ++tutProg;
+            }
+        }
+        check(tutProg == tutBlds.size(), "Tutorial I houses support all 4 progressive dom.res damage stages");
     }
 
     // 4. Retail MISC\MISC SoldClr infantry uniform tinting across shared .RS2 sprites & portraits.

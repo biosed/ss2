@@ -104,6 +104,71 @@ View extractRecord(const Object& obj) {
     return data.subspan(start, end - start);
 }
 
+RenderedHouseStage renderHouseStageImpl(
+    int x, int y, int patchLeft, int patchTop,
+    const MapImage& basePatch, View palette,
+    const std::array<std::vector<std::uint8_t>, 16>& stageBlocks,
+    int stage) {
+    RenderedHouseStage out{};
+    if (basePatch.width == 0 || basePatch.height == 0 ||
+        basePatch.rgba.size() < std::size_t(basePatch.width) * basePatch.height * 4u ||
+        palette.size() < 512u) {
+        return out;
+    }
+    const auto isBodyBlock = [](View blk) {
+        return blk.size() >= 9u && (blk[8] == 0xa1u || blk[8] == 0xa2u);
+    };
+    const auto stageHasBody = [&](int s) {
+        const std::size_t baseIdx = static_cast<std::size_t>(s) * 4u;
+        return isBodyBlock(stageBlocks[baseIdx]) ||
+               isBodyBlock(stageBlocks[baseIdx + 1u]) ||
+               isBodyBlock(stageBlocks[baseIdx + 2u]);
+    };
+
+    int effStage = std::clamp(stage, 0, 3);
+    if (effStage == 3) {
+        if (!stageHasBody(3)) return out;
+    } else {
+        while (effStage > 0 && !stageHasBody(effStage)) {
+            --effStage;
+        }
+        if (!stageHasBody(effStage)) return out;
+    }
+
+    out.image = basePatch;
+    const std::size_t stageBase = static_cast<std::size_t>(effStage) * 4u;
+    const int relX = x - patchLeft;
+    const int relY = y - patchTop;
+    const View pal512 = palette.first(512u);
+
+    const View sh = stageBlocks[stageBase + 3u];
+    if (isRenderableShadow(sh)) {
+        drawShadowFrame(out.image, relX, relY, sh);
+        out.shadowCoverage = readShadowCoverage(x, y, sh);
+        out.hasShadow = (out.shadowCoverage.width > 0 && out.shadowCoverage.height > 0);
+    }
+    const View baseBlk = stageBlocks[stageBase + 2u];
+    if (isBodyBlock(baseBlk)) {
+        drawIndexedFrame(out.image, relX, relY, baseBlk, pal512);
+    }
+    for (std::size_t k = 0; k < 2u; ++k) {
+        const View blk = stageBlocks[stageBase + k];
+        if (!isBodyBlock(blk)) continue;
+        if (effStage < 3) {
+            SpriteCoverage cov{};
+            drawIndexedFrame(out.image, relX, relY, blk, pal512, &cov);
+            if (cov.width > 0 && cov.height > 0) {
+                cov.left += patchLeft;
+                cov.top += patchTop;
+                out.bodyCoverages[out.bodyCount++] = cov;
+            }
+        } else {
+            drawIndexedFrame(out.image, relX, relY, blk, pal512);
+        }
+    }
+    return out;
+}
+
 void drawHouse(MapImage& map, int x, int y, View record, SceneryDepth* depth,
                std::vector<std::uint8_t>* shadowMask, BuildingPlacement* outBuilding = nullptr) {
     if (record.size() < 736) throw std::runtime_error("Truncated house scenery record");
@@ -112,7 +177,7 @@ void drawHouse(MapImage& map, int x, int y, View record, SceneryDepth* depth,
     if (ports > 1024) throw std::runtime_error("House port count exceeds limit");
     size_t pos = 736u + size_t(ports) * 10u;
     if (pos > record.size()) throw std::runtime_error("House frame table out of bounds");
-    // Blocks 0..2: intact left/right/base; 12..14: ruined left/right/base (blocks 3/7/11/15 are 0xa3 shadows).
+    // Blocks 0..2: intact left/right/base; 4..6: light damage; 8..10: heavy damage; 12..14: ruined (3/7/11/15 shadows).
     std::array<View, 16> blocks{};
     for (int i = 0; i < 16 && pos + 4 <= record.size(); ++i) {
         const size_t len = word32(record, pos);
@@ -127,23 +192,27 @@ void drawHouse(MapImage& map, int x, int y, View record, SceneryDepth* depth,
 
     int ruinLeft = 0, ruinTop = 0;
     MapImage ruinedPatch;
-    if (outBuilding && (!blocks[12].empty() || !blocks[13].empty() || !blocks[14].empty())) {
-        bool haveRuinBounds = false;
+    MapImage basePatch;
+    std::array<std::uint8_t, 512> savedPalette{};
+    std::array<std::vector<std::uint8_t>, 16> stageBlocks{};
+    if (outBuilding) {
+        bool haveUnionBounds = false;
         int rL = 0, rT = 0, rR = 0, rB = 0;
-        for (int idx : {0, 1, 2, 3, 12, 13, 14, 15}) {
+        for (int idx = 0; idx < 16; ++idx) {
             const View blk = blocks[static_cast<std::size_t>(idx)];
-            if (blk.size() < 9) continue;
-            const bool isBody = (blk[8] == 0xa1u || blk[8] == 0xa2u);
-            const bool isShadow = (idx == 3 || idx == 15) && isRenderableShadow(blk);
+            if (blk.size() < 9u) continue;
+            const bool isShadowSlot = (idx & 3) == 3;
+            const bool isBody = !isShadowSlot && (blk[8] == 0xa1u || blk[8] == 0xa2u);
+            const bool isShadow = isShadowSlot && isRenderableShadow(blk);
             if (!isBody && !isShadow) continue;
             const int bx = x + static_cast<int>(static_cast<std::int16_t>(word16(blk, 0)));
             const int by = y + static_cast<int>(static_cast<std::int16_t>(word16(blk, 2)));
             const int bw = static_cast<int>(static_cast<std::int16_t>(word16(blk, 4)));
             const int bh = static_cast<int>(static_cast<std::int16_t>(word16(blk, 6)));
             if (bw <= 0 || bh <= 0) continue;
-            if (!haveRuinBounds) {
+            if (!haveUnionBounds) {
                 rL = bx; rT = by; rR = bx + bw; rB = by + bh;
-                haveRuinBounds = true;
+                haveUnionBounds = true;
             } else {
                 rL = std::min(rL, bx);
                 rT = std::min(rT, by);
@@ -151,7 +220,7 @@ void drawHouse(MapImage& map, int x, int y, View record, SceneryDepth* depth,
                 rB = std::max(rB, by + bh);
             }
         }
-        if (haveRuinBounds) {
+        if (haveUnionBounds) {
             rL = std::clamp(rL, 0, static_cast<int>(map.width));
             rT = std::clamp(rT, 0, static_cast<int>(map.height));
             rR = std::clamp(rR, rL, static_cast<int>(map.width));
@@ -161,22 +230,18 @@ void drawHouse(MapImage& map, int x, int y, View record, SceneryDepth* depth,
                 ruinTop = rT;
                 const unsigned rw = static_cast<unsigned>(rR - rL);
                 const unsigned rh = static_cast<unsigned>(rB - rT);
-                ruinedPatch = MapImage{rw, rh, std::vector<std::uint8_t>(std::size_t(rw) * rh * 4u, 0)};
+                basePatch = MapImage{rw, rh, std::vector<std::uint8_t>(std::size_t(rw) * rh * 4u, 0)};
                 for (unsigned row = 0; row < rh; ++row) {
                     const auto srcBegin = map.rgba.begin() +
                         ((static_cast<std::size_t>(rT) + row) * map.width + static_cast<std::size_t>(rL)) * 4u;
                     std::copy_n(srcBegin, std::size_t(rw) * 4u,
-                                ruinedPatch.rgba.data() + std::size_t(row) * rw * 4u);
+                                basePatch.rgba.data() + std::size_t(row) * rw * 4u);
                 }
-                if (isRenderableShadow(blocks[15])) {
-                    drawShadowFrame(ruinedPatch, x - rL, y - rT, blocks[15]);
+                std::copy_n(palette.data(), 512u, savedPalette.data());
+                for (std::size_t i = 0; i < 16u; ++i) {
+                    stageBlocks[i].assign(blocks[i].begin(), blocks[i].end());
                 }
-                for (int idx : {14, 12, 13}) {
-                    const View blk = blocks[static_cast<std::size_t>(idx)];
-                    if (blk.size() >= 9 && (blk[8] == 0xa1 || blk[8] == 0xa2)) {
-                        drawIndexedFrame(ruinedPatch, x - rL, y - rT, blk, palette);
-                    }
-                }
+                ruinedPatch = renderHouseStageImpl(x, y, rL, rT, basePatch, savedPalette, stageBlocks, 3).image;
             }
         }
     }
@@ -214,10 +279,12 @@ void drawHouse(MapImage& map, int x, int y, View record, SceneryDepth* depth,
         const int hp = 220 + cap * 35;
         if (haveBounds) {
             *outBuilding = {x, y, minL, minT, std::max(1, maxR - minL), std::max(1, maxB - minT),
-                            cap, hp, ruinLeft, ruinTop, std::move(ruinedPatch)};
+                            cap, hp, ruinLeft, ruinTop, std::move(ruinedPatch),
+                            std::move(basePatch), savedPalette, std::move(stageBlocks)};
         } else {
             *outBuilding = {x, y, x - 36, y - 36, 72, 72,
-                            cap, hp, ruinLeft, ruinTop, std::move(ruinedPatch)};
+                            cap, hp, ruinLeft, ruinTop, std::move(ruinedPatch),
+                            std::move(basePatch), savedPalette, std::move(stageBlocks)};
         }
     }
 }
@@ -482,6 +549,15 @@ std::size_t renderSceneryObjects(MapImage& map, std::vector<Object>& objects, Sc
 }
 }
 
+RenderedHouseStage renderHouseStage(
+    int x, int y, int patchLeft, int patchTop,
+    const MapImage& basePatch,
+    std::span<const std::uint8_t> palette,
+    const std::array<std::vector<std::uint8_t>, 16>& stageBlocks,
+    int stage) {
+    return renderHouseStageImpl(x, y, patchLeft, patchTop, basePatch, palette, stageBlocks, stage);
+}
+
 SceneryDepth::SceneryDepth(int width, int height)
     : width_(width), height_(height), columns_((width+side-1)/side),
       tiles_(std::size_t(columns_)*((height+side-1)/side)) {}
@@ -513,6 +589,38 @@ void SceneryDepth::clearRect(int left, int top, int width, int height) {
         for (int x = x0; x < x1; ++x) {
             auto& tile = tiles_[std::size_t(y / side) * columns_ + x / side];
             if (tile) (*tile)[(y % side) * side + x % side] = 0;
+        }
+    }
+}
+
+void SceneryDepth::clearBodyDepth(int left, int top, int width, int height, int sortY) {
+    if (tiles_.empty() || width <= 0 || height <= 0 || sortY < 0 || sortY > 32766) return;
+    const std::uint16_t target = static_cast<std::uint16_t>(2 * (sortY + 1));
+    const int x0 = std::max(0, left), y0 = std::max(0, top);
+    const int x1 = std::min(width_, left + width), y1 = std::min(height_, top + height);
+    for (int y = y0; y < y1; ++y) {
+        for (int x = x0; x < x1; ++x) {
+            auto& tile = tiles_[std::size_t(y / side) * columns_ + x / side];
+            if (!tile) continue;
+            auto& value = (*tile)[(y % side) * side + x % side];
+            if ((value & ~1u) == target) {
+                value = static_cast<std::uint16_t>(value & 1u);
+            }
+        }
+    }
+}
+
+void SceneryDepth::clearShadow(const SpriteCoverage& shape) {
+    if (tiles_.empty() || shape.width <= 0 || shape.height <= 0) return;
+    const int x0 = std::max(0, shape.left), y0 = std::max(0, shape.top);
+    const int x1 = std::min(width_, shape.left + shape.width);
+    const int y1 = std::min(height_, shape.top + shape.height);
+    for (int y = y0; y < y1; ++y) {
+        for (int x = x0; x < x1; ++x) {
+            if (!shape.covers(x, y)) continue;
+            auto& tile = tiles_[std::size_t(y / side) * columns_ + x / side];
+            if (!tile) continue;
+            (*tile)[(y % side) * side + x % side] &= static_cast<std::uint16_t>(~1u);
         }
     }
 }

@@ -1,10 +1,12 @@
 #pragma once
 #include "assets/indexed.hpp"
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <span>
 #include <vector>
 
 namespace ss2::assets {
@@ -15,7 +17,36 @@ struct BuildingPlacement {
     int maxHp{300};
     int ruinLeft{}, ruinTop{};
     MapImage ruinedPatch;
+    MapImage basePatch;
+    std::array<std::uint8_t, 512> palette{};
+    std::array<std::vector<std::uint8_t>, 16> stageBlocks{};
 };
+
+/// Returns the retail 4-stage visual damage tier (0 intact, 1 light, 2 heavy, 3 ruined).
+inline int buildingDamageStage(int hp, int maxHp, bool destroyed) noexcept {
+    if (destroyed || hp <= 0) return 3;
+    const std::int64_t effMax = std::max<std::int64_t>(1, maxHp);
+    const std::int64_t cur = hp;
+    if (cur * 3 > effMax * 2) return 0;
+    if (cur * 3 > effMax) return 1;
+    return 2;
+}
+
+struct RenderedHouseStage {
+    MapImage image;
+    std::array<SpriteCoverage, 2> bodyCoverages{};
+    std::size_t bodyCount{0};
+    SpriteCoverage shadowCoverage{};
+    bool hasShadow{false};
+};
+
+/// Composite a building's dom.res damage stage (0..3) over its clean pre-house basePatch.
+RenderedHouseStage renderHouseStage(
+    int x, int y, int patchLeft, int patchTop,
+    const MapImage& basePatch,
+    std::span<const std::uint8_t> palette,
+    const std::array<std::vector<std::uint8_t>, 16>& stageBlocks,
+    int stage);
 
 struct BridgeSubCell {
     int subX{}, subY{};
@@ -41,6 +72,8 @@ public:
     void addBody(const SpriteCoverage&, int sortY);
     void addShadow(const SpriteCoverage&);
     void clearRect(int left, int top, int width, int height);
+    void clearBodyDepth(int left, int top, int width, int height, int sortY);
+    void clearShadow(const SpriteCoverage&);
     bool occludes(int x, int y, int footY, bool revealed = false, int checkerPhase = 0) const;
     bool hasShadow(int x, int y) const;
     bool intersects(int left, int top, int width, int height) const;

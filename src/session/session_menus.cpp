@@ -945,8 +945,7 @@ bool GameSession::loadSaveFromPath(const std::filesystem::path& path, const std:
             lb.occupantIds = bu.occupantIds;
             lb.owner = bu.owner;
             lb.destroyed = bu.destroyed;
-            if (lb.destroyed) applyBuildingRubble(bu.index);
-            else restoreBuildingIntact(bu.index);
+            applyBuildingStage(bu.index, ss2::assets::buildingDamageStage(lb.hp, lb.maxHp, lb.destroyed));
         }
     }
     for (const auto& bru : simulation->pollBridgeUpdates()) {

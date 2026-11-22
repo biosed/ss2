@@ -368,10 +368,20 @@ void GameSession::initializeMission() {
         liveBuildings.clear();
         liveBuildings.reserve(missionBuildings.size());
         for (auto& bp : missionBuildings) {
+            ss2::assets::SpriteCoverage initShadow{};
+            bool hasInitShadow = false;
+            const auto& sh0 = bp.stageBlocks[3];
+            if (sh0.size() >= 9u && sh0[8] == 0xa3u &&
+                (sh0[4] != 0u || sh0[5] != 0u) && (sh0[6] != 0u || sh0[7] != 0u)) {
+                initShadow = ss2::assets::readShadowCoverage(bp.x, bp.y, sh0);
+                hasInitShadow = (initShadow.width > 0 && initShadow.height > 0);
+            }
             liveBuildings.push_back({
                 bp.x, bp.y, bp.left, bp.top, bp.width, bp.height,
                 bp.maxHp, bp.maxHp, bp.capacity, 0, -1, false,
-                bp.ruinLeft, bp.ruinTop, std::move(bp.ruinedPatch), {}, false, {}
+                bp.ruinLeft, bp.ruinTop, std::move(bp.ruinedPatch),
+                std::move(bp.basePatch), {}, bp.palette, std::move(bp.stageBlocks),
+                0, initShadow, hasInitShadow, {}
             });
         }
         liveBridges.clear();
@@ -975,30 +985,70 @@ int GameSession::initialGrenadesForId(std::string_view id) const {
     return 2;
 }
 
-void GameSession::applyBuildingRubble(std::size_t bIdx) {
+void GameSession::applyBuildingStage(std::size_t bIdx, int stage) {
     if (!scene || bIdx >= liveBuildings.size()) return;
+    const int clamped = std::clamp(stage, 0, 3);
     auto& lb = liveBuildings[bIdx];
-    if (lb.rubbleStamped || lb.ruinedPatch.width == 0 || lb.ruinedPatch.height == 0) return;
-    if (lb.intactPatch.width == 0 || lb.intactPatch.height == 0) {
-        lb.intactPatch = scene->copyGroundRect(
-            lb.ruinLeft, lb.ruinTop, static_cast<int>(lb.ruinedPatch.width), static_cast<int>(lb.ruinedPatch.height));
-    }
-    const auto patch = scene->stampGroundPatch(lb.ruinLeft, lb.ruinTop, lb.ruinedPatch);
-    if (patch.pixels.width && patch.pixels.height) {
-        renderer.updateMapRegion(patch.x, patch.y, patch.pixels);
-    }
-    lb.rubbleStamped = true;
-}
+    if (lb.stampedStage == clamped) return;
 
-void GameSession::restoreBuildingIntact(std::size_t bIdx) {
-    if (!scene || bIdx >= liveBuildings.size()) return;
-    auto& lb = liveBuildings[bIdx];
-    if (!lb.rubbleStamped || lb.intactPatch.width == 0 || lb.intactPatch.height == 0) return;
-    const auto patch = scene->stampGroundPatch(lb.ruinLeft, lb.ruinTop, lb.intactPatch);
+    if (lb.basePatch.width == 0 || lb.basePatch.height == 0) {
+        if (clamped == 3) {
+            if (lb.ruinedPatch.width == 0 || lb.ruinedPatch.height == 0) return;
+            if (lb.intactPatch.width == 0 || lb.intactPatch.height == 0) {
+                lb.intactPatch = scene->copyGroundRect(
+                    lb.ruinLeft, lb.ruinTop,
+                    static_cast<int>(lb.ruinedPatch.width),
+                    static_cast<int>(lb.ruinedPatch.height));
+            }
+            const auto patch = scene->stampGroundPatch(lb.ruinLeft, lb.ruinTop, lb.ruinedPatch);
+            if (patch.pixels.width && patch.pixels.height) {
+                renderer.updateMapRegion(patch.x, patch.y, patch.pixels);
+            }
+            lb.stampedStage = 3;
+        } else if (lb.stampedStage == 3 && lb.intactPatch.width > 0 && lb.intactPatch.height > 0) {
+            const auto patch = scene->stampGroundPatch(lb.ruinLeft, lb.ruinTop, lb.intactPatch, false);
+            if (patch.pixels.width && patch.pixels.height) {
+                renderer.updateMapRegion(patch.x, patch.y, patch.pixels);
+            }
+            lb.stampedStage = clamped;
+        }
+        return;
+    }
+
+    if (lb.stampedStage == 0 && clamped > 0 &&
+        (lb.intactPatch.width == 0 || lb.intactPatch.height == 0)) {
+        lb.intactPatch = scene->copyGroundRect(
+            lb.ruinLeft, lb.ruinTop,
+            static_cast<int>(lb.basePatch.width),
+            static_cast<int>(lb.basePatch.height));
+    }
+
+    const auto rendered = ss2::assets::renderHouseStage(
+        lb.x, lb.y, lb.ruinLeft, lb.ruinTop, lb.basePatch, lb.palette, lb.stageBlocks, clamped);
+    const assets::MapImage* pixels = nullptr;
+    if (clamped == 0 &&
+        lb.intactPatch.width == lb.basePatch.width &&
+        lb.intactPatch.height == lb.basePatch.height) {
+        pixels = &lb.intactPatch;
+    } else if (rendered.image.width > 0 && rendered.image.height > 0) {
+        pixels = &rendered.image;
+    } else if (clamped == 3 && lb.ruinedPatch.width > 0 && lb.ruinedPatch.height > 0) {
+        pixels = &lb.ruinedPatch;
+    } else {
+        return;
+    }
+
+    const auto patch = scene->updateBuildingPatch(
+        lb.ruinLeft, lb.ruinTop, *pixels, lb.y,
+        std::span<const assets::SpriteCoverage>(rendered.bodyCoverages.data(), rendered.bodyCount),
+        lb.hasLastShadow ? &lb.lastShadowCoverage : nullptr,
+        rendered.hasShadow ? &rendered.shadowCoverage : nullptr);
     if (patch.pixels.width && patch.pixels.height) {
         renderer.updateMapRegion(patch.x, patch.y, patch.pixels);
     }
-    lb.rubbleStamped = false;
+    lb.stampedStage = clamped;
+    lb.lastShadowCoverage = rendered.shadowCoverage;
+    lb.hasLastShadow = rendered.hasShadow;
 }
 
 void GameSession::applyBridgeStage(std::size_t brIdx, int stage) {

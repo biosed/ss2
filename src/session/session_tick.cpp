@@ -604,9 +604,9 @@ void GameSession::stepSimulationEvents() {
                 if (selectedBuilding && *selectedBuilding == bu.index && (lb.destroyed || lb.occupantCount == 0 || lb.owner != localOwner())) {
                     selectedBuilding.reset();
                 }
-                if (bu.collapsedThisTick || bu.destroyed) {
-                    applyBuildingRubble(bu.index);
-                }
+                const int prevStage = lb.stampedStage;
+                const int newStage = ss2::assets::buildingDamageStage(lb.hp, lb.maxHp, lb.destroyed);
+                applyBuildingStage(bu.index, newStage);
                 const auto now = std::chrono::steady_clock::now();
                 const float bx = static_cast<float>(bu.x * mapScale);
                 const float by = static_cast<float>(bu.y * mapScale);
@@ -625,6 +625,18 @@ void GameSession::stepSimulationEvents() {
                     }
                     (void)playWorldSound("defaultexplosion", 0.68f, bu.x, bu.y, ss2::VoicePriority::High);
                     showNotice(ss2::tr("Building destroyed!"), ss2::NoticeKind::blocked);
+                } else if (newStage > prevStage && newStage < 3) {
+                    if (bu.owner == localOwner() || isBuildingPointVisible(bu.x, bu.y)) {
+                        if (combatEffects && activeVfx.size() < 64) {
+                            activeVfx.push_back({ActiveVfx::Kind::Explosion, bx, by, bx, by, now,
+                                                 std::chrono::milliseconds(440)});
+                        }
+                        if (newStage == 2 && combatEffects) {
+                            if (burningWrecks.size() >= 8) burningWrecks.erase(burningWrecks.begin());
+                            burningWrecks.push_back({bx, by, now + std::chrono::seconds(8)});
+                        }
+                    }
+                    (void)playWorldSound("smallexplosion", 0.50f, bu.x, bu.y);
                 } else if (bu.damagedThisTick && combatEffects && activeVfx.size() < 64 &&
                            (bu.owner == localOwner() || isBuildingPointVisible(bu.x, bu.y))) {
                     activeVfx.push_back({ActiveVfx::Kind::Explosion, bx, by, bx, by, now,

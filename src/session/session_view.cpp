@@ -432,8 +432,13 @@ bool GameSession::updateViewTooltipAndPresent() {
                             const int critThresh = std::min(
                                 unitCatalog ? unitCatalog->buildingDefense().unloadHp : 150,
                                 std::max(1, b.maxHp / 4));
+                            const int bStage = ss2::assets::buildingDamageStage(b.hp, b.maxHp, b.destroyed);
                             if (b.hp > 0 && b.hp <= critThresh) {
                                 tc.lines.push_back(ss2::tr("Critical structure — collapse imminent (U to evacuate)"));
+                            } else if (bStage >= 2) {
+                                tc.lines.push_back(ss2::tr("Heavily damaged"));
+                            } else if (bStage == 1) {
+                                tc.lines.push_back(ss2::tr("Damaged"));
                             }
                             if (b.hp < b.maxHp && (b.owner == -1 || b.owner == localOwner())) {
                                 tc.lines.push_back(ss2::tr("Right-click with supply truck to repair"));

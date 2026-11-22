@@ -1,4 +1,6 @@
 #include "assets/indexed.hpp"
+#include "assets/infantry.hpp"
+#include "assets/scenery.hpp"
 #include "assets/terrain.hpp"
 #include <array>
 #include <iostream>
@@ -143,6 +145,129 @@ int main() try {
     if (seq.frames[0].rgba[0] != 255 || seq.frames[0].rgba[3] != 255) return 1;
     if (seq.frames[0].rgba[4] != 0 || seq.frames[0].rgba[7] != 128) return 1;
     if (seq.frames[0].rgba[11] != 0) return 1;
+
+    // Synthetic 4-stage house damage tiers, renderHouseStage shrink/no-ghosting, and SceneryDepth updates.
+    using ss2::assets::buildingDamageStage;
+    if (buildingDamageStage(100, 100, false) != 0 || buildingDamageStage(67, 100, false) != 0 ||
+        buildingDamageStage(66, 100, false) != 1 || buildingDamageStage(34, 100, false) != 1 ||
+        buildingDamageStage(33, 100, false) != 2 || buildingDamageStage(1, 100, false) != 2 ||
+        buildingDamageStage(0, 100, false) != 3 || buildingDamageStage(50, 100, true) != 3) {
+        return 1;
+    }
+
+    // Palette entries are 2 bytes per entry (512 bytes = 256 RGB565 entries): [1]=red 0xf800, [2]=green 0x07e0.
+    std::array<std::uint8_t, 512> housePal{};
+    housePal[1u * 2u + 1u] = 0xf8u;
+    housePal[2u * 2u + 0u] = 0xe0u;
+    housePal[2u * 2u + 1u] = 0x07u;
+
+    const auto makeSolidA2 = [](int ox, int oy, std::uint16_t w, std::uint16_t h, std::uint8_t colorIdx) {
+        std::vector<std::uint8_t> f{
+            static_cast<std::uint8_t>(ox & 0xff), static_cast<std::uint8_t>((ox >> 8) & 0xff),
+            static_cast<std::uint8_t>(oy & 0xff), static_cast<std::uint8_t>((oy >> 8) & 0xff),
+            static_cast<std::uint8_t>(w & 0xff), static_cast<std::uint8_t>((w >> 8) & 0xff),
+            static_cast<std::uint8_t>(h & 0xff), static_cast<std::uint8_t>((h >> 8) & 0xff),
+            0xa2u
+        };
+        for (std::uint16_t r = 0; r < h; ++r) {
+            f.push_back(2u);
+            f.push_back(0u);
+            f.push_back(static_cast<std::uint8_t>(0x80u | w));
+            f.push_back(colorIdx);
+        }
+        return f;
+    };
+    const auto makeSolidA3 = [](int ox, int oy, std::uint16_t w, std::uint16_t h) {
+        std::vector<std::uint8_t> f{
+            static_cast<std::uint8_t>(ox & 0xff), static_cast<std::uint8_t>((ox >> 8) & 0xff),
+            static_cast<std::uint8_t>(oy & 0xff), static_cast<std::uint8_t>((oy >> 8) & 0xff),
+            static_cast<std::uint8_t>(w & 0xff), static_cast<std::uint8_t>((w >> 8) & 0xff),
+            static_cast<std::uint8_t>(h & 0xff), static_cast<std::uint8_t>((h >> 8) & 0xff),
+            0xa3u
+        };
+        for (std::uint16_t r = 0; r < h; ++r) {
+            f.push_back(1u);
+            f.push_back(0u);
+            f.push_back(static_cast<std::uint8_t>(w));
+        }
+        return f;
+    };
+
+    std::array<std::vector<std::uint8_t>, 16> houseBlocks{};
+    // House anchor at (4, 6), patch at (0, 0), size 8x8.
+    // Stage 0 covers x=[2..6), y=[0..6) (red) + shadow x=[1..3), y=[6..8).
+    houseBlocks[0] = makeSolidA2(-2, -6, 4, 6, 1);
+    houseBlocks[3] = makeSolidA3(-3, 0, 2, 2);
+    // Stage 1 shrinks vertically: x=[2..6), y=[3..6) (green) + smaller shadow x=[2..4), y=[6..7).
+    houseBlocks[4] = makeSolidA2(-2, -3, 4, 3, 2);
+    houseBlocks[7] = makeSolidA3(-2, 0, 2, 1);
+    // Stage 2 shrinks further: x=[3..6), y=[4..6) (green) + shadow x=[2..4), y=[6..7).
+    houseBlocks[8] = makeSolidA2(-1, -2, 3, 2, 2);
+    houseBlocks[11] = makeSolidA3(-2, 0, 2, 1);
+    // Stage 3 ruins: x=[2..5), y=[5..6) (green) + shadow x=[3..5), y=[6..7).
+    houseBlocks[12] = makeSolidA2(-2, -1, 3, 1, 2);
+    houseBlocks[15] = makeSolidA3(-1, 0, 2, 1);
+
+    ss2::assets::MapImage houseBase{8, 8, std::vector<std::uint8_t>(8u * 8u * 4u, 0u)};
+    for (std::size_t p = 0; p < houseBase.rgba.size(); p += 4u) {
+        houseBase.rgba[p + 2u] = 200u; // pure blue ground
+        houseBase.rgba[p + 3u] = 255u;
+    }
+
+    const auto rs0 = ss2::assets::renderHouseStage(4, 6, 0, 0, houseBase, housePal, houseBlocks, 0);
+    const auto rs1 = ss2::assets::renderHouseStage(4, 6, 0, 0, houseBase, housePal, houseBlocks, 1);
+    const auto rs2 = ss2::assets::renderHouseStage(4, 6, 0, 0, houseBase, housePal, houseBlocks, 2);
+    const auto rs3 = ss2::assets::renderHouseStage(4, 6, 0, 0, houseBase, housePal, houseBlocks, 3);
+    if (rs0.bodyCount != 1u || !rs0.hasShadow || rs1.bodyCount != 1u || !rs1.hasShadow ||
+        rs2.bodyCount != 1u || !rs2.hasShadow || rs3.bodyCount != 0u || !rs3.hasShadow) {
+        return 1;
+    }
+    // Stage 0 top pixel (3, 1) is red roof; Stage 1/2/3 top pixel (3, 1) must cleanly show blue ground (no ghost roof).
+    const auto pxAt = [](const ss2::assets::MapImage& img, unsigned x, unsigned y) {
+        const std::size_t off = (std::size_t(y) * img.width + x) * 4u;
+        return std::array<std::uint8_t, 4>{img.rgba[off], img.rgba[off + 1u], img.rgba[off + 2u], img.rgba[off + 3u]};
+    };
+    if (pxAt(rs0.image, 3, 1) != std::array<std::uint8_t, 4>{255, 0, 0, 255}) return 1;
+    if (pxAt(rs1.image, 3, 1) != std::array<std::uint8_t, 4>{0, 0, 200, 255}) return 1;
+    if (pxAt(rs2.image, 3, 1) != std::array<std::uint8_t, 4>{0, 0, 200, 255}) return 1;
+    if (pxAt(rs3.image, 3, 1) != std::array<std::uint8_t, 4>{0, 0, 200, 255}) return 1;
+    if (pxAt(rs1.image, 3, 4) != std::array<std::uint8_t, 4>{0, 255, 0, 255}) return 1;
+
+    // SceneryDepth surgical update via InfantryScene::updateBuildingPatch: preserve foreground tree (sortY=7)
+    // and unrelated tree shadow while clearing & updating the building at sortY=6.
+    ss2::assets::SceneryDepth depth(8, 8);
+    depth.addBody(rs0.bodyCoverages[0], 6);
+    depth.addShadow(rs0.shadowCoverage);
+    depth.addBody(ss2::assets::SpriteCoverage{2, 5, 1, 1, {1}}, 7); // foreground tree
+    depth.addShadow(ss2::assets::SpriteCoverage{0, 0, 1, 1, {1}}); // unrelated tree shadow
+
+    if (!depth.occludes(3, 1, 0) || !depth.hasShadow(1, 6) || !depth.hasShadow(0, 0)) return 1;
+    {
+        ss2::assets::InfantryScene sc(rs0.image, {}, {}, false, {}, {}, false, std::move(depth));
+        (void)sc.updateBuildingPatch(
+            0, 0, rs1.image, 6,
+            std::span<const ss2::assets::SpriteCoverage>(rs1.bodyCoverages.data(), rs1.bodyCount),
+            &rs0.shadowCoverage, &rs1.shadowCoverage);
+        const auto after1 = sc.compose();
+        if (pxAt(after1, 3, 1) != std::array<std::uint8_t, 4>{0, 0, 200, 255}) return 1;
+        if (pxAt(after1, 3, 4) != std::array<std::uint8_t, 4>{0, 255, 0, 255}) return 1;
+    }
+
+    // Direct SceneryDepth surgical API verification.
+    ss2::assets::SceneryDepth dcheck(8, 8);
+    dcheck.addBody(rs0.bodyCoverages[0], 6);
+    dcheck.addShadow(rs0.shadowCoverage);
+    dcheck.addBody(ss2::assets::SpriteCoverage{2, 5, 1, 1, {1}}, 7);
+    dcheck.addShadow(ss2::assets::SpriteCoverage{0, 0, 1, 1, {1}});
+    dcheck.clearBodyDepth(0, 0, 8, 8, 6);
+    dcheck.clearShadow(rs0.shadowCoverage);
+    if (dcheck.occludes(3, 1, 0) || dcheck.occludes(3, 4, 0) || !dcheck.occludes(2, 5, 6)) return 1;
+    if (dcheck.hasShadow(1, 6) || !dcheck.hasShadow(0, 0)) return 1;
+    dcheck.addBody(rs1.bodyCoverages[0], 6);
+    dcheck.addShadow(rs1.shadowCoverage);
+    if (dcheck.occludes(3, 1, 0) || !dcheck.occludes(3, 4, 2) || !dcheck.occludes(2, 5, 6) || !dcheck.hasShadow(2, 6)) {
+        return 1;
+    }
     return 0;
 } catch (const std::exception& e) {
     std::cerr << e.what() << '\n';

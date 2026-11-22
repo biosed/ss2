@@ -384,11 +384,7 @@ MapPatch InfantryScene::repaintRegion(int left, int top, int right, int bottom) 
     return repaint(left, top, right, bottom);
 }
 
-MapPatch InfantryScene::stampGroundPatch(int x, int y, const MapImage& patch, bool clearDepth) {
-    if (!patch.width || !patch.height || patch.rgba.size() < std::size_t(patch.width) * patch.height * 4u) {
-        return {0, 0, {}};
-    }
-    if (clearDepth) depth_.clearRect(x, y, int(patch.width), int(patch.height));
+MapPatch InfantryScene::blitGroundPatch(int x, int y, const MapImage& patch) {
     const int dstLeft = std::clamp(x * resolution_, 0, int(ground_.width));
     const int dstTop = std::clamp(y * resolution_, 0, int(ground_.height));
     const int dstRight = std::clamp((x + int(patch.width)) * resolution_, dstLeft, int(ground_.width));
@@ -405,6 +401,38 @@ MapPatch InfantryScene::stampGroundPatch(int x, int y, const MapImage& patch, bo
         }
     }
     return repaint(dstLeft, dstTop, dstRight, dstBottom);
+}
+
+MapPatch InfantryScene::stampGroundPatch(int x, int y, const MapImage& patch, bool clearDepth) {
+    if (!patch.width || !patch.height || patch.rgba.size() < std::size_t(patch.width) * patch.height * 4u) {
+        return {0, 0, {}};
+    }
+    if (clearDepth) depth_.clearRect(x, y, int(patch.width), int(patch.height));
+    return blitGroundPatch(x, y, patch);
+}
+
+MapPatch InfantryScene::updateBuildingPatch(int patchLeft, int patchTop, const MapImage& patch, int sortY,
+                                            std::span<const SpriteCoverage> newBodies,
+                                            const SpriteCoverage* oldShadow,
+                                            const SpriteCoverage* newShadow) {
+    if (!patch.width || !patch.height || patch.rgba.size() < std::size_t(patch.width) * patch.height * 4u) {
+        return {0, 0, {}};
+    }
+    depth_.clearBodyDepth(patchLeft, patchTop, int(patch.width), int(patch.height), sortY);
+    if (oldShadow && oldShadow->width > 0 && oldShadow->height > 0) {
+        depth_.clearShadow(*oldShadow);
+    }
+    if (sortY >= 0 && sortY <= 32766) {
+        for (const auto& cov : newBodies) {
+            if (cov.width > 0 && cov.height > 0) {
+                depth_.addBody(cov, sortY);
+            }
+        }
+    }
+    if (newShadow && newShadow->width > 0 && newShadow->height > 0) {
+        depth_.addShadow(*newShadow);
+    }
+    return blitGroundPatch(patchLeft, patchTop, patch);
 }
 
 MapImage InfantryScene::copyGroundRect(int x, int y, int width, int height) const {

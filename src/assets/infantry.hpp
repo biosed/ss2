@@ -47,6 +47,10 @@ public:
     void setVehicleLayer(VehicleLayer layer);
     MapPatch repaintRegion(int left, int top, int right, int bottom) const;
     MapPatch stampGroundPatch(int x, int y, const MapImage& patch, bool clearDepth = true);
+    MapPatch updateBuildingPatch(int patchLeft, int patchTop, const MapImage& patch, int sortY,
+                                 std::span<const SpriteCoverage> newBodies,
+                                 const SpriteCoverage* oldShadow = nullptr,
+                                 const SpriteCoverage* newShadow = nullptr);
     MapImage copyGroundRect(int x, int y, int width, int height) const;
     MapPatch stampAlphaOverlay(int centerX, int centerY, const MapImage& sprite);
     std::vector<MapPatch> setInspection(const std::set<std::size_t>& selected, Cursor cursor, int checkerPhase);
@@ -88,6 +92,7 @@ private:
     bool ensureClassLoaded(const std::string& id, std::array<int, 4>* firstBounds = nullptr);
     const InfantryPose& frame(const Infantry&) const;
     void bounds(Infantry&);
+    MapPatch blitGroundPatch(int x, int y, const MapImage& patch);
     MapPatch repaint(int left, int top, int right, int bottom) const;
     void paint(MapImage&, int x, int y) const;
 };
