@@ -746,6 +746,37 @@ std::optional<std::size_t> VehicleScene::spawn(const Placement& p) {
     return index;
 }
 
+std::size_t VehicleScene::spawnVisualPlaceholder(const Placement& p, int boxW, int boxH) {
+    const int w = std::max(8, boxW);
+    const int h = std::max(8, boxH);
+    VehicleUnit vu{
+        p.id,
+        p.x,
+        p.y,
+        p.hp,
+        p.ammo,
+        p.group,
+        p.owner,
+        static_cast<unsigned>(p.direction & 31),
+        static_cast<unsigned>(p.direction & 31),
+        p.x - w / 2,
+        p.y - h / 2,
+        w,
+        h,
+        p.hp > 0,
+        true,
+        (p.owner != 3) || !p.passengers.empty(),
+        p.expa,
+    };
+    const std::size_t index = units_.size();
+    unitAsset_.reserve(index + 1u);
+    units_.push_back(std::move(vu));
+    unitAsset_.push_back(static_cast<std::size_t>(-1));
+    unitTrackPhase_.push_back(0u);
+    unitMoveAccum_.push_back(0);
+    return index;
+}
+
 void VehicleScene::drawAll(MapImage& target, const SceneryDepth* depth) const {
     drawRegion(target, 0, 0, depth);
 }
@@ -763,6 +794,7 @@ void VehicleScene::drawRegion(MapImage& patch, int patchX, int patchY, const Sce
     std::vector<std::size_t> order;
     order.reserve(units_.size());
     for (std::size_t i = 0; i < units_.size(); ++i) {
+        if (unitAsset_[i] == static_cast<std::size_t>(-1)) continue;
         const auto& unit = units_[i];
         if (!unit.visible) continue;
         if (unit.width <= 0 || unit.height <= 0) continue;
@@ -855,6 +887,12 @@ DirtyRect VehicleScene::update(std::size_t index, int x, int y, unsigned hullDir
             unitMoveAccum_[index] %= 4;
             trackPhase = unitTrackPhase_[index];
         }
+    }
+    if (unitAsset_[index] == static_cast<std::size_t>(-1)) {
+        next.left = x - next.width / 2;
+        next.top = y - next.height / 2;
+        unit = std::move(next);
+        return {};
     }
     const auto& asset = assets_[unitAsset_[index]];
     updateVehicleBounds(next, asset.pck, asset.hot, asset.frameCount, trackPhase);

@@ -752,6 +752,7 @@ bool GameSession::loadSaveFromPath(const std::filesystem::path& path, const std:
     activeVfx.clear();
     burningWrecks.clear();
     livePlanes.clear();
+    liveParachutes.clear();
     planeAtlas.reset();
     planeOverflowLogged = false;
     activeMarkers.clear();
@@ -912,6 +913,10 @@ bool GameSession::loadSaveFromPath(const std::filesystem::path& path, const std:
                 if (const auto vIdx = vehicleScene->spawn(vpPlace)) {
                     ensureUnitPortrait(wantVeh, true);
                     selection->addVehicle(scaleVehicle(vehicleScene->vehicles().at(*vIdx), mapScale));
+                } else {
+                    const auto phIdx = vehicleScene->spawnVisualPlaceholder(vpPlace, 24, 20);
+                    ensureUnitPortrait(wantVeh, true);
+                    selection->addVehicle(scaleVehicle(vehicleScene->vehicles().at(phIdx), mapScale));
                 }
             }
             if (vp.index < vehicleScene->vehicles().size()) {

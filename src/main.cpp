@@ -585,6 +585,7 @@ int main(int argc, char** argv) try {
     bool listMultiplayer = false;
     bool overviewOnly = false;
     bool noMovies = false;
+    bool watchReplay = false;
     std::optional<int> cliDifficulty;
     std::optional<std::uint16_t> mpHostPort;
     std::optional<std::pair<std::string, std::uint16_t>> mpJoinEndpoint;
@@ -594,7 +595,7 @@ int main(int argc, char** argv) try {
     for (int i = 1; i < argc; ++i) {
         const std::string_view arg(argv[i]);
         if (arg == "--help") {
-            std::cout << "ss2 [--game-dir DIR] [--mission FILE.ssm|NAME|INDEX] [--campaign QUERY] [--overview] [--list-missions] [--list-campaigns] [--list-multiplayer] [--host PORT | --join HOST:PORT] [--mp-nation NATION] [--mp-players 2|3|4] [--mp-teams ffa|2v2|T0,T1,T2,T3] [--hd-pack DIR] [--original-infantry] [--no-auto-engage] [--difficulty easy|normal|hard] [--record FILE | --replay FILE | --load-save FILE] [--4k] [--fullscreen | --windowed] [--lang en|fr|es] [--frames N] [--no-movies] [--validate] [--timing]\n"
+            std::cout << "ss2 [--game-dir DIR] [--mission FILE.ssm|NAME|INDEX] [--campaign QUERY] [--overview] [--list-missions] [--list-campaigns] [--list-multiplayer] [--host PORT | --join HOST:PORT] [--mp-nation NATION] [--mp-players 2|3|4] [--mp-teams ffa|2v2|T0,T1,T2,T3] [--hd-pack DIR] [--original-infantry] [--no-auto-engage] [--difficulty easy|normal|hard] [--record FILE | --replay FILE | --watch-replay FILE | --load-save FILE] [--4k] [--fullscreen | --windowed] [--lang en|fr|es] [--frames N] [--no-movies] [--validate] [--timing]\n"
                          "--game-dir opens Tutorial I (or --mission) from an extracted Gold 2.2 game directory.\n"
                          "--list-missions lists all installed single-player missions, their map sizes and descriptions.\n"
                          "--list-campaigns lists all installed campaigns and missions.\n"
@@ -609,6 +610,7 @@ int main(int argc, char** argv) try {
                          "--overview displays only the mission's JPEG overview instead of launching playable.\n"
                          "--record writes a deterministic command log and final stateHash to FILE on exit.\n"
                          "--replay replays a recorded command log on a manual clock and verifies its final stateHash.\n"
+                         "--watch-replay opens an interactive live replay viewer (Space pause, +/- speed, . step, Tab seat/all-vision).\n"
                          "--load-save launches a saved mission snapshot (.ss2save) directly into playable simulation.\n"
                          "--no-movies skips the opening logo and intro Bink movies.\n"
                          "--original-infantry uses the original infantry size. The default is 125%.\n"
@@ -622,8 +624,14 @@ int main(int argc, char** argv) try {
         else if (arg == "--mission" && i + 1 < argc) mission = argv[++i];
         else if (arg == "--campaign" && i + 1 < argc) campaignQuery = argv[++i];
         else if (arg == "--record" && i + 1 < argc) recordPath = argv[++i];
-        else if (arg == "--replay" && i + 1 < argc) replayPath = argv[++i];
-        else if (arg == "--load-save" && i + 1 < argc) loadSavePath = argv[++i];
+        else if (arg == "--replay" && i + 1 < argc) {
+            if (!replayPath.empty()) throw std::invalid_argument("Choose either --replay or --watch-replay");
+            replayPath = argv[++i];
+        } else if (arg == "--watch-replay" && i + 1 < argc) {
+            if (!replayPath.empty()) throw std::invalid_argument("Choose either --replay or --watch-replay");
+            replayPath = argv[++i];
+            watchReplay = true;
+        } else if (arg == "--load-save" && i + 1 < argc) loadSavePath = argv[++i];
         else if (arg == "--list-missions") listMissions = true;
         else if (arg == "--list-campaigns") listCampaigns = true;
         else if (arg == "--list-multiplayer") listMultiplayer = true;
@@ -976,6 +984,7 @@ int main(int argc, char** argv) try {
         mission = std::move(chosen->missionPath);
         if (chosen->replayFile) {
             parsedReplay = std::move(chosen->replayFile);
+            watchReplay = true;
             if (parsedReplay->difficulty) settings.difficulty = *parsedReplay->difficulty;
             if (parsedReplay->autoEngage) autoEngage = *parsedReplay->autoEngage;
         }
@@ -1002,7 +1011,7 @@ int main(int argc, char** argv) try {
         result = ss2::runGameSession(window.get(), validate ? &report : nullptr, limit, timing, gameDir, mission, hdPack,
                            originalInfantry, autoEngage, settings, persistSettings, overviewOnly, &nextMission,
                            recordPath, parsedReplay ? &*parsedReplay : nullptr, false, loadSavePath, mpConfig,
-                           mpConfig.enabled ? nullptr : &campaignUnitPools);
+                           mpConfig.enabled ? nullptr : &campaignUnitPools, watchReplay);
         loadSavePath.clear();
         if (!nextMission || result != 0 || !recordPath.empty() || parsedReplay || mpConfig.enabled) break;
         mission = std::move(*nextMission);

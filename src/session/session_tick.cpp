@@ -27,6 +27,44 @@ void GameSession::processLockstepPostTickSpawns() {
 
 void GameSession::stepSimulationEvents() {
     if (simulation) {
+        if (replayFile && liveReplay) {
+            const auto now = std::chrono::steady_clock::now();
+            if (!manualClock) {
+                const double dt = (lastReplayStepFrame.time_since_epoch().count() == 0)
+                    ? 0.0
+                    : std::clamp(std::chrono::duration<double>(now - lastReplayStepFrame).count(), 0.0, 0.1);
+                lastReplayStepFrame = now;
+                const double baseSec = std::max(0.005, static_cast<double>(ss2::tutorialTurnDelay(gameDir)) / 1000.0);
+                const unsigned steps = std::min(16u, replayTransport.consumeTicks(dt, baseSec));
+                for (unsigned s = 0; s < steps && !replayTransport.finished; ++s) {
+                    if (!simulation->replayStep(replayFile->commands, replayTransport.cursor, replayFile->endTick)) {
+                        replayTransport.finished = true;
+                        showNotice(ss2::tr("Replay playback stopped early."), ss2::NoticeKind::blocked);
+                        break;
+                    }
+                }
+            }
+            if (!replayTransport.finished && simulation->simTick() >= replayFile->endTick &&
+                replayTransport.cursor >= replayFile->commands.size()) {
+                replayTransport.finished = true;
+                const auto actualHash = simulation->stateHash();
+                if (replayFile->endStateHash) {
+                    if (actualHash == *replayFile->endStateHash) {
+                        replayTransport.hashVerified = true;
+                        std::cout << "Live replay verified: " << replayFile->commands.size()
+                                  << " commands, tick " << simulation->simTick()
+                                  << ", stateHash 0x" << std::hex << actualHash << std::dec << '\n';
+                        showNotice(ss2::tr("Replay complete — stateHash verified!"), ss2::NoticeKind::accepted);
+                    } else {
+                        replayTransport.hashMismatch = true;
+                        showNotice(ss2::tr("Replay complete — stateHash mismatch!"), ss2::NoticeKind::blocked);
+                    }
+                } else {
+                    showNotice(ss2::tr("Replay complete."), ss2::NoticeKind::accepted);
+                }
+            }
+            paused = replayTransport.paused || simulation->isPaused();
+        }
         if (multiplayer.enabled && lockstep) {
             const auto markSeatDisconnected = [&](std::uint8_t seat) {
                 if (seat >= 4u || mpSeatDisconnected[seat]) return;
@@ -173,13 +211,39 @@ void GameSession::stepSimulationEvents() {
         }
         if (auto fogSnap = simulation->pollFog()) {
             latestFog = *fogSnap;
-            const auto fogPatch = scene->updateFog(*fogSnap);
+            const auto fogPatch = replayAllVision()
+                ? scene->updateFog(std::vector<std::uint8_t>(fogSnap->size(), 0xFFu))
+                : scene->updateFog(*fogSnap);
             if (fogPatch.pixels.width && fogPatch.pixels.height)
                 renderer.updateMapRegion(fogPatch.x, fogPatch.y, fogPatch.pixels);
             updateMinimapFog(*fogSnap, false);
             spritesDirty = true;
         }
+        const auto airEvents = simulation->pollAirStrikeEvents();
+        for (const auto& ae : airEvents) {
+            if (ae.kind == ss2::AirStrikeEvent::ParatrooperLanded ||
+                ae.kind == ss2::AirStrikeEvent::SupplyCrateLanded) {
+                if (ae.landedIsVehicle) {
+                    registerSimSpawnedVehicle(ae.landedUnitIndex, ae.planeId, ae.x, ae.y, ae.owner, ae.group);
+                } else {
+                    registerSimSpawnedSoldier(ae.landedUnitIndex, ae.planeId, ae.x, ae.y, ae.owner, ae.group);
+                }
+                spritesDirty = true;
+            }
+        }
         for (const auto& pose : simulation->pollPoses()) {
+            if (pose.index >= scene->units().size() && replayFile && liveReplay) {
+                std::string wantId = "dguner";
+                std::size_t seenSpawns = 0;
+                const std::size_t baseCount = scene->units().size();
+                for (std::size_t ci = 0; ci < replayTransport.cursor && ci < replayFile->commands.size(); ++ci) {
+                    if (const auto* sp = std::get_if<cmd::SpawnInfantry>(&replayFile->commands[ci].command)) {
+                        if (baseCount + seenSpawns == pose.index) { wantId = sp->unit.id; break; }
+                        ++seenSpawns;
+                    }
+                }
+                registerSimSpawnedSoldier(pose.index, wantId, pose.x, pose.y, pose.owner, pose.group);
+            }
             if (pose.index >= scene->units().size()) continue;
             spritesDirty = true;
             const int prevHp = scene->units().at(pose.index).hp;
@@ -348,6 +412,18 @@ void GameSession::stepSimulationEvents() {
         }
         if (vehicleScene) {
             for (const auto& vp : simulation->pollVehiclePoses()) {
+                if (vp.index >= vehicleScene->vehicles().size() && replayFile && liveReplay) {
+                    std::string wantVeh = "tank";
+                    std::size_t seenSpawns = 0;
+                    const std::size_t baseCount = vehicleScene->vehicles().size();
+                    for (std::size_t ci = 0; ci < replayTransport.cursor && ci < replayFile->commands.size(); ++ci) {
+                        if (const auto* sp = std::get_if<cmd::SpawnVehicle>(&replayFile->commands[ci].command)) {
+                            if (baseCount + seenSpawns == vp.index) { wantVeh = sp->unit.id; break; }
+                            ++seenSpawns;
+                        }
+                    }
+                    registerSimSpawnedVehicle(vp.index, wantVeh, vp.x, vp.y, vp.owner, vp.group, vp.hullDir);
+                }
                 if (vp.index >= vehicleScene->vehicles().size()) continue;
                 const int prevVehHp = vehicleScene->vehicles().at(vp.index).hp;
                 const bool prevVehVisible = vehicleScene->vehicles().at(vp.index).visible;
@@ -398,8 +474,9 @@ void GameSession::stepSimulationEvents() {
                         isShallowsPoint(vp.x, vp.y));
                     if (combatVfx.activeDecalCount() != prevDecals) spritesDirty = true;
                 }
+                const bool effVehVis = vp.visible || (replayAllVision() && vp.alive && vp.hp > 0);
                 const auto dirty = vehicleScene->update(vp.index, vp.x, vp.y, vp.hullDir, vp.turretDir,
-                                                        vp.hp, vp.visible ? 1 : 0, vp.ammo);
+                                                        vp.hp, effVehVis ? 1 : 0, vp.ammo);
                 if (mapScale == 1 && dirty.valid()) {
                     const auto patch = scene->repaintRegion(dirty.left, dirty.top, dirty.right, dirty.bottom);
                     if (patch.pixels.width && patch.pixels.height)
@@ -957,7 +1034,24 @@ void GameSession::stepSimulationEvents() {
                 }
             }
         }
-        for (const auto& ae : simulation->pollAirStrikeEvents()) {
+        for (const auto& pp : simulation->pollParachutes()) {
+            spritesDirty = true;
+            if (pp.active) {
+                liveParachutes[pp.id] = pp;
+            } else {
+                liveParachutes.erase(pp.id);
+                if (!pp.alive && combatEffects && isBuildingPointVisible(pp.x, pp.y)) {
+                    if (pp.altitudePx == 0 && isWaterPoint(pp.x, pp.y)) {
+                        combatVfx.spawnWaterSplash(static_cast<float>(pp.x), static_cast<float>(pp.y),
+                                                   pp.isSupplyCrate ? 2 : 1);
+                    } else if (pp.altitudePx > 0) {
+                        combatVfx.spawnDust(static_cast<float>(pp.x),
+                                            static_cast<float>(pp.y - pp.altitudePx), false);
+                    }
+                }
+            }
+        }
+        for (const auto& ae : airEvents) {
             const auto now = std::chrono::steady_clock::now();
             const float ax = static_cast<float>(ae.x * mapScale);
             const float ay = static_cast<float>(ae.y * mapScale);
@@ -1051,107 +1145,42 @@ void GameSession::stepSimulationEvents() {
                         }
                     }
                 }
-            } else if (ae.kind == ss2::AirStrikeEvent::ParatrooperDrop && !replayFile && selection && scene) {
-                std::size_t droppedInf = 0;
-                std::size_t droppedVeh = 0;
-                const int maxMapX = std::max(32, static_cast<int>(hudMapW) - 16);
-                const int maxMapY = std::max(32, static_cast<int>(hudMapH) - 16);
-                for (const auto& entry : ae.paratroopers) {
-                    for (int c = 0; c < entry.count; ++c) {
-                        const std::size_t droppedTotal = droppedInf + droppedVeh;
-                        const int col = static_cast<int>(droppedTotal % 5u);
-                        const int row = static_cast<int>(droppedTotal / 5u);
-                        const int px = std::clamp(ae.x + (col - 2) * 18, 16, maxMapX);
-                        const int py = std::clamp(ae.y + (row - 1) * 16, 16, maxMapY);
-                        ss2::assets::Placement p{entry.unitId, px, py, 0, 100, 100, ae.group, ae.owner};
-                        (void)ensureGpuInfantrySlot(entry.unitId);
-                        if (auto spawned = scene->spawn(p)) {
-                            const auto& [newIdx, patch] = *spawned;
-                            const auto& unit = scene->units().at(newIdx);
-                            ensureUnitPortrait(unit.id, false);
-                            (void)simulation->spawnInfantry(unit, 0);
-                            const int realAmmo = scaledSoldierAmmo(unit.id, 100);
-                            (void)scene->update(newIdx, unit.x, unit.y, unit.direction,
-                                                unit.progress, unit.walking, unit.hp, -1, realAmmo);
-                            selection->addUnit(scaleInfantry(scene->units().at(newIdx), mapScale));
-                            initialUnitHp.push_back(std::max(1, unit.hp));
-                            unitExpa.push_back(0);
-                            unitKills.push_back(0);
-                            unitGrenades.push_back(initialGrenadesForId(unit.id));
-                            unitMineAmmo.push_back(initialMinesForId(unit.id));
-                            if (patch.pixels.width && patch.pixels.height)
-                                renderer.updateMapRegion(patch.x, patch.y, patch.pixels);
-                            if (combatEffects) {
-                                if (activeVfx.size() < 64 && !combatVfx.hasRetailAssets()) {
-                                    const float cx = static_cast<float>(unit.x * mapScale);
-                                    const float cy = static_cast<float>(unit.y * mapScale);
-                                    activeVfx.push_back({
-                                        ActiveVfx::Kind::Parachute, cx, cy - 68.0f * static_cast<float>(mapScale),
-                                        cx, cy, now, std::chrono::milliseconds(1100)
-                                    });
-                                }
-                                combatVfx.spawnParachuteDrop(static_cast<float>(unit.x),
-                                                             static_cast<float>(unit.y),
-                                                             false, false, 68.0f, 1.10f);
-                            }
-                            spritesDirty = true;
-                            ++droppedInf;
-                        } else if (auto spawnedVeh = spawnAndRegisterVehicle(p)) {
-                            const auto& v = vehicleScene->vehicles().at(spawnedVeh->first);
-                            if (combatEffects) {
-                                if (activeVfx.size() < 64 && !combatVfx.hasRetailAssets()) {
-                                    const float vx = static_cast<float>(v.x * mapScale);
-                                    const float vy = static_cast<float>(v.y * mapScale);
-                                    activeVfx.push_back({
-                                        ActiveVfx::Kind::Parachute, vx, vy - 74.0f * static_cast<float>(mapScale),
-                                        vx, vy, now, std::chrono::milliseconds(1250)
-                                    });
-                                }
-                                combatVfx.spawnParachuteDrop(static_cast<float>(v.x),
-                                                             static_cast<float>(v.y),
-                                                             false, false, 74.0f, 1.25f);
-                            }
-                            spritesDirty = true;
-                            ++droppedVeh;
-                        }
-                    }
-                }
-                if (ae.owner == localOwner() && (droppedInf + droppedVeh) > 0) {
+            } else if (ae.kind == ss2::AirStrikeEvent::ParatrooperDrop) {
+                if (ae.owner == localOwner()) {
                     recordEventPos(static_cast<double>(ax), static_cast<double>(ay));
                     pushMinimapPing(ae.x, ae.y, false);
                     if (audio) audio->playGroup("e_reenforcement", 0.72f, ss2::VoicePriority::High);
-                    if (droppedInf > 0 && droppedVeh > 0) {
-                        showNotice(ss2::trf("Airborne drop landed ({0} soldiers, {1} guns/equipment)!",
-                                            {std::to_string(droppedInf), std::to_string(droppedVeh)}),
-                                   ss2::NoticeKind::accepted);
-                    } else if (droppedVeh > 0) {
-                        showNotice(ss2::trf("Airborne equipment dropped ({0} units)!",
-                                            {std::to_string(droppedVeh)}),
-                                   ss2::NoticeKind::accepted);
-                    } else {
-                        showNotice(ss2::trf("Paratroopers dropped ({0} soldiers)!",
-                                            {std::to_string(droppedInf)}),
-                                   ss2::NoticeKind::accepted);
+                    std::size_t stickTotal = 0;
+                    for (const auto& entry : ae.paratroopers) {
+                        if (entry.count > 0) stickTotal += static_cast<std::size_t>(entry.count);
                     }
+                    showNotice(ss2::trf("Paratroopers jumping ({0} airborne)!",
+                                        {std::to_string(std::max<std::size_t>(1u, stickTotal))}),
+                               ss2::NoticeKind::accepted);
                 }
             } else if (ae.kind == ss2::AirStrikeEvent::SupplyDrop) {
-                if (combatEffects) {
-                    if (activeVfx.size() < 64 && !combatVfx.hasRetailAssets()) {
-                        activeVfx.push_back({ActiveVfx::Kind::Parachute, ax, ay - 68.0f * static_cast<float>(mapScale),
-                                             ax, ay, now, std::chrono::milliseconds(1050)});
-                    }
-                    if (activeVfx.size() < 64) {
-                        activeVfx.push_back({ActiveVfx::Kind::RepairPulse, ax, ay, ax, ay, now,
-                                             std::chrono::milliseconds(650)});
-                    }
-                    combatVfx.spawnParachuteDrop(static_cast<float>(ae.x), static_cast<float>(ae.y),
-                                                 true, false, 70.0f, 1.05f);
+                if (ae.owner == localOwner()) {
+                    recordEventPos(static_cast<double>(ax), static_cast<double>(ay));
+                    pushMinimapPing(ae.x, ae.y, false);
+                    showNotice(ss2::tr("Air supply drop inbound!"), ss2::NoticeKind::accepted);
+                }
+            } else if (ae.kind == ss2::AirStrikeEvent::BoxDust) {
+                if (combatEffects && isBuildingPointVisible(ae.x, ae.y)) {
+                    combatVfx.spawnDust(static_cast<float>(ae.x), static_cast<float>(ae.y), true);
                     spritesDirty = true;
                 }
-                (void)playWorldSound("construct", 0.50f, ae.x, ae.y);
+            } else if (ae.kind == ss2::AirStrikeEvent::ParatrooperLanded) {
+                spritesDirty = true;
                 if (ae.owner == localOwner()) {
-                    showNotice(ss2::tr("Air supply drop landed!"), ss2::NoticeKind::accepted);
+                    pushMinimapPing(ae.x, ae.y, false);
                 }
+            } else if (ae.kind == ss2::AirStrikeEvent::SupplyCrateLanded) {
+                spritesDirty = true;
+                if (combatEffects && activeVfx.size() < 64 && isBuildingPointVisible(ae.x, ae.y)) {
+                    activeVfx.push_back({ActiveVfx::Kind::RepairPulse, ax, ay, ax, ay, now,
+                                         std::chrono::milliseconds(650)});
+                }
+                (void)playWorldSound("construct", 0.50f, ae.x, ae.y);
             } else if (ae.kind == ss2::AirStrikeEvent::PlaneShotDown) {
                 const int pScore = ae.scoreValue > 0 ? ae.scoreValue : 500;
                 if (isHostileOwner(ae.owner)) {

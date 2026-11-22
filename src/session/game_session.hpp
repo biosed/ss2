@@ -69,7 +69,8 @@ int runGameSession(SDL_Window* window, ValidationReport* report, int limit, bool
                    bool manualClock = false,
                    const std::filesystem::path& loadSavePath = {},
                    MultiplayerSessionConfig multiplayer = {},
-                   std::map<unsigned, std::vector<assets::ReinforcementUnit>>* campaignPools = nullptr);
+                   std::map<unsigned, std::vector<assets::ReinforcementUnit>>* campaignPools = nullptr,
+                   bool liveReplay = false);
 
 class FrameSample {
     using Clock = std::chrono::steady_clock;
@@ -187,6 +188,9 @@ struct GameSession {
     const std::filesystem::path& recordPath;
     const cmd::ReplayFile* replayFile;
     bool manualClock = false;
+    bool liveReplay = false;
+    cmd::ReplayTransport replayTransport{};
+    std::chrono::steady_clock::time_point lastReplayStepFrame{};
     std::filesystem::path loadSavePath;
     std::map<unsigned, std::vector<assets::ReinforcementUnit>>* campaignUnitPools{nullptr};
     std::map<unsigned, std::vector<assets::ReinforcementUnit>> initialSavedPools;
@@ -217,6 +221,7 @@ struct GameSession {
     std::set<std::string> gpuFallbackIds;
     std::vector<WorldGpuSprite> worldGpuSprites;
     std::map<std::uint32_t, LivePlane> livePlanes;
+    std::map<std::uint32_t, ParachutePose> liveParachutes;
     bool planesClearedNeeded = false;
     std::vector<FallenCorpse> fallenSoldiers;
     std::set<size_t> woundedBarLogged;
@@ -353,10 +358,17 @@ struct GameSession {
                 const std::filesystem::path& recordPath, const cmd::ReplayFile* replayFile,
                 bool manualClock = false, const std::filesystem::path& loadSavePath = {},
                 MultiplayerSessionConfig multiplayer = {},
-                std::map<unsigned, std::vector<assets::ReinforcementUnit>>* campaignPools = nullptr);
+                std::map<unsigned, std::vector<assets::ReinforcementUnit>>* campaignPools = nullptr,
+                bool liveReplay = false);
 
     int run();
-    int localOwner() const noexcept { return multiplayer.enabled ? multiplayer.localSeat : 0; }
+    int localOwner() const noexcept {
+        if (replayFile && liveReplay) {
+            return replayTransport.viewerSeat >= 0 ? (replayTransport.viewerSeat & 3) : 0;
+        }
+        return multiplayer.enabled ? multiplayer.localSeat : 0;
+    }
+    bool replayAllVision() const noexcept { return replayFile && liveReplay && replayTransport.viewerSeat < 0; }
     static const char* mpNationName(std::uint8_t nation) noexcept {
         switch (nation) {
             case 0: return "Russian";
@@ -407,6 +419,10 @@ struct GameSession {
     static const char* airKindLabel(assets::AirMissionKind kind);
     void uploadPlaneSprite(LivePlane& lp);
     std::optional<std::pair<size_t, size_t>> spawnAndRegisterVehicle(const assets::Placement& p);
+    void registerSimSpawnedSoldier(std::size_t simIdx, const std::string& unitId, int x, int y, int owner, int group);
+    void registerSimSpawnedVehicle(std::size_t simVIdx, const std::string& unitId, int x, int y, int owner, int group,
+                                   unsigned dir32 = 0u);
+    void syncReplayViewerPerspective();
     void spawnReinforcementWave(const MissionEvent& ev);
     bool isBuildingPointVisible(int simX, int simY) const;
     bool isWaterPoint(int simX, int simY) const;

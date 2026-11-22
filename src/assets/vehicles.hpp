@@ -38,6 +38,7 @@ public:
 
     const std::vector<VehicleUnit>& vehicles() const { return units_; }
     std::optional<std::size_t> spawn(const Placement& p);
+    std::size_t spawnVisualPlaceholder(const Placement& p, int boxW = 24, int boxH = 20);
     void drawAll(MapImage& target, const SceneryDepth* depth = nullptr) const;
     void drawRegion(MapImage& patch, int patchX, int patchY, const SceneryDepth* depth = nullptr) const;
     DirtyRect update(std::size_t index, int x, int y, unsigned hullDir, unsigned turretDir,

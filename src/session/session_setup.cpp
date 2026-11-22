@@ -72,7 +72,8 @@ GameSession::GameSession(SDL_Window* win, ValidationReport* rep, int lim, bool t
                          const std::filesystem::path& recPath, const cmd::ReplayFile* repFile,
                          bool manualClk, const std::filesystem::path& loadSave,
                          MultiplayerSessionConfig mpConfig,
-                         std::map<unsigned, std::vector<assets::ReinforcementUnit>>* campaignPools)
+                         std::map<unsigned, std::vector<assets::ReinforcementUnit>>* campaignPools,
+                         bool liveRep)
     : window(win),
       report(rep),
       limit(lim),
@@ -89,6 +90,7 @@ GameSession::GameSession(SDL_Window* win, ValidationReport* rep, int lim, bool t
       recordPath(recPath),
       replayFile(repFile),
       manualClock(manualClk),
+      liveReplay(liveRep),
       loadSavePath(loadSave),
       campaignUnitPools(campaignPools),
       multiplayer(std::move(mpConfig)),
@@ -573,7 +575,7 @@ void GameSession::initializeMission() {
         for (const auto& [poolIdx, wave] : rawPools) {
             if (!wave.empty()) initialSavedPools.emplace(poolIdx, wave);
         }
-        if (replayFile) {
+        if (replayFile && !liveReplay) {
             simulation.emplace(ss2::MissionRunner::ManualClock{}, std::move(data), std::move(soldiers),
                                initialSavedPools);
             if (!simulation->replay(replayFile->commands, replayFile->endTick)) {
@@ -591,6 +593,12 @@ void GameSession::initializeMission() {
             std::cout << "Replay verified: " << replayFile->commands.size()
                       << " commands, tick " << simulation->simTick()
                       << ", stateHash 0x" << std::hex << actualHash << std::dec << '\n';
+        } else if (replayFile && liveReplay) {
+            simulation.emplace(ss2::MissionRunner::ManualClock{}, std::move(data), std::move(soldiers),
+                               initialSavedPools);
+            replayTransport = cmd::ReplayTransport{};
+            lastReplayStepFrame = std::chrono::steady_clock::now();
+            pendingMissionBriefing.clear();
         } else if (multiplayer.enabled) {
             simulation.emplace(ss2::MissionRunner::ManualClock{}, std::move(data), std::move(soldiers));
             if (!recordPath.empty()) simulation->startRecording();
@@ -767,10 +775,12 @@ int runGameSession(SDL_Window* window, ValidationReport* report, int limit, bool
                    bool manualClock,
                    const std::filesystem::path& loadSavePath,
                    MultiplayerSessionConfig multiplayer,
-                   std::map<unsigned, std::vector<assets::ReinforcementUnit>>* campaignPools) {
+                   std::map<unsigned, std::vector<assets::ReinforcementUnit>>* campaignPools,
+                   bool liveReplay) {
     GameSession session(window, report, limit, timing, gameDir, mission, hdPack, originalInfantry,
                         autoEngage, settings, persistSettings, overviewOnly, nextMissionOut,
-                        recordPath, replayFile, manualClock, loadSavePath, std::move(multiplayer), campaignPools);
+                        recordPath, replayFile, manualClock, loadSavePath, std::move(multiplayer),
+                        campaignPools, liveReplay);
     return session.run();
 }
 
@@ -781,6 +791,7 @@ void GameSession::persistNow() {
 }
 
 float GameSession::fogBrightnessAt(int mx, int my) const {
+    if (replayAllVision()) return 1.0f;
     if (latestFog.size() != std::size_t(fogGridW) * std::size_t(fogGridH)) return 1.0f;
     const int originX = int(fogGridH) * 32;
     const int halfX = (mx - originX) >> 1;
@@ -824,17 +835,19 @@ void GameSession::syncGpuSprites() {
     if (!scene) return;
     const bool hasAirTrails = hud && hud->hasActiveAirTrails() && hud->airVfxAtlasSlot().has_value();
     bool hasLiveCrates = false;
-    if (vehicleScene && unitCatalog && combatVfx.atlasSlot().has_value()) {
+    if (vehicleScene && combatVfx.atlasSlot().has_value()) {
         for (const auto& v : vehicleScene->vehicles()) {
             if (!v.alive || v.hp <= 0 || !v.visible) continue;
-            if (const auto* sp = unitCatalog->find(v.id); sp && sp->isSupplyCrate()) {
+            const auto* sp = unitCatalog ? unitCatalog->find(v.id) : nullptr;
+            if ((sp && sp->isSupplyCrate()) || v.id == "ammo.box" || v.id == "spare.parts") {
                 hasLiveCrates = true;
                 break;
             }
         }
     }
+    const bool hasLiveParas = !liveParachutes.empty() && combatVfx.atlasSlot().has_value();
     const bool hasCombatVfx = combatVfx.atlasSlot().has_value() &&
-                              ((combatEffects && combatVfx.hasActiveSprites()) || hasLiveCrates);
+                              ((combatEffects && combatVfx.hasActiveSprites()) || hasLiveCrates || hasLiveParas);
     if (gpuAtlasSlots.empty() && worldGpuSprites.empty() && livePlanes.empty() && !hasAirTrails && !hasCombatVfx) {
         if (planesClearedNeeded) {
             renderer.setSprites({});
@@ -963,16 +976,38 @@ void GameSession::syncGpuSprites() {
     }
     if (hasCombatVfx) {
         std::vector<CombatVfxSystem::RankedSprite> vfxItems;
-        if (hasLiveCrates && vehicleScene && unitCatalog) {
+        if (hasLiveCrates && vehicleScene) {
             for (const auto& v : vehicleScene->vehicles()) {
                 if (!v.alive || v.hp <= 0 || !v.visible) continue;
-                const auto* sp = unitCatalog->find(v.id);
-                if (!sp || !sp->isSupplyCrate()) continue;
+                const auto* sp = unitCatalog ? unitCatalog->find(v.id) : nullptr;
+                const bool isCrate = (sp && sp->isSupplyCrate()) || v.id == "ammo.box" || v.id == "spare.parts";
+                if (!isCrate) continue;
                 const float bright = fogBrightnessAt(v.x, v.y);
                 if (bright < 0.55f) continue;
-                const bool parts = (sp->ammo1 <= 0 && sp->ammo2 > 0);
+                const bool parts = (sp ? (sp->ammo1 <= 0 && sp->ammo2 > 0) : (v.id == "spare.parts"));
                 combatVfx.appendCrateSprite(static_cast<float>(v.x), static_cast<float>(v.y),
                                             (v.hullDir >> 2u) & 7u, parts, mapScale, bright, 1.0f, vfxItems);
+            }
+        }
+        if (hasLiveParas) {
+            for (const auto& [pid, pp] : liveParachutes) {
+                const float bright = fogBrightnessAt(pp.x, pp.y);
+                if (bright < 0.55f) continue;
+                const float alt = static_cast<float>(std::max(0, pp.altitudePx));
+                float phase = 1.0f;
+                if (pp.altitudePx > 0) {
+                    phase = std::clamp(1.0f - alt / 196.0f, 0.05f, 1.0f);
+                    if (pp.isSupplyCrate) {
+                        const bool parts = (pp.unitId == "spare.parts");
+                        combatVfx.appendCrateSprite(static_cast<float>(pp.x), static_cast<float>(pp.y) - alt,
+                                                    static_cast<unsigned>(pid & 7u), parts,
+                                                    mapScale, bright, 1.0f, vfxItems);
+                    }
+                } else {
+                    phase = std::clamp(static_cast<float>(pp.collapseTick) / 12.0f, 0.0f, 0.9999f);
+                }
+                combatVfx.appendParachuteSprites(static_cast<float>(pp.x), static_cast<float>(pp.y),
+                                                 alt, phase, mapScale, bright, vfxItems);
             }
         }
         if (combatEffects && combatVfx.hasActiveSprites()) {
@@ -1294,6 +1329,11 @@ void GameSession::updateMinimapFog(const std::vector<std::uint8_t>& fogGrid, boo
         now - lastMinimapFogUpdate < std::chrono::milliseconds(200)) {
         return;
     }
+    if (replayAllVision()) {
+        hud->setMinimap(baseMinimap);
+        lastMinimapFogUpdate = now;
+        return;
+    }
     ss2::assets::MapImage masked = baseMinimap;
     const int originX = int(fogGridH) * 32;
     const std::uint64_t mapW = hudMapW;
@@ -1490,6 +1530,125 @@ std::optional<std::pair<size_t, size_t>> GameSession::spawnAndRegisterVehicle(co
         }
     }
     return std::pair{*vIdx, simVIdx};
+}
+
+void GameSession::registerSimSpawnedSoldier(std::size_t simIdx, const std::string& unitId,
+                                            int x, int y, int owner, int group) {
+    if (!scene || !selection) return;
+    while (scene->units().size() <= simIdx) {
+        const std::string wantId = !unitId.empty() ? unitId : std::string("dguner");
+        ss2::assets::Placement p{wantId, x, y, 0, 100, 100, group, owner};
+        (void)ensureGpuInfantrySlot(wantId);
+        auto spawned = scene->spawn(p);
+        if (!spawned && wantId != "dguner") {
+            p.id = "dguner";
+            (void)ensureGpuInfantrySlot("dguner");
+            spawned = scene->spawn(p);
+        }
+        if (!spawned) break;
+        const auto& [newIdx, patch] = *spawned;
+        const auto& unit = scene->units().at(newIdx);
+        ensureUnitPortrait(unit.id, false);
+        const int realAmmo = scaledSoldierAmmo(unit.id, 100);
+        const int initVis = (multiplayer.enabled || (replayFile && liveReplay && !replayAllVision()))
+            ? (isAllyOwner(unit.owner) ? 1 : 0)
+            : -1;
+        (void)scene->update(newIdx, unit.x, unit.y, unit.direction, unit.progress, unit.walking,
+                            unit.hp, initVis, realAmmo);
+        selection->addUnit(scaleInfantry(scene->units().at(newIdx), mapScale));
+        initialUnitHp.push_back(std::max(1, unit.hp));
+        unitExpa.push_back(0);
+        unitKills.push_back(0);
+        unitGrenades.push_back(initialGrenadesForId(unit.id));
+        unitMineAmmo.push_back(initialMinesForId(unit.id));
+        if (patch.pixels.width && patch.pixels.height) {
+            renderer.updateMapRegion(patch.x, patch.y, patch.pixels);
+        }
+    }
+}
+
+void GameSession::registerSimSpawnedVehicle(std::size_t simVIdx, const std::string& unitId,
+                                            int x, int y, int owner, int group, unsigned dir32) {
+    if (!vehicleScene || !selection) return;
+    while (vehicleScene->vehicles().size() <= simVIdx) {
+        const std::string wantId = !unitId.empty() ? unitId : std::string("ammo.box");
+        ss2::assets::Placement p{wantId, x, y, static_cast<int>(dir32 & 31u), 100, 100, group, owner};
+        std::size_t vIdx = 0;
+        if (const auto spawned = vehicleScene->spawn(p)) {
+            vIdx = *spawned;
+        } else {
+            vIdx = vehicleScene->spawnVisualPlaceholder(p, 24, 20);
+        }
+        const auto& v = vehicleScene->vehicles().at(vIdx);
+        ensureUnitPortrait(v.id, true);
+        int maxVehHp = std::max(1, v.hp);
+        int realHp = v.hp;
+        int realAmmo = v.ammo;
+        int cap = 0;
+        int a2 = 0;
+        bool hatchOpen = false;
+        if (unitCatalog) {
+            if (const auto* spec = unitCatalog->find(v.id)) {
+                if (spec->health > 0) {
+                    maxVehHp = spec->health;
+                    realHp = maxVehHp;
+                }
+                cap = std::clamp(spec->stock, 0, 44);
+                hatchOpen = spec->marchEnabled || (spec->marchSightBonus > 0);
+                if (spec->ammo1 > 0) realAmmo = spec->ammo1;
+                if (spec->ammo2 > 0) a2 = spec->ammo2;
+            }
+        }
+        const int initVis = (multiplayer.enabled || (replayFile && liveReplay && !replayAllVision()))
+            ? ((isAllyOwner(v.owner) || v.owner == 3) ? 1 : 0)
+            : (v.visible ? 1 : 0);
+        const auto dirty = vehicleScene->update(vIdx, v.x, v.y, v.hullDir, v.turretDir, realHp, initVis, realAmmo);
+        selection->addVehicle(scaleVehicle(vehicleScene->vehicles().at(vIdx), mapScale));
+        initialVehicleHp.push_back(maxVehHp);
+        vehExpa.push_back(0);
+        vehKills.push_back(0);
+        vehicleAmmo2.push_back(a2);
+        vehicleCargo.emplace_back(0, cap);
+        vehicleTowed.push_back(-1);
+        vehicleTowedBy.push_back(-1);
+        vehicleCrewImpaired.push_back(false);
+        vehicleMoveImpaired.push_back(false);
+        vehicleSuppressed.push_back(false);
+        vehicleHatchOpen.push_back(hatchOpen);
+        if (mapScale == 1 && scene && dirty.valid()) {
+            const auto patch = scene->repaintRegion(dirty.left, dirty.top, dirty.right, dirty.bottom);
+            if (patch.pixels.width && patch.pixels.height) {
+                renderer.updateMapRegion(patch.x, patch.y, patch.pixels);
+            }
+        }
+    }
+}
+
+void GameSession::syncReplayViewerPerspective() {
+    if (!replayFile || !liveReplay || !simulation) return;
+    const int simSeat = replayTransport.viewerSeat >= 0 ? (replayTransport.viewerSeat & 3) : 0;
+    simulation->setViewerOwner(simSeat);
+    if (scene) scene->setFogViewerOwner(localOwner());
+    if (selection) {
+        selection->setLocalPlayer(localOwner());
+        selection->setSelection({}, {});
+    }
+    if (scene && !latestFog.empty()) {
+        if (replayAllVision()) {
+            const std::vector<std::uint8_t> allLit(latestFog.size(), 0xFFu);
+            const auto fogPatch = scene->updateFog(allLit);
+            if (fogPatch.pixels.width && fogPatch.pixels.height) {
+                renderer.updateMapRegion(fogPatch.x, fogPatch.y, fogPatch.pixels);
+            }
+        } else {
+            const auto fogPatch = scene->updateFog(latestFog);
+            if (fogPatch.pixels.width && fogPatch.pixels.height) {
+                renderer.updateMapRegion(fogPatch.x, fogPatch.y, fogPatch.pixels);
+            }
+        }
+        updateMinimapFog(latestFog, true);
+    }
+    syncGpuSprites();
 }
 
 void GameSession::spawnReinforcementWave(const MissionEvent& ev) {
@@ -1696,6 +1855,7 @@ void GameSession::spawnAbandonedCrew(const std::vector<assets::Placement>& spawn
 }
 
 bool GameSession::isBuildingPointVisible(int simX, int simY) const {
+    if (replayAllVision()) return true;
     if (latestFog.empty() || fogGridW == 0 || fogGridH == 0) return true;
     const int originX = static_cast<int>(fogGridH) * 32;
     const auto [u, v] = ss2::tutorialFootWorld(simX, simY, originX);

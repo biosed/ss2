@@ -241,6 +241,65 @@ int main(int argc, char** argv) try {
         replaySession.renderer.present(replaySession.empty);
     }
 
+    // Live interactive replay viewer (liveReplay = true): Space pause/resume, +/- speed, . single-step,
+    // Tab viewer-seat / All-Vision cycling, and bit-exact endStateHash verification on completion.
+    {
+        ss2::UserSettings liveRepSettings{};
+        ss2::GameSession liveRep(
+            win, validate ? &report : nullptr,
+            0, false, gameDir, {}, {}, false, true,
+            liveRepSettings, false, false, nullptr, {}, &*parsedReplay, true, {}, {}, nullptr, true);
+        require(liveRep.simulation != std::nullopt && liveRep.liveReplay,
+                "Live replay GameSession failed to initialize in interactive mode");
+        require(liveRep.simulation->simTick() == 0u,
+                "Live replay GameSession must start at tick 0 instead of batch fast-forwarding");
+
+        // Pause via Space, single-step 3 ticks via '.', cycle speed (+ / -) and Tab perspective through All Vision.
+        liveRep.handleInputEvent(makeKeyDown(win, SDLK_SPACE));
+        require(liveRep.replayTransport.paused && liveRep.paused, "Space must pause live replay");
+        for (int i = 0; i < 3; ++i) {
+            liveRep.handleInputEvent(makeKeyDown(win, SDLK_PERIOD));
+            liveRep.stepSimulationEvents();
+        }
+        require(liveRep.simulation->simTick() == 3u, "Period key must single-step paused live replay");
+
+        liveRep.handleInputEvent(makeKeyDown(win, SDLK_EQUALS));
+        require(liveRep.replayTransport.speedPercent() == 200, "Equals key must step replay faster to 2x");
+        liveRep.handleInputEvent(makeKeyDown(win, SDLK_MINUS));
+        require(liveRep.replayTransport.speedPercent() == 100, "Minus key must step replay slower back to 1x");
+
+        // Tab cycles P1 -> P2 -> P3 -> P4 -> All Vision (-1) -> P1 (0).
+        for (int i = 0; i < 4; ++i) {
+            liveRep.handleInputEvent(makeKeyDown(win, SDLK_TAB));
+        }
+        require(liveRep.replayAllVision(), "4x Tab must reach All Vision perspective in live replay");
+        liveRep.updateHudAndBeams();
+        liveRep.renderer.present(liveRep.empty);
+        liveRep.handleInputEvent(makeKeyDown(win, SDLK_TAB));
+        require(liveRep.replayTransport.viewerSeat == 0 && !liveRep.replayAllVision(),
+                "5th Tab must wrap back to Player 1 perspective");
+
+        // Resume and step to endTick; verify exact stateHash parity with live input session.
+        liveRep.handleInputEvent(makeKeyDown(win, SDLK_SPACE));
+        require(!liveRep.replayTransport.paused, "Second Space must resume live replay");
+        unsigned guard = 0;
+        while (!liveRep.replayTransport.finished && guard++ < endTick + 64u) {
+            require(liveRep.simulation->replayStep(
+                        parsedReplay->commands, liveRep.replayTransport.cursor, parsedReplay->endTick),
+                    "Live replayStep failed before endTick");
+            liveRep.stepSimulationEvents();
+        }
+        require(liveRep.replayTransport.finished && liveRep.replayTransport.hashVerified &&
+                    !liveRep.replayTransport.hashMismatch,
+                "Live replay must finish and verify endStateHash");
+        require(liveRep.simulation->simTick() == endTick &&
+                    liveRep.simulation->stateHash() == endHash &&
+                    liveRep.simulation->takeSnapshot() == endSnap,
+                "Live replay end state diverged from live input session");
+        liveRep.updateHudAndBeams();
+        liveRep.renderer.present(liveRep.empty);
+    }
+
     // Save SS2SAVE1 snapshot with non-zero battle stats and verify headless startup --load-save restoration.
     {
         const auto nonce = std::chrono::steady_clock::now().time_since_epoch().count();

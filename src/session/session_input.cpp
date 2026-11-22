@@ -45,6 +45,74 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
             running = false;
             return;
         }
+        if (liveReplay && simulation) {
+            if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat) {
+                switch (event.key.key) {
+                case SDLK_SPACE:
+                case SDLK_PAUSE:
+                    replayTransport.togglePause();
+                    paused = replayTransport.paused || simulation->isPaused();
+                    showNotice(ss2::tr(replayTransport.paused ? "Replay paused." : "Replay resumed."),
+                               ss2::NoticeKind::accepted);
+                    return;
+                case SDLK_P:
+                    if ((event.key.mod & SDL_KMOD_CTRL) != 0) {
+                        replayTransport.togglePause();
+                        paused = replayTransport.paused || simulation->isPaused();
+                        showNotice(ss2::tr(replayTransport.paused ? "Replay paused." : "Replay resumed."),
+                                   ss2::NoticeKind::accepted);
+                        return;
+                    }
+                    break;
+                case SDLK_EQUALS:
+                case SDLK_PLUS:
+                case SDLK_KP_PLUS:
+                case SDLK_RIGHTBRACKET:
+                    replayTransport.stepFaster();
+                    showNotice(ss2::trf("Replay speed: {0}", {std::string(replayTransport.speedLabel())}),
+                               ss2::NoticeKind::accepted);
+                    return;
+                case SDLK_MINUS:
+                case SDLK_KP_MINUS:
+                case SDLK_LEFTBRACKET:
+                    replayTransport.stepSlower();
+                    showNotice(ss2::trf("Replay speed: {0}", {std::string(replayTransport.speedLabel())}),
+                               ss2::NoticeKind::accepted);
+                    return;
+                case SDLK_PERIOD:
+                    if (replayTransport.paused && !replayTransport.finished) {
+                        (void)simulation->replayStep(replayFile->commands, replayTransport.cursor, replayFile->endTick);
+                        return;
+                    }
+                    break;
+                case SDLK_TAB:
+                    replayTransport.cycleViewerSeat(4);
+                    syncReplayViewerPerspective();
+                    showNotice(replayTransport.viewerSeat < 0
+                                   ? ss2::tr("Replay perspective: All Vision")
+                                   : ss2::trf("Replay perspective: Player {0}",
+                                              {std::to_string(replayTransport.viewerSeat + 1)}),
+                               ss2::NoticeKind::accepted);
+                    return;
+                default:
+                    break;
+                }
+            }
+            if (hud) {
+                const auto hr = hud->handle(event);
+                if (hr.action == ss2::HudAction::moveCamera && hudMapW && hudMapH) {
+                    renderer.focusMap(hr.u * static_cast<double>(hudMapW * mapScale),
+                                      hr.v * static_cast<double>(hudMapH * mapScale));
+                    return;
+                }
+                if (hr.action == ss2::HudAction::pause) {
+                    replayTransport.togglePause();
+                    paused = replayTransport.paused || simulation->isPaused();
+                    return;
+                }
+                if (hr.consumed) return;
+            }
+        }
         renderer.handleEvent(event);
         return;
     }

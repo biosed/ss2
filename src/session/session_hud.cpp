@@ -29,30 +29,35 @@ void GameSession::updateHudAndBeams() {
     if (hud && scene && selection && hudMapW && hudMapH) {
         ss2::HudState hs;
         if (simulation) {
-            const unsigned secs = simulation->simTick() / 25u;
-            const unsigned mins = secs / 60u;
-            const unsigned remS = secs % 60u;
-            std::string prefix = "[" + (mins < 10u ? std::string("0") : std::string{}) + std::to_string(mins) +
-                                 ":" + (remS < 10u ? std::string("0") : std::string{}) + std::to_string(remS);
-            if (paused) {
-                prefix += " PAUSED";
-            } else if (!multiplayer.enabled) {
-                if (const int sp = simulation->speedPercent(); sp != 100) {
-                    prefix += (sp == 50 ? " 0.5x" : sp == 200 ? " 2x" : sp == 300 ? " 3x" : " 1x");
+            if (replayFile && liveReplay) {
+                hs.objective = "[" + replayTransport.formatBanner(simulation->simTick(), replayFile->endTick) +
+                               "] " + ss2::tr(currentObjective);
+            } else {
+                const unsigned secs = simulation->simTick() / 25u;
+                const unsigned mins = secs / 60u;
+                const unsigned remS = secs % 60u;
+                std::string prefix = "[" + (mins < 10u ? std::string("0") : std::string{}) + std::to_string(mins) +
+                                     ":" + (remS < 10u ? std::string("0") : std::string{}) + std::to_string(remS);
+                if (paused) {
+                    prefix += " PAUSED";
+                } else if (!multiplayer.enabled) {
+                    if (const int sp = simulation->speedPercent(); sp != 100) {
+                        prefix += (sp == 50 ? " 0.5x" : sp == 200 ? " 2x" : sp == 300 ? " 3x" : " 1x");
+                    }
                 }
+                if (multiplayer.enabled) {
+                    prefix += " | ";
+                    prefix += ss2::tr(mpNationName(multiplayer.playerNations[localOwner() & 3]));
+                    if (multiplayer.playerCount > 2) {
+                        prefix += " T" + std::to_string(missionPlayerTeams[localOwner() & 3] + 1);
+                    }
+                    if (mpRttMs >= 0) {
+                        prefix += " | " + std::to_string(mpRttMs) + "ms";
+                    }
+                }
+                prefix += "] ";
+                hs.objective = prefix + ss2::tr(currentObjective);
             }
-            if (multiplayer.enabled) {
-                prefix += " | ";
-                prefix += ss2::tr(mpNationName(multiplayer.playerNations[localOwner() & 3]));
-                if (multiplayer.playerCount > 2) {
-                    prefix += " T" + std::to_string(missionPlayerTeams[localOwner() & 3] + 1);
-                }
-                if (mpRttMs >= 0) {
-                    prefix += " | " + std::to_string(mpRttMs) + "ms";
-                }
-            }
-            prefix += "] ";
-            hs.objective = prefix + ss2::tr(currentObjective);
         } else {
             hs.objective = ss2::tr(currentObjective);   // mission text has no entry and passes through
         }
