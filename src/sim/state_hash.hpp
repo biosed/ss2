@@ -8,7 +8,7 @@
 //   integers             sizeof(T) bytes, little-endian two's complement
 //                        (size_t is 8 bytes on the LP64 target ABIs)
 //   enums                as their underlying integer
-//   float / double       IEEE-754 bit pattern via std::bit_cast
+//   float / double       canonical IEEE-754 bit pattern via std::bit_cast (-0.0 -> +0.0, NaN -> qNaN)
 //   strings              8-byte length, then the bytes
 //   vector/deque/array   8-byte element count, then each element
 //   optional             presence byte, then the value if engaged
@@ -17,6 +17,7 @@
 // Pointers are never hashed: there is deliberately no overload for them.
 #include <array>
 #include <bit>
+#include <cmath>
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
@@ -64,8 +65,22 @@ public:
         add(static_cast<std::underlying_type_t<E>>(v));
     }
 
-    void add(float v) noexcept { le(std::bit_cast<std::uint32_t>(v)); }
-    void add(double v) noexcept { le(std::bit_cast<std::uint64_t>(v)); }
+    void add(float v) noexcept {
+        if (std::isnan(v)) {
+            le(std::uint32_t{0x7fc00000u});
+            return;
+        }
+        if (v == 0.0f) v = 0.0f;
+        le(std::bit_cast<std::uint32_t>(v));
+    }
+    void add(double v) noexcept {
+        if (std::isnan(v)) {
+            le(std::uint64_t{0x7ff8000000000000ull});
+            return;
+        }
+        if (v == 0.0) v = 0.0;
+        le(std::bit_cast<std::uint64_t>(v));
+    }
 
     void add(std::string_view s) noexcept {
         size(s.size());

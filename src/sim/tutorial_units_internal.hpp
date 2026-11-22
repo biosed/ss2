@@ -5,6 +5,7 @@
 
 #include "sim/tutorial_units.hpp"
 #include "sim/tutorial_coordinates.hpp"
+#include "sim/det_math.hpp"
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -35,10 +36,7 @@ inline bool sameTile(SubCell a, SubCell b) {
 inline unsigned vehicleDirFromMapDelta(double dx, double dy) {
     const double du = dy + dx * 0.5;
     const double dv = dy - dx * 0.5;
-    if (du == 0.0 && dv == 0.0) return 0u;
-    const double angle = std::atan2(dv, du);
-    const long long step32 = std::llround(angle / (kTwoPi / 32.0));
-    return static_cast<unsigned>(((step32 % 32) + 32) % 32);
+    return det::detDir32(du, dv);
 }
 inline unsigned turnTowardDir32(unsigned current, unsigned target, unsigned maxStep = 2) {
     const int cur = static_cast<int>(current & 31u);
@@ -144,7 +142,7 @@ inline std::pair<int, int> approachPointNear(double fromX, double fromY, double 
                                       int maxW, int maxH) {
     const double dx = fromX - toX;
     const double dy = fromY - toY;
-    const double dist = std::hypot(dx, dy);
+    const double dist = det::detHypot(dx, dy);
     double ax = toX;
     double ay = toY;
     if (dist > 1e-3 && dist > offsetPx) {
@@ -156,8 +154,8 @@ inline std::pair<int, int> approachPointNear(double fromX, double fromY, double 
         ax = fromX;
         ay = fromY;
     }
-    const int cx = std::clamp(static_cast<int>(std::lround(ax)), 0, std::max(0, maxW - 1));
-    const int cy = std::clamp(static_cast<int>(std::lround(ay)), 0, std::max(0, maxH - 1));
+    const int cx = std::clamp(det::detRoundToInt(ax), 0, std::max(0, maxW - 1));
+    const int cy = std::clamp(det::detRoundToInt(ay), 0, std::max(0, maxH - 1));
     return {cx, cy};
 }
 }  // namespace tutorial_units_internal

@@ -1,4 +1,5 @@
 #include "sim/infantry_combat.hpp"
+#include "sim/det_math.hpp"
 #include "assets/sprite.hpp"
 #include <algorithm>
 #include <cmath>
@@ -17,10 +18,7 @@ int octDistance(int du, int dv) {
 
 // 8-direction quantization matching FUN_10021400 (0=+U, 1=+U+V, 2=+V, 3=-U+V, 4=-U, 5=-U-V, 6=-V, 7=+U-V).
 std::uint8_t directionFromDelta(int du, int dv) {
-    if (du == 0 && dv == 0) return 0;
-    const double angle = std::atan2(double(dv), double(du));
-    const int oct = int(std::llround(angle / (kTwoPi / 8.0)));
-    return static_cast<std::uint8_t>((oct % 8 + 8) % 8);
+    return det::detDir8(du, dv);
 }
 
 // Standing rifle muzzle offset in sub-pixels for each of the 8 facings.
@@ -396,7 +394,7 @@ void CombatWorld::launchShot(CombatUnit& attacker, const CombatUnit& target, int
     const int maxRange = scaleByExpa(attacker.desc.rangeBase, attacker.desc.rangeDelta, attacker.expa);
     const int acc = scaleByExpa(attacker.desc.accuracyBase, attacker.desc.accuracyDelta, attacker.expa);
 
-    const double dist = std::hypot(double(toU - fromU), double(toV - fromV));
+    const double dist = det::detHypot(double(toU - fromU), double(toV - fromV));
     const int spread = maxRange > 0 ? int((double(acc) * dist) / double(maxRange)) : 0;
 
     // Exact 0x10059df6..0x10059e59 two-draw scatter
@@ -404,8 +402,9 @@ void CombatWorld::launchShot(CombatUnit& attacker, const CombatUnit& target, int
     const std::uint32_t rRad = nextRandom(0x7fffu);
     const double angle = (double(rAngle) / 32768.0) * kTwoPi;
     const int radius = (int(rRad) * spread) >> 15;
-    const int impactU = toU + int(std::llround(std::sin(angle) * double(radius)));
-    const int impactV = toV + int(std::llround(std::cos(angle) * double(radius)));
+    const auto sc = det::detSinCos(angle);
+    const int impactU = toU + det::detRoundToInt(sc.s * double(radius));
+    const int impactV = toV + det::detRoundToInt(sc.c * double(radius));
 
     const int speed = std::max(1, attacker.desc.projectileSpeed);
     const int flightTicks = std::max(1, int(std::ceil(dist / double(speed))));
@@ -477,7 +476,7 @@ void CombatWorld::stepUnit(CombatUnit& unit, int tick) {
         }
         const int maxRange = scaleByExpa(unit.desc.rangeBase, unit.desc.rangeDelta, unit.expa);
         const int minRange = scaleByExpa(unit.desc.deadzoneBase, unit.desc.deadzoneDelta, unit.expa);
-        const double dist = std::hypot(double(target->u - unit.u), double(target->v - unit.v));
+        const double dist = det::detHypot(double(target->u - unit.u), double(target->v - unit.v));
         if (dist >= double(minRange) && dist <= double(maxRange)) {
             launchShot(unit, *target, tick);
         }

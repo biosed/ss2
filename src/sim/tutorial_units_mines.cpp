@@ -85,7 +85,7 @@ std::optional<std::pair<int, int>> TutorialUnits::findDetectedHostileMineNear(in
             const int wv = ty * 32 + 16;
             const int mx = originX_ + wu - wv;
             const int my = (wu + wv) / 2;
-            const double dist = std::hypot(static_cast<double>(mx - mapX), static_cast<double>(my - mapY));
+            const double dist = det::detHypot(static_cast<double>(mx - mapX), static_cast<double>(my - mapY));
             if (dist <= bestDist) {
                 bestDist = dist;
                 best = std::pair{tx, ty};
@@ -209,7 +209,7 @@ void TutorialUnits::triggerMineAtTile(int tx, int ty, std::vector<SoldierPose>& 
         for (size_t j = 0; j < vehicles_.size(); ++j) {
             auto& tv = vehicles_[j];
             if (!tv.alive || tv.hp <= 0) continue;
-            if (std::hypot(tv.fx - double(mx), tv.fy - double(my)) > vehRadius) continue;
+            if (det::detHypot(tv.fx - double(mx), tv.fy - double(my)) > vehRadius) continue;
             const int dmg = scaleVehicleDamageForDifficulty(
                 tv.owner, applyVehicleDamage(tv.x, tv.y, tv.hullDir, tv.armor, tv.hasCatalogArmor,
                                              mx, my, 260, assets::HitType::Mine));
@@ -240,9 +240,9 @@ void TutorialUnits::triggerMineAtTile(int tx, int ty, std::vector<SoldierPose>& 
         const auto [su, sv] = soldierWorld(ss);
         const int sx = originX_ + su - sv;
         const int sy = (su + sv) / 2;
-        const double d = std::hypot(double(sx - mx), double(sy - my));
+        const double d = det::detHypot(double(sx - mx), double(sy - my));
         if (d > infRadius) continue;
-        const int sdmg = std::max(1, static_cast<int>(std::lround(baseInfDmg * (1.0 - d / (infRadius + 2.0)))));
+        const int sdmg = std::max(1, static_cast<int>(det::detRoundToInt(baseInfDmg * (1.0 - d / (infRadius + 2.0)))));
         ss.hp = std::max(0, ss.hp - sdmg);
         recordHit(ss.owner, ss.group);
         if (ss.hp > 0) {
@@ -272,7 +272,7 @@ void TutorialUnits::triggerMineAtTile(int tx, int ty, std::vector<SoldierPose>& 
         for (size_t bi = 0; bi < buildings_.size(); ++bi) {
             const auto& tb = buildings_[bi];
             if (tb.destroyed) continue;
-            const double bd = std::max(0.0, std::hypot(double(tb.x - mx), double(tb.y - my)) -
+            const double bd = std::max(0.0, det::detHypot(double(tb.x - mx), double(tb.y - my)) -
                                             std::min(tb.width, tb.height) * 0.3);
             if (bd <= 56.0) {
                 damageBuilding(bi, 140, assets::HitType::Mine, -1, changed);
@@ -487,7 +487,7 @@ void TutorialUnits::stepMines(std::vector<SoldierPose>& changed) {
         const double vetFrac = static_cast<double>(std::clamp(s.expa, 0, 0x8000)) / 32768.0;
         const double effTime = static_cast<double>(s.getMineTime) -
                                vetFrac * static_cast<double>(std::max(0, s.getMineTime - s.getMineTimeMax));
-        const int needed = std::clamp(static_cast<int>(std::lround(effTime / 10.0)), 2, 10);
+        const int needed = std::clamp(static_cast<int>(det::detRoundToInt(effTime / 10.0)), 2, 10);
         ++s.disarmWorkTicks;
         if (s.disarmWorkTicks >= needed) {
             if (auto* mp = mineTileAt(targetTile->first, targetTile->second)) {

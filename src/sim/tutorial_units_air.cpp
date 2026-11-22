@@ -64,7 +64,7 @@ bool TutorialUnits::callAirSupport(assets::AirMissionKind kind, int targetX, int
         std::clamp(ty - 120, std::min(64, std::max(0, mapPixelH_ - 1)), std::max(64, mapPixelH_ - 64)));
     const double dx = static_cast<double>(tx) - entryX;
     const double dy = static_cast<double>(ty) - entryY;
-    const double dist = std::hypot(dx, dy);
+    const double dist = det::detHypot(dx, dy);
     const double ux = dist < 1.0 ? (fromLeft ? 1.0 : -1.0) : (dx / dist);
     const double uy = dist < 1.0 ? 0.0 : (dy / dist);
     const std::string resolvedPlaneId = slot.planeId.empty() ? "ju-87" : slot.planeId;
@@ -125,7 +125,7 @@ bool TutorialUnits::callAirSupport(assets::AirMissionKind kind, int targetX, int
 
     sortiePoses_.push_back(AirSortiePose{
         st.id, st.kind, st.planeId, st.owner,
-        static_cast<int>(std::lround(st.fx)), static_cast<int>(std::lround(st.fy)),
+        static_cast<int>(det::detRoundToInt(st.fx)), static_cast<int>(det::detRoundToInt(st.fy)),
         st.dir32, st.hp, st.maxHp, true, true, false, 0, 0
     });
     return true;
@@ -169,9 +169,9 @@ void TutorialUnits::stepAirSupport(std::vector<SoldierPose>& changed) {
         for (size_t k = 0; k < vehicles_.size(); ++k) {
             auto& tv = vehicles_[k];
             if (!tv.alive || tv.hp <= 0 || !isHostile(owner, tv.owner)) continue;
-            const double d = std::hypot(tv.fx - static_cast<double>(impactX), tv.fy - static_cast<double>(impactY));
+            const double d = det::detHypot(tv.fx - static_cast<double>(impactX), tv.fy - static_cast<double>(impactY));
             if (d > radius) continue;
-            const int scaledDmg = std::max(20, static_cast<int>(std::lround(
+            const int scaledDmg = std::max(20, static_cast<int>(det::detRoundToInt(
                 static_cast<double>(dmgBase) * (1.0 - 0.55 * (d / (radius + 1.0))))));
             const int dealt = scaleVehicleDamageForDifficulty(
                 tv.owner, applyVehicleDamage(tv.x, tv.y, tv.hullDir, tv.armor, tv.hasCatalogArmor,
@@ -197,9 +197,9 @@ void TutorialUnits::stepAirSupport(std::vector<SoldierPose>& changed) {
             const auto [su, sv] = soldierWorld(ss);
             const int sx = originX_ + su - sv;
             const int sy = (su + sv) / 2;
-            const double sd = std::hypot(static_cast<double>(sx - impactX), static_cast<double>(sy - impactY));
+            const double sd = det::detHypot(static_cast<double>(sx - impactX), static_cast<double>(sy - impactY));
             if (sd > radius) continue;
-            const int splashDmg = std::max(10, static_cast<int>(std::lround(
+            const int splashDmg = std::max(10, static_cast<int>(det::detRoundToInt(
                 static_cast<double>(dmgBase) * 0.65 * (1.0 - sd / (radius + 1.0)))));
             ss.hp = std::max(0, ss.hp - splashDmg);
             if (ss.hp > 0) {
@@ -230,7 +230,7 @@ void TutorialUnits::stepAirSupport(std::vector<SoldierPose>& changed) {
         for (size_t bi = 0; bi < buildings_.size(); ++bi) {
             const auto& tb = buildings_[bi];
             if (tb.destroyed) continue;
-            const double bd = std::max(0.0, std::hypot(double(tb.x - impactX), double(tb.y - impactY)) -
+            const double bd = std::max(0.0, det::detHypot(double(tb.x - impactX), double(tb.y - impactY)) -
                                             std::min(tb.width, tb.height) * 0.3);
             if (bd <= radius + 16.0) {
                 const int bldDmg = hitType == assets::HitType::Explosive
@@ -269,7 +269,7 @@ void TutorialUnits::stepAirSupport(std::vector<SoldierPose>& changed) {
             if (j == i) continue;
             const auto& other = sorties_[j];
             if (other.hp <= 0 || !isHostile(fighter.owner, other.owner)) continue;
-            const double d = std::hypot(other.fx - fighter.fx, other.fy - fighter.fy);
+            const double d = det::detHypot(other.fx - fighter.fx, other.fy - fighter.fy);
             if (d <= 420.0 && d < bestDist) {
                 bestDist = d;
                 bestVictim = j;
@@ -281,8 +281,8 @@ void TutorialUnits::stepAirSupport(std::vector<SoldierPose>& changed) {
             const auto* fSpec = catalog_ ? catalog_->findPlane(fighter.planeId) : nullptr;
             std::string fSound = (fSpec && !fSpec->airShotSound.empty()) ? fSpec->airShotSound : std::string("mg_aa");
             interceptedFrom[*bestVictim] = AirIntercept{
-                static_cast<int>(std::lround(fighter.fx)),
-                static_cast<int>(std::lround(fighter.fy)),
+                static_cast<int>(det::detRoundToInt(fighter.fx)),
+                static_cast<int>(det::detRoundToInt(fighter.fy)),
                 std::move(fSound)
             };
         }
@@ -292,8 +292,8 @@ void TutorialUnits::stepAirSupport(std::vector<SoldierPose>& changed) {
     aliveSorties.reserve(sorties_.size());
     for (size_t si = 0; si < sorties_.size(); ++si) {
         auto& st = sorties_[si];
-        const int ix = static_cast<int>(std::lround(st.fx));
-        const int iy = static_cast<int>(std::lround(st.fy));
+        const int ix = static_cast<int>(det::detRoundToInt(st.fx));
+        const int iy = static_cast<int>(det::detRoundToInt(st.fy));
 
         if (st.kind == assets::AirMissionKind::Recon && fog_ && (st.reconTick++ % 3u) == 0u) {
             fogDirty_ = true;
@@ -312,7 +312,7 @@ void TutorialUnits::stepAirSupport(std::vector<SoldierPose>& changed) {
             if (!isHostile(av.owner, st.owner) || av.aaCooldown > 0u) continue;
             const double maxAaRange = av.isHeavyAntiAir ? 600.0
                                                         : (st.altitude >= 350 ? 440.0 : 520.0);
-            const double ad = std::hypot(st.fx - av.fx, st.fy - av.fy);
+            const double ad = det::detHypot(st.fx - av.fx, st.fy - av.fy);
             if (ad > maxAaRange) continue;
             av.aaCooldown = 14u;
             if (av.ammo > 0) --av.ammo;
@@ -346,7 +346,7 @@ void TutorialUnits::stepAirSupport(std::vector<SoldierPose>& changed) {
             continue;
         }
 
-        const double spd = std::max(1e-4, std::hypot(st.vx, st.vy));
+        const double spd = std::max(1e-4, det::detHypot(st.vx, st.vy));
         const double ux = st.vx / spd;
         const double uy = st.vy / spd;
         const double along = (st.fx - static_cast<double>(st.targetX)) * ux +
@@ -367,14 +367,14 @@ void TutorialUnits::stepAirSupport(std::vector<SoldierPose>& changed) {
                         const auto [su, sv] = soldierWorld(ss);
                         const int sx = originX_ + su - sv;
                         const int sy = (su + sv) / 2;
-                        if (std::hypot(static_cast<double>(sx - ix), static_cast<double>(sy - iy)) <= 180.0) {
+                        if (det::detHypot(static_cast<double>(sx - ix), static_cast<double>(sy - iy)) <= 180.0) {
                             applySuppression(k, 35);
                         }
                     }
                     for (size_t k = 0; k < vehicles_.size(); ++k) {
                         auto& tv = vehicles_[k];
                         if (!tv.alive || tv.hp <= 0 || !tv.hasCrew || !isHostile(st.owner, tv.owner)) continue;
-                        if (std::hypot(tv.fx - static_cast<double>(ix), tv.fy - static_cast<double>(iy)) <= 180.0) {
+                        if (det::detHypot(tv.fx - static_cast<double>(ix), tv.fy - static_cast<double>(iy)) <= 180.0) {
                             applyVehicleSuppression(k, 32, ix, iy);
                         }
                     }
@@ -422,7 +422,7 @@ void TutorialUnits::stepAirSupport(std::vector<SoldierPose>& changed) {
                 for (size_t vi = 0; vi < vehicles_.size(); ++vi) {
                     auto& tv = vehicles_[vi];
                     if (!tv.alive || tv.hp <= 0 || isHostile(st.owner, tv.owner) || tv.owner >= 3) continue;
-                    if (std::hypot(tv.fx - static_cast<double>(st.targetX),
+                    if (det::detHypot(tv.fx - static_cast<double>(st.targetX),
                                    tv.fy - static_cast<double>(st.targetY)) > 220.0) {
                         continue;
                     }
@@ -457,7 +457,7 @@ void TutorialUnits::stepAirSupport(std::vector<SoldierPose>& changed) {
                     const auto [su, sv] = soldierWorld(ss);
                     const int sx = originX_ + su - sv;
                     const int sy = (su + sv) / 2;
-                    if (std::hypot(static_cast<double>(sx - st.targetX),
+                    if (det::detHypot(static_cast<double>(sx - st.targetX),
                                    static_cast<double>(sy - st.targetY)) > 220.0) {
                         continue;
                     }

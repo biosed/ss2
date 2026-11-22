@@ -246,7 +246,7 @@ size_t TutorialUnits::orderPatrol(std::span<const size_t> ids, int mapX, int map
         const std::pair dest{t.mapX, t.mapY};
         if (orderSoldierInternal(t.soldier, t.mapX, t.mapY)) {
             s.queuedGoals.clear();
-            if (std::hypot(static_cast<double>(dest.first - origin.first),
+            if (det::detHypot(static_cast<double>(dest.first - origin.first),
                            static_cast<double>(dest.second - origin.second)) >= 16.0) {
                 s.patrolOrigin = origin;
                 s.patrolDest = dest;
@@ -298,11 +298,12 @@ size_t TutorialUnits::orderScatter(std::span<const size_t> ids) {
         auto& s = soldiers_[e.id];
         double vx = e.sx - cx;
         double vy = e.sy - cy;
-        double len = std::hypot(vx, vy);
+        double len = det::detHypot(vx, vy);
         if (len < 6.0) {
             const double theta = 2.399963229728653 * static_cast<double>(k + 1u);
-            vx = std::cos(theta);
-            vy = std::sin(theta);
+            const auto tsc = det::detSinCos(theta);
+            vx = tsc.c;
+            vy = tsc.s;
             len = 1.0;
         }
         const double ux = vx / len;
@@ -310,11 +311,11 @@ size_t TutorialUnits::orderScatter(std::span<const size_t> ids) {
         bool placed = false;
         for (const double rad : kRadii) {
             for (const double ang : kAngles) {
-                const double c = std::cos(ang), sn = std::sin(ang);
-                const double rx = ux * c - uy * sn;
-                const double ry = ux * sn + uy * c;
-                const int tx = static_cast<int>(std::lround(e.sx + rx * rad));
-                const int ty = static_cast<int>(std::lround(e.sy + ry * rad));
+                const auto asc = det::detSinCos(ang);
+                const double rx = ux * asc.c - uy * asc.s;
+                const double ry = ux * asc.s + uy * asc.c;
+                const int tx = det::detRoundToInt(e.sx + rx * rad);
+                const int ty = det::detRoundToInt(e.sy + ry * rad);
                 if (!mapBounds(tx, ty)) continue;
                 const SubCell dest = findSpawnCell(grid_, pointerCell(tx, ty, originX_));
                 if (!grid_.inBounds(dest) || sameTile(dest, s.cell)) continue;
@@ -505,18 +506,18 @@ size_t TutorialUnits::appendSoldier(const assets::Infantry& unit, SubCell cell, 
     s.expaOnHit = (spec && !spec->isVehicle) ? std::max(0, spec->expaOnHit) : 0;
     if (spec && !spec->isVehicle) {
         if (spec->moveSpeed > 0.01) {
-            s.standStepBase = static_cast<unsigned>(std::clamp<long>(std::lround(spec->moveSpeed * 16.0), 4l, 14l));
+            s.standStepBase = static_cast<unsigned>(std::clamp(det::detRoundToInt(spec->moveSpeed * 16.0), 4, 14));
             const double msMax = spec->moveSpeedMax >= spec->moveSpeed ? spec->moveSpeedMax : spec->moveSpeed;
             s.standStepMax = static_cast<unsigned>(
-                std::clamp<long>(std::lround(msMax * 16.0), static_cast<long>(s.standStepBase), 14l));
+                std::clamp(det::detRoundToInt(msMax * 16.0), static_cast<int>(s.standStepBase), 14));
         }
         if (spec->crouchMoveSpeed > 0.01) {
             s.crouchStepBase = static_cast<unsigned>(
-                std::clamp<long>(std::lround(spec->crouchMoveSpeed * 16.0), 3l, 12l));
+                std::clamp(det::detRoundToInt(spec->crouchMoveSpeed * 16.0), 3, 12));
             const double cmsMax = spec->crouchMoveSpeedMax >= spec->crouchMoveSpeed
                 ? spec->crouchMoveSpeedMax : spec->crouchMoveSpeed;
             s.crouchStepMax = static_cast<unsigned>(
-                std::clamp<long>(std::lround(cmsMax * 16.0), static_cast<long>(s.crouchStepBase), 12l));
+                std::clamp(det::detRoundToInt(cmsMax * 16.0), static_cast<int>(s.crouchStepBase), 12));
         }
     }
     if (s.isOfficer) {
@@ -1540,8 +1541,8 @@ void TutorialUnits::refreshSpotting(std::vector<SoldierPose>* changed, bool emit
     }
     for (const auto& st : sorties_) {
         if (st.kind != assets::AirMissionKind::Recon) continue;
-        const SubCell cell = placementCell(static_cast<int>(std::lround(st.fx)),
-                                           static_cast<int>(std::lround(st.fy)), originX_);
+        const SubCell cell = placementCell(static_cast<int>(det::detRoundToInt(st.fx)),
+                                           static_cast<int>(det::detRoundToInt(st.fy)), originX_);
         revealWithAllies(cell.x / 2, cell.y / 2, applyWeatherSight(std::clamp(st.sightTiles, 12, 28)), st.owner);
     }
     for (size_t i = 0; i < soldiers_.size(); ++i) {
@@ -1571,7 +1572,7 @@ void TutorialUnits::refreshSpotting(std::vector<SoldierPose>* changed, bool emit
                         : soldierWorld(d);
                     const int dx = originX_ + du - dv;
                     const int dy = (du + dv) / 2;
-                    const double dist = std::hypot(static_cast<double>(dx - sx), static_cast<double>(dy - sy));
+                    const double dist = det::detHypot(static_cast<double>(dx - sx), static_cast<double>(dy - sy));
                     if (dist <= 140.0 ||
                         (d.hasBinoculars && d.binoculars && !d.motion && d.route.empty() && dist <= 640.0)) {
                         detected = true;
@@ -1580,7 +1581,7 @@ void TutorialUnits::refreshSpotting(std::vector<SoldierPose>* changed, bool emit
                 for (size_t j = 0; j < vehicles_.size() && !detected; ++j) {
                     const auto& dv = vehicles_[j];
                     if (!dv.alive || dv.hp <= 0 || isHostile(p, dv.owner)) continue;
-                    if (std::hypot(static_cast<double>(dv.x - sx), static_cast<double>(dv.y - sy)) <= 140.0) {
+                    if (det::detHypot(static_cast<double>(dv.x - sx), static_cast<double>(dv.y - sy)) <= 140.0) {
                         detected = true;
                     }
                 }

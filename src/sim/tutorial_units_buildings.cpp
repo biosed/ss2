@@ -301,8 +301,8 @@ void TutorialUnits::stepGarrisons(std::vector<SoldierPose>& changed) {
         const int ey = (eu + ev) / 2;
         const bool inRect = sx >= b.left - 32 && sx <= b.left + b.width + 32 &&
                             sy >= b.top - 32 && sy <= b.top + b.height + 32;
-        const double distEntry = std::hypot(double(ex - sx), double(ey - sy));
-        const double distCenter = std::hypot(double(b.x - sx), double(b.y - sy));
+        const double distEntry = det::detHypot(double(ex - sx), double(ey - sy));
+        const double distCenter = det::detHypot(double(b.x - sx), double(b.y - sy));
         const double reach = std::max(60.0, std::min(double(b.width), double(b.height)) * 0.55);
         if (inRect || distEntry <= 60.0 || distCenter <= reach) {
             const SubCell oldCell = s.cell;

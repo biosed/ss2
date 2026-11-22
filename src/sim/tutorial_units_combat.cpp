@@ -17,10 +17,7 @@ namespace ss2 {
 namespace {
 constexpr double kInfantryVsVehicleRangePx = 240.0;
 std::uint8_t directionFromDelta(int du, int dv) {
-    if (du == 0 && dv == 0) return 0;
-    const double angle = std::atan2(double(dv), double(du));
-    const int oct = int(std::llround(angle / (kTwoPi / 8.0)));
-    return static_cast<std::uint8_t>((oct % 8 + 8) % 8);
+    return det::detDir8(du, dv);
 }
 int sniperHitPercent(int armor) {
     switch (armor) {
@@ -97,7 +94,7 @@ int TutorialUnits::officerAuraDecayAt(int owner, double sx, double sy) const {
             ox = static_cast<double>(originX_ + ou - ov);
             oy = static_cast<double>((ou + ov) / 2);
         }
-        if (std::hypot(ox - sx, oy - sy) <= static_cast<double>(other.officerAuraRadius)) {
+        if (det::detHypot(ox - sx, oy - sy) <= static_cast<double>(other.officerAuraRadius)) {
             best = std::max(best, other.moraleRallyRate);
         }
     }
@@ -105,7 +102,7 @@ int TutorialUnits::officerAuraDecayAt(int owner, double sx, double sy) const {
         if (!v.alive || v.hp <= 0 || !v.hasCrew || v.owner != owner || !v.isPropaganda) {
             continue;
         }
-        if (std::hypot(v.fx - sx, v.fy - sy) <= 200.0) {
+        if (det::detHypot(v.fx - sx, v.fy - sy) <= 200.0) {
             best = std::max(best, 3);
         }
     }
@@ -168,18 +165,19 @@ void TutorialUnits::applyVehicleSuppression(size_t vehicleIdx, int addTicks, int
         if (tv.suppressionTicks >= panicThresh) {
             double dx = (threatX >= 0 && threatY >= 0) ? (tv.fx - static_cast<double>(threatX)) : 0.0;
             double dy = (threatX >= 0 && threatY >= 0) ? (tv.fy - static_cast<double>(threatY)) : 0.0;
-            double len = std::hypot(dx, dy);
+            double len = det::detHypot(dx, dy);
             if (len < 1e-3) {
                 const double ang = (static_cast<double>((tv.hullDir + 16u) & 31u) / 32.0) * kTwoPi;
-                const double du = std::cos(ang);
-                const double dv = std::sin(ang);
+                const auto sc = det::detSinCos(ang);
+                const double du = sc.c;
+                const double dv = sc.s;
                 dx = du - dv;
                 dy = 0.5 * (du + dv);
-                len = std::max(1e-3, std::hypot(dx, dy));
+                len = std::max(1e-3, det::detHypot(dx, dy));
             }
-            const int fleeX = std::clamp(static_cast<int>(std::lround(tv.fx + (dx / len) * 72.0)),
+            const int fleeX = std::clamp(static_cast<int>(det::detRoundToInt(tv.fx + (dx / len) * 72.0)),
                                          32, std::max(32, mapPixelW_ - 32));
-            const int fleeY = std::clamp(static_cast<int>(std::lround(tv.fy + (dy / len) * 72.0)),
+            const int fleeY = std::clamp(static_cast<int>(det::detRoundToInt(tv.fy + (dy / len) * 72.0)),
                                          32, std::max(32, mapPixelH_ - 32));
             tv.pendingTowGun.reset();
             tv.queuedOrders.clear();
@@ -474,7 +472,7 @@ void TutorialUnits::applyVehicleCrewDamage(size_t vehicleIdx, int attackerX, int
     }
     if (tv.crewVulnerability > 0.0) {
         const double mult = std::clamp(tv.crewVulnerability, 0.10, 2.0);
-        fracDmg = std::max(1, static_cast<int>(std::lround(static_cast<double>(fracDmg) * mult)));
+        fracDmg = std::max(1, static_cast<int>(det::detRoundToInt(static_cast<double>(fracDmg) * mult)));
     }
     const int scaled = scaleVehicleDamageForDifficulty(tv.owner, fracDmg);
     if (scaled <= 0) return;
@@ -598,7 +596,7 @@ void TutorialUnits::stepSoldierAttackVehicle(Soldier& s, size_t index, std::vect
         for (size_t j = 0; j < vehicles_.size(); ++j) {
             if (!isVehicleTargetValidFor(s.owner, true, j)) continue;
             const auto& tv = vehicles_[j];
-            const double d = std::hypot(double(tv.x - sx), double(tv.y - sy));
+            const double d = det::detHypot(double(tv.x - sx), double(tv.y - sy));
             if (d > autoRange) continue;
             if (s.isSniper && !isVehicleUnbuttoned(tv) &&
                 (!tv.hasCrewProtection || !tv.hasCrew ||
@@ -626,7 +624,7 @@ void TutorialUnits::stepSoldierAttackVehicle(Soldier& s, size_t index, std::vect
     if (!targetVid) return;
 
     auto& tv = vehicles_[*targetVid];
-    const double distMap = std::hypot(double(tv.x - sx), double(tv.y - sy));
+    const double distMap = det::detHypot(double(tv.x - sx), double(tv.y - sy));
     const double engageRange = s.isKamikaze ? 56.0 : (s.isSniper ? sniperReach : (canGrenade ? atGrenadeReach : kInfantryVsVehicleRangePx));
     if ((explicitOrder || s.isKamikaze) && distMap > engageRange) {
         if (!isGar && (!s.goal || !sameTile(*s.goal, tv.cell))) {
@@ -738,9 +736,9 @@ void TutorialUnits::applyFlameSplash(int impactX, int impactY, int rawDamage, in
         const auto [su, sv] = soldierWorld(ss);
         const int sx = originX_ + su - sv;
         const int sy = (su + sv) / 2;
-        const double sd = std::hypot(static_cast<double>(sx - impactX), static_cast<double>(sy - impactY));
+        const double sd = det::detHypot(static_cast<double>(sx - impactX), static_cast<double>(sy - impactY));
         if (sd > kFlameSplashR) continue;
-        const int splashDmg = std::max(1, static_cast<int>(std::lround(
+        const int splashDmg = std::max(1, static_cast<int>(det::detRoundToInt(
             static_cast<double>(rawDamage) * 0.45 * (1.0 - sd / 45.0))));
         ss.hp = std::max(0, ss.hp - splashDmg);
         recordHit(ss.owner, ss.group);
@@ -780,9 +778,9 @@ void TutorialUnits::applyFlameSplash(int impactX, int impactY, int rawDamage, in
         if (skipVehicleIdx >= 0 && vi == static_cast<size_t>(skipVehicleIdx)) continue;
         auto& tv = vehicles_[vi];
         if (!tv.alive || tv.hp <= 0 || !isHostile(attackerOwner, tv.owner)) continue;
-        const double vd = std::hypot(tv.fx - static_cast<double>(impactX), tv.fy - static_cast<double>(impactY));
+        const double vd = det::detHypot(tv.fx - static_cast<double>(impactX), tv.fy - static_cast<double>(impactY));
         if (vd > kFlameSplashR) continue;
-        const int rawSplash = std::max(1, static_cast<int>(std::lround(
+        const int rawSplash = std::max(1, static_cast<int>(det::detRoundToInt(
             static_cast<double>(rawDamage) * 0.45 * (1.0 - vd / 45.0))));
         const int dmg = scaleVehicleDamageForDifficulty(
             tv.owner, applyVehicleDamage(tv.x, tv.y, tv.hullDir, tv.armor, tv.hasCatalogArmor,
@@ -830,10 +828,10 @@ void TutorialUnits::applyMortarSplash(int impactX, int impactY, int rawDamage, i
         const auto [su, sv] = soldierWorld(ss);
         const int sx = originX_ + su - sv;
         const int sy = (su + sv) / 2;
-        const double sd = std::hypot(static_cast<double>(sx - impactX), static_cast<double>(sy - impactY));
+        const double sd = det::detHypot(static_cast<double>(sx - impactX), static_cast<double>(sy - impactY));
         if (sd > kMortarSplashR) continue;
         const double falloff = 1.0 - 0.55 * (sd / kMortarSplashR);
-        const int splashDmg = std::max(1, static_cast<int>(std::lround(
+        const int splashDmg = std::max(1, static_cast<int>(det::detRoundToInt(
             static_cast<double>(rawDamage) * 0.65 * falloff)));
         ss.hp = std::max(0, ss.hp - splashDmg);
         if (ss.hp > 0) applySuppression(k, 25);
@@ -869,10 +867,10 @@ void TutorialUnits::applyMortarSplash(int impactX, int impactY, int rawDamage, i
         if (skipVehicleIdx >= 0 && vi == static_cast<size_t>(skipVehicleIdx)) continue;
         auto& tv = vehicles_[vi];
         if (!tv.alive || tv.hp <= 0 || !isHostile(attackerOwner, tv.owner)) continue;
-        const double vd = std::hypot(tv.fx - static_cast<double>(impactX), tv.fy - static_cast<double>(impactY));
+        const double vd = det::detHypot(tv.fx - static_cast<double>(impactX), tv.fy - static_cast<double>(impactY));
         if (vd > kMortarSplashR) continue;
         const double falloff = 1.0 - 0.55 * (vd / kMortarSplashR);
-        const int rawSplash = std::max(1, static_cast<int>(std::lround(
+        const int rawSplash = std::max(1, static_cast<int>(det::detRoundToInt(
             static_cast<double>(rawDamage) * 0.65 * falloff)));
         const int dmg = scaleVehicleDamageForDifficulty(
             tv.owner, applyVehicleDamage(tv.x, tv.y, tv.hullDir, tv.armor, tv.hasCatalogArmor,
@@ -981,7 +979,7 @@ void TutorialUnits::stepCombat(std::vector<SoldierPose>& changed) {
             int maxVehPref = -1;
             for (size_t j = 0; j < vehicles_.size(); ++j) {
                 if (!isVehicleTargetValidFor(s.owner, true, j)) continue;
-                const double d = std::hypot(double(vehicles_[j].x - sx), double(vehicles_[j].y - sy));
+                const double d = det::detHypot(double(vehicles_[j].x - sx), double(vehicles_[j].y - sy));
                 if (d <= kInfantryVsVehicleRangePx) {
                     if (s.hasAttackPref) {
                         const int cls = assets::UnitSpec::targetClassIndex(vehicles_[j].effectiveTargetType());
@@ -999,7 +997,7 @@ void TutorialUnits::stepCombat(std::vector<SoldierPose>& changed) {
                     for (size_t j = 0; j < soldiers_.size(); ++j) {
                         if (j == i || !isValidAttackTarget(j, s.owner)) continue;
                         const auto [tu, tv] = soldierWorld(soldiers_[j]);
-                        const double d = std::hypot(double(tu - su), double(tv - sv));
+                        const double d = det::detHypot(double(tu - su), double(tv - sv));
                         if (d >= double(minRange) && d <= manLimit) {
                             vehicleInReach = false;
                             break;
@@ -1020,7 +1018,7 @@ void TutorialUnits::stepCombat(std::vector<SoldierPose>& changed) {
             const int groundMinR = mortarOrFlamer ? minRange : 0;
             const auto [gx, gy] = *s.attackGround;
             const auto [gu, gv] = tutorialFootWorld(gx, gy, originX_);
-            const double dist = std::hypot(double(gx - sx), double(gy - sy));
+            const double dist = det::detHypot(double(gx - sx), double(gy - sy));
             if (dist > double(groundMaxR)) {
                 const SubCell targetCell = pointerCell(gx, gy, originX_);
                 if (!s.goal || !sameTile(*s.goal, targetCell)) {
@@ -1105,7 +1103,7 @@ void TutorialUnits::stepCombat(std::vector<SoldierPose>& changed) {
                     s.autoTarget.reset();
                 } else {
                     const auto [tu, tv] = soldierWorld(soldiers_[tid]);
-                    const double d = std::hypot(double(tu - su), double(tv - sv));
+                    const double d = det::detHypot(double(tu - su), double(tv - sv));
                     if (d < double(minRange) || d > double(effectiveSoldRange(acquireMaxRange, soldiers_[tid]))) {
                         s.autoTarget.reset();
                     }
@@ -1117,7 +1115,7 @@ void TutorialUnits::stepCombat(std::vector<SoldierPose>& changed) {
                 for (size_t j = 0; j < soldiers_.size(); ++j) {
                     if (j == i || !isValidAttackTarget(j, s.owner)) continue;
                     const auto [tu, tv] = soldierWorld(soldiers_[j]);
-                    const double d = std::hypot(double(tu - su), double(tv - sv));
+                    const double d = det::detHypot(double(tu - su), double(tv - sv));
                     if (d >= double(minRange) && d <= double(effectiveSoldRange(acquireMaxRange, soldiers_[j])) && d < bestDist) {
                         bestDist = d;
                         bestTarget = j;
@@ -1134,7 +1132,7 @@ void TutorialUnits::stepCombat(std::vector<SoldierPose>& changed) {
                     const auto& tb = buildings_[bi];
                     if (tb.destroyed || tb.owner < 0 || !isHostile(s.owner, tb.owner) || tb.occupants.empty()) continue;
                     if ((fog_->tile(tb.entryCell.x / 2, tb.entryCell.y / 2) & (1u << s.owner)) == 0) continue;
-                    const double d = std::max(0.0, std::hypot(double(tb.x - sx), double(tb.y - sy)) -
+                    const double d = std::max(0.0, det::detHypot(double(tb.x - sx), double(tb.y - sy)) -
                                                    std::min(tb.width, tb.height) * 0.4);
                     if (d <= double(acquireMaxRange) && d < bestBDist) {
                         bestBDist = d;
@@ -1150,7 +1148,7 @@ void TutorialUnits::stepCombat(std::vector<SoldierPose>& changed) {
         if (!activeTarget && activeBldTarget) {
             const auto& tb = buildings_[*activeBldTarget];
             const auto [bu, bv] = tutorialFootWorld(tb.x, tb.y, originX_);
-            const double dist = std::max(0.0, std::hypot(double(tb.x - sx), double(tb.y - sy)) -
+            const double dist = std::max(0.0, det::detHypot(double(tb.x - sx), double(tb.y - sy)) -
                                               std::min(tb.width, tb.height) * 0.4);
             const double bldReach = s.isKamikaze ? std::max(56.0, double(maxRange)) : double(maxRange);
             if ((explicitBldOrder || s.isKamikaze) && dist > bldReach) {
@@ -1206,7 +1204,7 @@ void TutorialUnits::stepCombat(std::vector<SoldierPose>& changed) {
         const size_t tid = *activeTarget;
         const auto& t = soldiers_[tid];
         const auto [tu, tv] = soldierWorld(t);
-        const double dist = std::hypot(double(tu - su), double(tv - sv));
+        const double dist = det::detHypot(double(tu - su), double(tv - sv));
         const int effMaxRange = effectiveSoldRange(maxRange, t);
         const double infReach = s.isKamikaze ? std::max(56.0, double(effMaxRange)) : double(effMaxRange);
 
@@ -1408,7 +1406,7 @@ void TutorialUnits::stepOpenTopPassengerFire(std::vector<SoldierPose>& changed) 
             for (size_t j = 0; j < soldiers_.size(); ++j) {
                 if (!isValidAttackTarget(j, p.owner)) continue;
                 const auto [tu, tv] = soldierWorld(soldiers_[j]);
-                const double d = std::hypot(double(tu - su), double(tv - sv));
+                const double d = det::detHypot(double(tu - su), double(tv - sv));
                 if (d >= static_cast<double>(minR) && d <= static_cast<double>(maxR) && d < bestDist) {
                     bestDist = d;
                     bestTarget = j;
@@ -1479,7 +1477,7 @@ void TutorialUnits::reactToAttack(int victimOwner, int victimGroup, int attacker
             const auto [su, sv] = soldierWorld(s);
             const int sx = originX_ + su - sv;
             const int sy = (su + sv) / 2;
-            if (std::hypot(static_cast<double>(attackerX - sx), static_cast<double>(attackerY - sy)) > 760.0) {
+            if (det::detHypot(static_cast<double>(attackerX - sx), static_cast<double>(attackerY - sy)) > 760.0) {
                 continue;
             }
             if (orderSoldierInternal(i, attackerX, attackerY)) {
@@ -1495,7 +1493,7 @@ void TutorialUnits::reactToAttack(int victimOwner, int victimGroup, int attacker
             if (!v.alive || v.hp <= 0 || v.owner != victimOwner || v.group != victimGroup) continue;
             if (!v.armed || v.speedPx <= 0.0 || v.towedBy || v.moveTarget || v.attackTarget || v.attackGround) continue;
             if (v.lastReactTick != 0 && tick_ - v.lastReactTick < 50u) continue;
-            if (std::hypot(static_cast<double>(attackerX) - v.fx, static_cast<double>(attackerY) - v.fy) > 560.0) {
+            if (det::detHypot(static_cast<double>(attackerX) - v.fx, static_cast<double>(attackerY) - v.fy) > 560.0) {
                 continue;
             }
             const unsigned desiredHull = vehicleDirFromMapDelta(

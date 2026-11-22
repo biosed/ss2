@@ -62,7 +62,7 @@ size_t TutorialUnits::orderSupportVehicle(std::span<const size_t> supporterVehic
         v.queuedOrders.clear();
         v.attackMove = false;
         v.attackMoveEngaging = false;
-        const double dist = std::hypot(target.fx - v.fx, target.fy - v.fy);
+        const double dist = det::detHypot(target.fx - v.fx, target.fy - v.fy);
         if (dist <= 120.0) {
             v.moveTarget.reset();
             v.waypoints.clear();
@@ -152,7 +152,7 @@ size_t TutorialUnits::orderSupportBuilding(std::span<const size_t> supporterVehi
         v.queuedOrders.clear();
         v.attackMove = false;
         v.attackMoveEngaging = false;
-        const double dist = std::hypot(static_cast<double>(b.x) - v.fx, static_cast<double>(b.y) - v.fy);
+        const double dist = det::detHypot(static_cast<double>(b.x) - v.fx, static_cast<double>(b.y) - v.fy);
         if (dist <= bReach) {
             v.moveTarget.reset();
             v.waypoints.clear();
@@ -215,7 +215,7 @@ size_t TutorialUnits::orderHealSoldier(std::span<const size_t> medicSoldierIds, 
         auto& s = soldiers_[id];
         if (s.owner != 0 || s.hp <= 0 || s.embarked || s.garrisonBuilding || !s.isMedic) continue;
         const auto [su, sv] = soldierWorld(s);
-        const double worldDist = std::hypot(static_cast<double>(su - tu), static_cast<double>(sv - tv));
+        const double worldDist = det::detHypot(static_cast<double>(su - tu), static_cast<double>(sv - tv));
         if (worldDist <= 84.0) {
             s.goal.reset();
             s.route.clear();
@@ -261,7 +261,7 @@ size_t TutorialUnits::orderHealSoldier(std::span<const size_t> medicSoldierIds, 
         v.queuedOrders.clear();
         v.attackMove = false;
         v.attackMoveEngaging = false;
-        const double dist = std::hypot(static_cast<double>(tx) - v.fx, static_cast<double>(ty) - v.fy);
+        const double dist = det::detHypot(static_cast<double>(tx) - v.fx, static_cast<double>(ty) - v.fy);
         if (dist <= 120.0) {
             v.moveTarget.reset();
             v.waypoints.clear();
@@ -358,7 +358,7 @@ size_t TutorialUnits::dispatchEscort(std::span<const size_t> soldierIds, std::sp
         const auto [su, sv] = soldierWorld(s);
         const double sx = static_cast<double>(originX_ + su - sv);
         const double sy = static_cast<double>(su + sv) * 0.5;
-        if (std::hypot(targetX - sx, targetY - sy) <= 90.0) {
+        if (det::detHypot(targetX - sx, targetY - sy) <= 90.0) {
             s.goal.reset();
             s.route.clear();
             s.cursor = 0;
@@ -401,7 +401,7 @@ size_t TutorialUnits::dispatchEscort(std::span<const size_t> soldierIds, std::sp
         v.supportTargetSoldier.reset();
         v.reverseMove = false;
         v.attackMoveEngaging = false;
-        if (std::hypot(targetX - v.fx, targetY - v.fy) <= 110.0) {
+        if (det::detHypot(targetX - v.fx, targetY - v.fy) <= 110.0) {
             v.moveTarget.reset();
             v.waypoints.clear();
             if (v.wasMoving) {
@@ -523,7 +523,7 @@ void TutorialUnits::stepMedicHeal(std::vector<SoldierPose>& changed) {
                 if (!tv.alive || tv.hp <= 0 || !tv.hasCrew || tv.owner != s.owner || tv.crewHp >= tv.maxCrewHp) {
                     continue;
                 }
-                if (std::hypot(tv.fx - static_cast<double>(msx), tv.fy - static_cast<double>(msy)) <= 96.0) {
+                if (det::detHypot(tv.fx - static_cast<double>(msx), tv.fy - static_cast<double>(msy)) <= 96.0) {
                     const int healAmt = tv.crewCanBeHealed ? 70 : 35;
                     tv.crewHp = std::min(tv.maxCrewHp, tv.crewHp + healAmt);
                     emitVehiclePose(vi, false, 0, 0, false, {}, false, false, true, false);
@@ -616,7 +616,7 @@ void TutorialUnits::stepSupplyAndRepair(std::vector<SoldierPose>& changed) {
                     auto& crate = vehicles_[j];
                     if (!crate.alive || crate.hp <= 0 || !crate.isCrate) continue;
                     if (crate.owner != v.owner && crate.owner != 3) continue;
-                    if (std::hypot(crate.fx - v.fx, crate.fy - v.fy) > kSupportRadius) continue;
+                    if (det::detHypot(crate.fx - v.fx, crate.fy - v.fy) > kSupportRadius) continue;
                     bool didCrateTransfer = false;
                     if (v.ammo < v.maxAmmo && crate.ammo > 0) {
                         const int xfer = std::min({500, crate.ammo, v.maxAmmo - v.ammo});
@@ -641,12 +641,12 @@ void TutorialUnits::stepSupplyAndRepair(std::vector<SoldierPose>& changed) {
                 if (j == i) continue;
                 auto& other = vehicles_[j];
                 if (!other.alive || other.hp <= 0 || other.owner != v.owner) continue;
-                if (std::hypot(other.fx - v.fx, other.fy - v.fy) > kSupportRadius) continue;
+                if (det::detHypot(other.fx - v.fx, other.fy - v.fy) > kSupportRadius) continue;
                 bool didRepair = false;
                 bool didResupply = false;
                 if (repairsLeft > 0 && !other.isCrate && other.hp < other.maxHp &&
                     (!v.hasFiniteSupply || v.ammo2 > 0)) {
-                    const int maxRepairStep = std::max(1, static_cast<int>(std::lround(18.0 * supplyMult)));
+                    const int maxRepairStep = std::max(1, static_cast<int>(det::detRoundToInt(18.0 * supplyMult)));
                     int gain = std::min(maxRepairStep, other.maxHp - other.hp);
                     if (v.hasFiniteSupply) {
                         const int partsPerHp = other.repairCost > 0 ? other.repairCost : 10;
@@ -673,8 +673,8 @@ void TutorialUnits::stepSupplyAndRepair(std::vector<SoldierPose>& changed) {
                     const int unitCost1 = other.resupplyCost1 > 0 ? other.resupplyCost1 : 15;
                     const int unitCost2 = other.resupplyCost2 > 0 ? other.resupplyCost2 : 2;
                     const int baseStep1 = std::max(1, other.maxAmmo / 6);
-                    const int scaledStep1 = std::max(1, static_cast<int>(std::lround(static_cast<double>(baseStep1) * supplyMult)));
-                    const int scaledStep2 = std::max(5, static_cast<int>(std::lround(static_cast<double>(std::max(5, other.maxAmmo2 / 6)) * supplyMult)));
+                    const int scaledStep1 = std::max(1, static_cast<int>(det::detRoundToInt(static_cast<double>(baseStep1) * supplyMult)));
+                    const int scaledStep2 = std::max(5, static_cast<int>(det::detRoundToInt(static_cast<double>(std::max(5, other.maxAmmo2 / 6)) * supplyMult)));
                     int add1 = needsAmmo1 ? std::min(other.maxAmmo - other.ammo, scaledStep1) : 0;
                     int add2 = needsAmmo2 ? std::min(other.maxAmmo2 - other.ammo2, scaledStep2) : 0;
                     if (v.hasFiniteSupply && other.resupplyCost1 > 0 && add1 > 1 && v.ammo < add1 * unitCost1) {
@@ -703,8 +703,8 @@ void TutorialUnits::stepSupplyAndRepair(std::vector<SoldierPose>& changed) {
                     if (b.destroyed || b.hp >= b.maxHp) continue;
                     if (b.owner >= 0 && b.owner != v.owner) continue;
                     const double bReach = kSupportRadius + static_cast<double>(std::max(b.width, b.height)) * 0.5;
-                    if (std::hypot(static_cast<double>(b.x) - v.fx, static_cast<double>(b.y) - v.fy) > bReach) continue;
-                    const int maxBldStep = std::max(1, static_cast<int>(std::lround(25.0 * supplyMult)));
+                    if (det::detHypot(static_cast<double>(b.x) - v.fx, static_cast<double>(b.y) - v.fy) > bReach) continue;
+                    const int maxBldStep = std::max(1, static_cast<int>(det::detRoundToInt(25.0 * supplyMult)));
                     int gain = std::min(maxBldStep, b.maxHp - b.hp);
                     if (v.hasFiniteSupply) {
                         if (v.ammo2 < 10) {
@@ -755,7 +755,7 @@ void TutorialUnits::stepSupplyAndRepair(std::vector<SoldierPose>& changed) {
                     const auto [su, sv] = soldierWorld(s);
                     const int sx = originX_ + su - sv;
                     const int sy = (su + sv) / 2;
-                    if (std::hypot(double(sx) - v.fx, double(sy) - v.fy) > kSupportRadius) continue;
+                    if (det::detHypot(double(sx) - v.fx, double(sy) - v.fy) > kSupportRadius) continue;
                     const auto [didRes, gearChanged] = resupplySoldier(s);
                     (void)gearChanged;
                     if (!didRes) continue;
@@ -768,7 +768,7 @@ void TutorialUnits::stepSupplyAndRepair(std::vector<SoldierPose>& changed) {
                     const auto& b = buildings_[bi];
                     if (b.destroyed || b.owner != v.owner || b.occupants.empty()) continue;
                     const double bReach = kSupportRadius + static_cast<double>(std::max(b.width, b.height)) * 0.5;
-                    if (std::hypot(static_cast<double>(b.x) - v.fx, static_cast<double>(b.y) - v.fy) > bReach) continue;
+                    if (det::detHypot(static_cast<double>(b.x) - v.fx, static_cast<double>(b.y) - v.fy) > bReach) continue;
                     for (size_t sIdx : b.occupants) {
                         if (infLeft <= 0) break;
                         if (sIdx >= soldiers_.size()) continue;
@@ -791,7 +791,7 @@ void TutorialUnits::stepSupplyAndRepair(std::vector<SoldierPose>& changed) {
                 const double vetFrac = static_cast<double>(std::clamp(v.expa, 0, 0x8000)) / 32768.0;
                 const double xpUnits = static_cast<double>(v.expaReload) +
                                        vetFrac * static_cast<double>(v.expaReloadMax - v.expaReload);
-                v.expa = std::min(0x8000, v.expa + std::max(1, static_cast<int>(std::lround(xpUnits * 64.0))));
+                v.expa = std::min(0x8000, v.expa + std::max(1, static_cast<int>(det::detRoundToInt(xpUnits * 64.0))));
                 truckStockChanged = true;
             }
             if (didInfResupply) {
@@ -814,7 +814,7 @@ void TutorialUnits::stepSupplyAndRepair(std::vector<SoldierPose>& changed) {
                     if (!canFixOther && !canFeedOther) {
                         continue;
                     }
-                    const double d = std::hypot(other.fx - v.fx, other.fy - v.fy);
+                    const double d = det::detHypot(other.fx - v.fx, other.fy - v.fy);
                     if (d <= kAutoSupportRadius && d < bestDist) {
                         bestDist = d;
                         bestVeh = j;
@@ -831,8 +831,8 @@ void TutorialUnits::stepSupplyAndRepair(std::vector<SoldierPose>& changed) {
         if (v.isAmbulance) {
             int healsLeft = 2;
             const double healMult = veteranRateMult(v.healDelay, v.healDelayMax, v.expa);
-            const int infHeal = std::max(1, static_cast<int>(std::lround(12.0 * healMult)));
-            const int crewHeal = std::max(1, static_cast<int>(std::lround(45.0 * healMult)));
+            const int infHeal = std::max(1, static_cast<int>(det::detRoundToInt(12.0 * healMult)));
+            const int crewHeal = std::max(1, static_cast<int>(det::detRoundToInt(45.0 * healMult)));
             bool didAmbulanceHeal = false;
             for (size_t sIdx = 0; sIdx < soldiers_.size() && healsLeft > 0; ++sIdx) {
                 auto& s = soldiers_[sIdx];
@@ -840,7 +840,7 @@ void TutorialUnits::stepSupplyAndRepair(std::vector<SoldierPose>& changed) {
                 const auto [su, sv] = soldierWorld(s);
                 const int sx = originX_ + su - sv;
                 const int sy = (su + sv) / 2;
-                if (std::hypot(double(sx) - v.fx, double(sy) - v.fy) > kSupportRadius) continue;
+                if (det::detHypot(double(sx) - v.fx, double(sy) - v.fy) > kSupportRadius) continue;
                 s.hp = std::min(s.maxHp, s.hp + infHeal);
                 pushHealed(sIdx, s);
                 --healsLeft;
@@ -850,7 +850,7 @@ void TutorialUnits::stepSupplyAndRepair(std::vector<SoldierPose>& changed) {
                 const auto& b = buildings_[bi];
                 if (b.destroyed || b.owner != v.owner || b.occupants.empty()) continue;
                 const double bReach = kSupportRadius + static_cast<double>(std::max(b.width, b.height)) * 0.5;
-                if (std::hypot(static_cast<double>(b.x) - v.fx, static_cast<double>(b.y) - v.fy) > bReach) continue;
+                if (det::detHypot(static_cast<double>(b.x) - v.fx, static_cast<double>(b.y) - v.fy) > bReach) continue;
                 for (size_t sIdx : b.occupants) {
                     if (healsLeft <= 0) break;
                     if (sIdx >= soldiers_.size()) continue;
@@ -873,7 +873,7 @@ void TutorialUnits::stepSupplyAndRepair(std::vector<SoldierPose>& changed) {
                         other.crewHp >= other.maxCrewHp) {
                         continue;
                     }
-                    if (std::hypot(other.fx - v.fx, other.fy - v.fy) > kSupportRadius) continue;
+                    if (det::detHypot(other.fx - v.fx, other.fy - v.fy) > kSupportRadius) continue;
                     other.crewHp = std::min(other.maxCrewHp, other.crewHp + crewHeal);
                     emitVehiclePose(j, false, 0, 0, false, {}, false, false, true, false);
                     --healsLeft;
@@ -897,7 +897,7 @@ void TutorialUnits::stepSupplyAndRepair(std::vector<SoldierPose>& changed) {
                     const auto [su, sv] = soldierWorld(s);
                     const double sx = static_cast<double>(originX_ + su - sv);
                     const double sy = static_cast<double>(su + sv) * 0.5;
-                    const double d = std::hypot(sx - v.fx, sy - v.fy);
+                    const double d = det::detHypot(sx - v.fx, sy - v.fy);
                     if (d <= kAutoSupportRadius && d < bestDist) {
                         bestDist = d;
                         bestSoldier = sIdx;
@@ -931,7 +931,7 @@ void TutorialUnits::stepSupportApproach() {
         }
         const auto [su, sv] = soldierWorld(s);
         const auto [tu, tv] = soldierWorld(t);
-        const double worldDist = std::hypot(static_cast<double>(su - tu), static_cast<double>(sv - tv));
+        const double worldDist = det::detHypot(static_cast<double>(su - tu), static_cast<double>(sv - tv));
         if (worldDist <= 84.0) {
             s.goal.reset();
             s.route.clear();
@@ -987,13 +987,13 @@ void TutorialUnits::stepSupportApproach() {
                 v.supportTargetVehicle.reset();
                 continue;
             }
-            const double dist = std::hypot(t.fx - v.fx, t.fy - v.fy);
+            const double dist = det::detHypot(t.fx - v.fx, t.fy - v.fy);
             if (dist <= 120.0) {
                 haltVehicleSupport(i, v);
                 continue;
             }
             if (!v.moveTarget ||
-                std::hypot(t.fx - static_cast<double>(v.moveTarget->first),
+                det::detHypot(t.fx - static_cast<double>(v.moveTarget->first),
                            t.fy - static_cast<double>(v.moveTarget->second)) > 96.0) {
                 const auto approach = approachPointNear(v.fx, v.fy, t.fx, t.fy, 64.0, mapPixelW_, mapPixelH_);
                 moveVehicleInternal(v, approach.first, approach.second);
@@ -1033,7 +1033,7 @@ void TutorialUnits::stepSupportApproach() {
                 continue;
             }
             const double bReach = 125.0 + static_cast<double>(std::max(b.width, b.height)) * 0.5;
-            if (std::hypot(static_cast<double>(b.x) - v.fx, static_cast<double>(b.y) - v.fy) <= bReach) {
+            if (det::detHypot(static_cast<double>(b.x) - v.fx, static_cast<double>(b.y) - v.fy) <= bReach) {
                 haltVehicleSupport(i, v);
             }
         } else if (v.supportTargetSoldier) {
@@ -1050,12 +1050,12 @@ void TutorialUnits::stepSupportApproach() {
             const auto [tu, tv] = soldierWorld(t);
             const double tx = static_cast<double>(originX_ + tu - tv);
             const double ty = static_cast<double>(tu + tv) * 0.5;
-            if (std::hypot(tx - v.fx, ty - v.fy) <= 120.0) {
+            if (det::detHypot(tx - v.fx, ty - v.fy) <= 120.0) {
                 haltVehicleSupport(i, v);
                 continue;
             }
             if (!v.moveTarget ||
-                std::hypot(tx - static_cast<double>(v.moveTarget->first),
+                det::detHypot(tx - static_cast<double>(v.moveTarget->first),
                            ty - static_cast<double>(v.moveTarget->second)) > 84.0) {
                 const auto approach = approachPointNear(v.fx, v.fy, tx, ty, 56.0, mapPixelW_, mapPixelH_);
                 moveVehicleInternal(v, approach.first, approach.second);
@@ -1109,7 +1109,7 @@ void TutorialUnits::stepEscort() {
         const auto [su, sv] = soldierWorld(s);
         const double sx = static_cast<double>(originX_ + su - sv);
         const double sy = static_cast<double>(su + sv) * 0.5;
-        const double dist = std::hypot(tx - sx, ty - sy);
+        const double dist = det::detHypot(tx - sx, ty - sy);
         if (s.attackTarget || s.attackVehicleTarget || s.attackBuildingTarget || s.autoTarget) {
             if (s.autoTarget && !s.attackTarget && !s.attackVehicleTarget && !s.attackBuildingTarget &&
                 dist > 260.0) {
@@ -1134,7 +1134,7 @@ void TutorialUnits::stepEscort() {
                 const auto [gu, gv] = InfantryPathGrid::toWorldCenter(*s.goal);
                 const double gx = static_cast<double>(originX_ + gu - gv);
                 const double gy = static_cast<double>(gu + gv) * 0.5;
-                goalStale = std::hypot(tx - gx, ty - gy) > 72.0;
+                goalStale = det::detHypot(tx - gx, ty - gy) > 72.0;
             }
             if (goalStale || (!s.goal && ((tick_ + i) % 6u == 0u))) {
                 const auto savedVeh = s.escortVehicleTarget;
@@ -1167,7 +1167,7 @@ void TutorialUnits::stepEscort() {
             if (!v.moveTarget) v.attackMove = false;
             continue;
         }
-        const double dist = std::hypot(tx - v.fx, ty - v.fy);
+        const double dist = det::detHypot(tx - v.fx, ty - v.fy);
         if (v.attackMoveEngaging) {
             if (dist > 300.0) {
                 v.attackMoveEngaging = false;
@@ -1188,7 +1188,7 @@ void TutorialUnits::stepEscort() {
         }
         if (dist > 125.0) {
             const bool goalStale = v.moveTarget &&
-                std::hypot(tx - static_cast<double>(v.moveTarget->first),
+                det::detHypot(tx - static_cast<double>(v.moveTarget->first),
                            ty - static_cast<double>(v.moveTarget->second)) > 96.0;
             if (goalStale || (!v.moveTarget && ((tick_ + i) % 6u == 0u))) {
                 const auto savedVeh = v.escortVehicleTarget;
