@@ -33,6 +33,6 @@ Next work, in order:
 
 Done 22 November 2026: retail `menu_common.sue` front-end widgets (`ramka` 9-slice borders, `speedbar`/`speed_bt` option sliders, `rombik` difficulty/completion gems, `colors_bt` nation swatches).
 
-1. Remaining retail `n2Game_Dll.dll` / `n2Cad800.dll` parity items (progressive building damage stages, supply crates / paratrooper cargo drops, unit acknowledgement voice/SFX polish).
+1. Remaining retail `n2Game_Dll.dll` / `n2Cad800.dll` parity items: progressive building damage stages. (Supply crates / paratrooper drops and unit voice/SFX polish landed in Batch 3, see `validation.md`.)
 
 The physical BC-250 / RADV 4K 120 Hz gate passed on 22 November 2026 (`validation.md`). The project still has no Git remote, so the CI workflow has never run. [Tutorial I results](tutorial-simulation.md)
