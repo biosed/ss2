@@ -10,8 +10,102 @@
 
 namespace ss2 {
 
+void GameSession::processLockstepPostTickSpawns() {
+    if (!simulation) return;
+    for (const auto& ev : simulation->poll()) {
+        if (ev.kind == ss2::MissionEvent::Reinforcement) {
+            spawnReinforcementWave(ev);
+        } else {
+            deferredLockstepEvents.push_back(ev);
+        }
+    }
+    const auto crewSpawns = simulation->pollCrewSpawns();
+    if (!crewSpawns.empty()) {
+        spawnAbandonedCrew(crewSpawns);
+    }
+}
+
 void GameSession::stepSimulationEvents() {
     if (simulation) {
+        if (multiplayer.enabled && lockstep) {
+            if (multiplayer.peer) {
+                std::vector<ss2::LockstepPacket> rx;
+                const bool peerOk = multiplayer.peer->pollPackets(rx);
+                for (auto& pkt : rx) {
+                    if (auto* bundle = std::get_if<ss2::TurnBundlePacket>(&pkt)) {
+                        (void)lockstep->receiveTurnBundle(std::move(*bundle));
+                    } else if (const auto* desyncPkt = std::get_if<ss2::DesyncPacket>(&pkt)) {
+                        if (!lockstepDesyncReported) {
+                            lockstepDesyncReported = true;
+                            std::cerr << "Peer reported lockstep desync at tick " << desyncPkt->tick
+                                      << " (remote=0x" << std::hex << desyncPkt->localHash
+                                      << " expected=0x" << desyncPkt->remoteHash << std::dec << ")\n";
+                            showNotice(ss2::tr("Lockstep desync detected!"), ss2::NoticeKind::blocked);
+                        }
+                    } else if (std::get_if<ss2::ByePacket>(&pkt)) {
+                        if (!lockstepPeerDisconnected) {
+                            lockstepPeerDisconnected = true;
+                            showNotice(ss2::tr("Peer disconnected."), ss2::NoticeKind::blocked);
+                        }
+                    }
+                }
+                for (const auto& outBundle : lockstep->produceOutboundBundles()) {
+                    (void)multiplayer.peer->sendPacket(outBundle);
+                }
+                (void)multiplayer.peer->flush();
+                if (!peerOk && !lockstepPeerDisconnected) {
+                    lockstepPeerDisconnected = true;
+                    showNotice(ss2::tr("Connection to peer lost."), ss2::NoticeKind::blocked);
+                }
+            }
+
+            const auto now = std::chrono::steady_clock::now();
+            constexpr auto kMpTickStep = std::chrono::milliseconds(40);
+            if (now - nextLockstepTickAt > std::chrono::milliseconds(200)) {
+                nextLockstepTickAt = now - kMpTickStep;
+            }
+            for (int catchUp = 0; catchUp < 2 && now >= nextLockstepTickAt; ++catchUp) {
+                const auto status = lockstep->stepTick(*simulation, [this]() {
+                    processLockstepPostTickSpawns();
+                });
+                if (status == ss2::LockstepCoordinator::StepStatus::Stepped) {
+                    nextLockstepTickAt += kMpTickStep;
+                    if (lockstepWaitingPeer) {
+                        lockstepWaitingPeer = false;
+                        orderNotice.show(ss2::tr("Resumed."), ss2::NoticeKind::accepted);
+                    }
+                    if (multiplayer.peer) {
+                        for (const auto& outBundle : lockstep->produceOutboundBundles()) {
+                            (void)multiplayer.peer->sendPacket(outBundle);
+                        }
+                        (void)multiplayer.peer->flush();
+                    }
+                } else if (status == ss2::LockstepCoordinator::StepStatus::WaitingForPeer) {
+                    if (!lockstepWaitingPeer) {
+                        lockstepWaitingPeer = true;
+                        showNotice(ss2::tr("Waiting for peer..."), ss2::NoticeKind::unsupported);
+                    }
+                    break;
+                } else {
+                    if (!lockstepDesyncReported) {
+                        lockstepDesyncReported = true;
+                        if (const auto& di = lockstep->desync()) {
+                            std::cerr << "Lockstep desync at tick " << di->tick
+                                      << " (local=0x" << std::hex << di->localHash
+                                      << " remote=0x" << di->remoteHash << std::dec << ")\n";
+                            if (multiplayer.peer && multiplayer.peer->isConnected()) {
+                                (void)multiplayer.peer->sendPacket(
+                                    ss2::DesyncPacket{di->tick, di->localHash, di->remoteHash});
+                                (void)multiplayer.peer->flush();
+                            }
+                        }
+                        showNotice(ss2::tr("Lockstep desync detected!"), ss2::NoticeKind::blocked);
+                    }
+                    break;
+                }
+            }
+            paused = simulation->isPaused();
+        }
         bool markersDirty = false;
         bool spritesDirty = false;
         if (auto fogSnap = simulation->pollFog()) {
@@ -50,7 +144,7 @@ void GameSession::stepSimulationEvents() {
                 renderer.updateMapRegion(patch.x, patch.y, patch.pixels);
             selection->update(pose.index, scaleInfantry(scene->units().at(pose.index), mapScale));
             const auto now = std::chrono::steady_clock::now();
-            if (prevHp > 0 && (!pose.alive || pose.hp <= 0) && audio && (pose.visible || pose.owner == 0)) {
+            if (prevHp > 0 && (!pose.alive || pose.hp <= 0) && audio && (pose.visible || pose.owner == localOwner())) {
                 auto& lastDeathSnd = lastWeaponAudio["screamofpain"];
                 if (now - lastDeathSnd >= std::chrono::milliseconds(450)) {
                     if (playWorldSound("screamofpain", 0.42f, pose.x, pose.y, ss2::VoicePriority::Low)) {
@@ -62,7 +156,7 @@ void GameSession::stepSimulationEvents() {
                 const float hx = static_cast<float>(pose.x * mapScale);
                 const float hy = static_cast<float>(pose.y * mapScale) - 10.0f * static_cast<float>(mapScale);
                 activeVfx.push_back({ActiveVfx::Kind::HealPulse, hx, hy, hx, hy, now, std::chrono::milliseconds(550)});
-            } else if (pose.alive && pose.hp < prevHp && pose.owner == 0) {
+            } else if (pose.alive && pose.hp < prevHp && pose.owner == localOwner()) {
                 const auto& uid = scene->units().at(pose.index).id;
                 const auto* uSpec = unitCatalog ? unitCatalog->find(uid) : nullptr;
                 const int maxInfHp = (uSpec && uSpec->health > 0) ? uSpec->health : 100;
@@ -72,7 +166,7 @@ void GameSession::stepSimulationEvents() {
                     playUnitVoiceForId("underattack", uid, false);
                 }
             }
-            if (pose.alive && pose.owner == 0 && prevInfAmmo > 0 && pose.ammo == 0) {
+            if (pose.alive && pose.owner == localOwner() && prevInfAmmo > 0 && pose.ammo == 0) {
                 playUnitVoiceForId("noammo", scene->units().at(pose.index).id, false);
             }
             if (pose.fired) {
@@ -137,10 +231,10 @@ void GameSession::stepSimulationEvents() {
                 if (isHostileOwner(pose.owner)) {
                     ++enemyInfKilled;
                     enemyScoreEarned += scoreValueForId(deadUnit.id, false);
-                } else if (pose.owner == 0) {
+                } else if (pose.owner == localOwner()) {
                     friendlyScoreLost += scoreValueForId(deadUnit.id, false);
                 }
-                if (pose.owner == 0) {
+                if (pose.owner == localOwner()) {
                     recordEventPos(static_cast<double>(pose.x * mapScale), static_cast<double>(pose.y * mapScale));
                     pushMinimapPing(pose.x, pose.y, true);
                 }
@@ -218,10 +312,10 @@ void GameSession::stepSimulationEvents() {
                     if (isHostileOwner(prevVehOwner)) {
                         enemyScoreEarned += std::max(50, scoreValueForId(vehicleScene->vehicles().at(vp.index).id, true) / 2);
                     }
-                    if (vp.visible || prevVehOwner == 0) {
+                    if (vp.visible || prevVehOwner == localOwner()) {
                         recordEventPos(static_cast<double>(vp.x * mapScale), static_cast<double>(vp.y * mapScale));
-                        pushMinimapPing(vp.x, vp.y, prevVehOwner == 0);
-                        if (prevVehOwner == 0) {
+                        pushMinimapPing(vp.x, vp.y, prevVehOwner == localOwner());
+                        if (prevVehOwner == localOwner()) {
                             showNotice(ss2::trf("Crew lost on {0}!",
                                                 {ss2::tr(hudDisplayName(vehicleScene->vehicles().at(vp.index).id))}),
                                        ss2::NoticeKind::unsupported);
@@ -232,7 +326,7 @@ void GameSession::stepSimulationEvents() {
                         }
                     }
                 }
-                if (vp.owner == 0 && vp.alive) {
+                if (vp.owner == localOwner() && vp.alive) {
                     if (const auto* sSpec = unitCatalog ? unitCatalog->find(vehicleScene->vehicles().at(vp.index).id) : nullptr) {
                         if (sSpec->isSupplyTruck() && !sSpec->isSupplyCrate()) {
                             if (sSpec->ammo1 > 0 && prevVehAmmo > 0 && vp.ammo == 0) {
@@ -265,7 +359,7 @@ void GameSession::stepSimulationEvents() {
                         lastEngineAudioAt = now;
                     }
                 }
-                if (vp.alive && vp.hp < prevVehHp && vp.owner == 0) {
+                if (vp.alive && vp.hp < prevVehHp && vp.owner == localOwner()) {
                     playUnitVoiceForId("underattack", vehicleScene->vehicles().at(vp.index).id, true);
                 }
                 if ((vp.repaired || vp.resupplied) && vp.visible) {
@@ -372,10 +466,10 @@ void GameSession::stepSimulationEvents() {
                             if (spec->scoreType == "tank") ++enemyTanksDestroyed;
                             else if (spec->scoreType == "gun" || spec->scoreType == "aa") ++enemyGunsDestroyed;
                         }
-                    } else if (vp.owner == 0) {
+                    } else if (vp.owner == localOwner()) {
                         friendlyScoreLost += sval;
                     }
-                    if (vp.owner == 0) {
+                    if (vp.owner == localOwner()) {
                         recordEventPos(static_cast<double>(vp.x * mapScale), static_cast<double>(vp.y * mapScale));
                         pushMinimapPing(vp.x, vp.y, true);
                     }
@@ -430,7 +524,7 @@ void GameSession::stepSimulationEvents() {
                 }
                 if (sapId.empty() && scene) {
                     for (const auto& u : scene->units()) {
-                        if (u.hp > 0 && u.owner == 0) { sapId = u.id; break; }
+                        if (u.hp > 0 && u.owner == localOwner()) { sapId = u.id; break; }
                     }
                 }
                 if (me.kind == ss2::MineEvent::Disarmed) {
@@ -453,7 +547,7 @@ void GameSession::stepSimulationEvents() {
                 lb.occupantIds = bu.occupantIds;
                 lb.owner = bu.owner;
                 lb.destroyed = bu.destroyed;
-                if (selectedBuilding && *selectedBuilding == bu.index && (lb.destroyed || lb.occupantCount == 0 || lb.owner != 0)) {
+                if (selectedBuilding && *selectedBuilding == bu.index && (lb.destroyed || lb.occupantCount == 0 || lb.owner != localOwner())) {
                     selectedBuilding.reset();
                 }
                 if (bu.collapsedThisTick || bu.destroyed) {
@@ -478,7 +572,7 @@ void GameSession::stepSimulationEvents() {
                     (void)playWorldSound("defaultexplosion", 0.68f, bu.x, bu.y, ss2::VoicePriority::High);
                     showNotice(ss2::tr("Building destroyed!"), ss2::NoticeKind::blocked);
                 } else if (bu.damagedThisTick && combatEffects && activeVfx.size() < 64 &&
-                           (bu.owner == 0 || isBuildingPointVisible(bu.x, bu.y))) {
+                           (bu.owner == localOwner() || isBuildingPointVisible(bu.x, bu.y))) {
                     activeVfx.push_back({ActiveVfx::Kind::Explosion, bx, by, bx, by, now,
                                          std::chrono::milliseconds(320)});
                 }
@@ -592,7 +686,7 @@ void GameSession::stepSimulationEvents() {
                             }
                         }
                     }
-                    if (ae.owner == 0) {
+                    if (ae.owner == localOwner()) {
                         showNotice(ss2::tr("Propaganda leaflets dropped — enemy troops suppressed!"),
                                    ss2::NoticeKind::accepted);
                     }
@@ -698,7 +792,7 @@ void GameSession::stepSimulationEvents() {
                         }
                     }
                 }
-                if (ae.owner == 0 && (droppedInf + droppedVeh) > 0) {
+                if (ae.owner == localOwner() && (droppedInf + droppedVeh) > 0) {
                     recordEventPos(static_cast<double>(ax), static_cast<double>(ay));
                     pushMinimapPing(ae.x, ae.y, false);
                     if (audio) audio->playGroup("e_reenforcement", 0.72f, ss2::VoicePriority::High);
@@ -726,7 +820,7 @@ void GameSession::stepSimulationEvents() {
                     }
                 }
                 (void)playWorldSound("construct", 0.50f, ae.x, ae.y);
-                if (ae.owner == 0) {
+                if (ae.owner == localOwner()) {
                     showNotice(ss2::tr("Air supply drop landed!"), ss2::NoticeKind::accepted);
                 }
             } else if (ae.kind == ss2::AirStrikeEvent::PlaneShotDown) {
@@ -734,7 +828,7 @@ void GameSession::stepSimulationEvents() {
                 if (isHostileOwner(ae.owner)) {
                     ++enemyPlanesShotDown;
                     enemyScoreEarned += pScore;
-                } else if (ae.owner == 0) {
+                } else if (ae.owner == localOwner()) {
                     friendlyScoreLost += pScore;
                 }
                 stampBattleCrater(ae.x, ae.y, true);
@@ -775,7 +869,22 @@ void GameSession::stepSimulationEvents() {
             if (activeMarkers.size() != before) markersDirty = true;
         }
         if (markersDirty) syncMarkers();
-        for (const auto event : simulation->poll()) {
+        std::vector<ss2::MissionEvent> eventsToProcess;
+        if (multiplayer.enabled) {
+            eventsToProcess = std::move(deferredLockstepEvents);
+            deferredLockstepEvents.clear();
+            for (const auto& ev : simulation->poll()) {
+                if (ev.kind == ss2::MissionEvent::Reinforcement) {
+                    spawnReinforcementWave(ev);
+                    spritesDirty = true;
+                } else {
+                    eventsToProcess.push_back(ev);
+                }
+            }
+        } else {
+            eventsToProcess = simulation->poll();
+        }
+        for (const auto event : eventsToProcess) {
             const auto& data = simulation->data();
             if (event.kind == ss2::MissionEvent::Dialog || event.kind == ss2::MissionEvent::Message)
                 std::cout << "Tutorial I phrase " << event.index << '\n';
@@ -855,7 +964,8 @@ void GameSession::stepSimulationEvents() {
             }
         }
         if (spritesDirty) syncGpuSprites();
-        if (!limit && !timing && !replayFile && nextMissionOut && !paused && !briefing.active() && !menu.active() &&
+        if (!multiplayer.enabled && !limit && !timing && !replayFile && nextMissionOut &&
+            !paused && !briefing.active() && !menu.active() &&
             simulation->simTick() >= nextAutoSaveTick) {
             nextAutoSaveTick = simulation->simTick() + 7500u;
             doSaveSlot(-1);

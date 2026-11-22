@@ -68,7 +68,8 @@ GameSession::GameSession(SDL_Window* win, ValidationReport* rep, int lim, bool t
                          UserSettings& cfg, bool persistCfg,
                          bool ovOnly, std::optional<std::filesystem::path>* nextOut,
                          const std::filesystem::path& recPath, const cmd::ReplayFile* repFile,
-                         bool manualClk, const std::filesystem::path& loadSave)
+                         bool manualClk, const std::filesystem::path& loadSave,
+                         MultiplayerSessionConfig mpConfig)
     : window(win),
       report(rep),
       limit(lim),
@@ -86,6 +87,7 @@ GameSession::GameSession(SDL_Window* win, ValidationReport* rep, int lim, bool t
       replayFile(repFile),
       manualClock(manualClk),
       loadSavePath(loadSave),
+      multiplayer(std::move(mpConfig)),
       renderer(window, report),
       menu(window),
       tooltip(window),
@@ -407,12 +409,14 @@ void GameSession::initializeMission() {
             std::cout << "Tutorial I: " << mapWidth << 'x' << mapHeight << ", " << objects
                       << " scenery placements, " << infantry.size() << " infantry, " << drawnVehicles << " vehicle and gun placements\n";
         } else {
-            const auto title = "Sudden Strike II | " + missionPath.stem().string();
+            const auto title = "Sudden Strike II | " + missionPath.stem().string() +
+                (multiplayer.enabled ? (" [MP Seat " + std::to_string(localOwner() + 1) + "]") : "");
             SDL_SetWindowTitle(window, title.c_str());
             std::cout << "Mission " << missionPath.stem().string() << ": " << mapWidth << 'x' << mapHeight << ", "
                       << objects << " scenery placements, " << infantry.size() << " infantry, "
                       << drawnVehicles << " vehicle placements\n";
         }
+        if (scene) scene->setFogViewerOwner(localOwner());
         ss2::FogGrid fog(data.width, data.height, data.flags);
         fog.applyMapPerimeterFlags();
         if (!fog.loadCirc64FromGame(gameDir)) {
@@ -422,13 +426,16 @@ void GameSession::initializeMission() {
         auto navigation = ss2::InfantryPathGrid::fromSubCellMasks(data.width, data.height, std::move(data.flags), std::move(data.obstacles));
         missionPlayerTeams = data.playerTeams;
         const auto initMines = data.mines;
+        const int effDiff = multiplayer.enabled ? 2 : std::clamp(settings.difficulty, 1, 3);
         ss2::TutorialUnits soldiers(std::move(navigation), infantry, vehicles, std::move(fog),
-                                    std::clamp(settings.difficulty, 1, 3), autoEngage, vehicleUnits, unitCatalog);
+                                    effDiff, autoEngage, vehicleUnits, unitCatalog);
         soldiers.setPlayerTeams(missionPlayerTeams);
+        soldiers.setViewerOwner(localOwner());
+        soldiers.setMultiplayerSymmetry(multiplayer.enabled);
         soldiers.setMines(initMines);
         soldiers.setBuildings(std::move(missionBuildings));
         soldiers.setAirSupport(data.airSupport, data.paratrooperGroup, data.paratrooperRoster);
-        const auto initAir = soldiers.playerAirSupport();
+        const auto initAir = soldiers.airSupportFor(localOwner());
         for (const auto& [sIdx, vIdx] : preloadedRiders) {
             if (soldiers.embarkImmediate(sIdx, vIdx)) {
                 if (vIdx < vehicleCargo.size()) ++vehicleCargo[vIdx].first;
@@ -438,7 +445,7 @@ void GameSession::initializeMission() {
         const auto initSnap = soldiers.takeSnapshot();
         for (size_t i = 0; i < infantry.size(); ++i) {
             const int initAmmo = (i < initSnap.soldiers.size()) ? initSnap.soldiers[i].ammo : -1;
-            const bool hiddenEnemy = !isAllyOwner(infantry[i].owner) && !soldiers.isValidAttackTarget(i, 0);
+            const bool hiddenEnemy = !isAllyOwner(infantry[i].owner) && !soldiers.isValidAttackTarget(i, localOwner());
             if (hiddenEnemy || initAmmo >= 0) {
                 const auto& u = scene->units().at(i);
                 scene->update(i, u.x, u.y, u.direction, u.progress, u.walking, u.hp,
@@ -448,7 +455,7 @@ void GameSession::initializeMission() {
             }
         }
         for (size_t i = 0; i < viewVehicleUnits.size(); ++i) {
-            if (!isAllyOwner(viewVehicleUnits[i].owner) && !soldiers.isValidVehicleAttackTarget(i)) {
+            if (!isAllyOwner(viewVehicleUnits[i].owner) && !soldiers.isValidVehicleAttackTarget(i, localOwner())) {
                 const auto& v = vehicleScene->vehicles().at(i);
                 vehicleScene->update(i, v.x, v.y, v.hullDir, v.turretDir, v.hp, 0);
                 viewVehicleUnits[i].visible = false;
@@ -505,6 +512,20 @@ void GameSession::initializeMission() {
             std::cout << "Replay verified: " << replayFile->commands.size()
                       << " commands, tick " << simulation->simTick()
                       << ", stateHash 0x" << std::hex << actualHash << std::dec << '\n';
+        } else if (multiplayer.enabled) {
+            simulation.emplace(ss2::MissionRunner::ManualClock{}, std::move(data), std::move(soldiers));
+            if (!recordPath.empty()) simulation->startRecording();
+            lockstep.emplace(ss2::LockstepConfig{
+                static_cast<std::uint8_t>(localOwner()),
+                static_cast<std::uint8_t>(multiplayer.playerCount),
+                multiplayer.turnTicks,
+                multiplayer.inputDelayTurns,
+                multiplayer.hashIntervalTurns,
+            });
+            simulation->setCommandSink([this](ss2::cmd::Command c) {
+                if (lockstep) lockstep->queueLocalCommand(std::move(c));
+            });
+            nextLockstepTickAt = std::chrono::steady_clock::now();
         } else if (manualClock) {
             simulation.emplace(ss2::MissionRunner::ManualClock{}, std::move(data), std::move(soldiers));
             simulation->startRecording();
@@ -516,6 +537,7 @@ void GameSession::initializeMission() {
         liveVisibleMines = simulation->visibleMines();
         selection.emplace(window, renderer, std::move(viewInfantry), std::move(viewVehicles), mapScale, selOriginX, selTitle);
         selection->setVehicles(std::move(viewVehicleUnits));
+        selection->setLocalPlayer(localOwner());
         {
             int airReadyCount = 0;
             for (const auto& sl : initAir) airReadyCount += sl.ready;
@@ -530,7 +552,7 @@ void GameSession::initializeMission() {
             pendingMissionBriefing.clear();
             bool focused = false;
             for (const auto& u : scene->units()) {
-                if (u.owner == 0 && u.hp > 0 && u.visible) {
+                if (u.owner == localOwner() && u.hp > 0 && u.visible) {
                     renderer.focusMap(static_cast<double>(u.x * mapScale), static_cast<double>(u.y * mapScale));
                     focused = true;
                     break;
@@ -538,7 +560,7 @@ void GameSession::initializeMission() {
             }
             if (!focused && vehicleScene) {
                 for (const auto& v : vehicleScene->vehicles()) {
-                    if (v.alive && v.hp > 0 && v.owner == 0) {
+                    if (v.alive && v.hp > 0 && v.owner == localOwner()) {
                         renderer.focusMap(static_cast<double>(v.x * mapScale), static_cast<double>(v.y * mapScale));
                         break;
                     }
@@ -547,7 +569,7 @@ void GameSession::initializeMission() {
         } else if (!isTutorial1) {
             bool focused = false;
             for (const auto& u : infantry) {
-                if (u.owner == 0) {
+                if (u.owner == localOwner()) {
                     renderer.focusMap(static_cast<double>(u.x * mapScale), static_cast<double>(u.y * mapScale));
                     focused = true;
                     break;
@@ -555,7 +577,7 @@ void GameSession::initializeMission() {
             }
             if (!focused) {
                 for (const auto& v : vehicleUnits) {
-                    if (v.owner == 0) {
+                    if (v.owner == localOwner()) {
                         renderer.focusMap(static_cast<double>(v.x * mapScale), static_cast<double>(v.y * mapScale));
                         break;
                     }
@@ -606,6 +628,11 @@ int GameSession::run() {
         if (updateViewTooltipAndPresent()) break;
     }
     resetCursor();
+    if (multiplayer.enabled && multiplayer.peer && multiplayer.peer->isConnected()) {
+        (void)multiplayer.peer->sendPacket(
+            ss2::ByePacket{static_cast<std::uint8_t>(localOwner()), "Session ended"});
+        (void)multiplayer.peer->flush();
+    }
     writeRecordingIfRequested();
     std::cout << "Presented " << frames << " frames\n";
     if (timing && !sample.report(refreshRate)) return 1;
@@ -620,10 +647,11 @@ int runGameSession(SDL_Window* window, ValidationReport* report, int limit, bool
                    const std::filesystem::path& recordPath,
                    const cmd::ReplayFile* replayFile,
                    bool manualClock,
-                   const std::filesystem::path& loadSavePath) {
+                   const std::filesystem::path& loadSavePath,
+                   MultiplayerSessionConfig multiplayer) {
     GameSession session(window, report, limit, timing, gameDir, mission, hdPack, originalInfantry,
                         autoEngage, settings, persistSettings, overviewOnly, nextMissionOut,
-                        recordPath, replayFile, manualClock, loadSavePath);
+                        recordPath, replayFile, manualClock, loadSavePath, std::move(multiplayer));
     return session.run();
 }
 
@@ -640,8 +668,9 @@ float GameSession::fogBrightnessAt(int mx, int my) const {
     const int tx = std::clamp((my + halfX) >> 5, 0, int(fogGridW) - 1);
     const int ty = std::clamp((my - halfX) >> 5, 0, int(fogGridH) - 1);
     const std::uint8_t f = latestFog[std::size_t(ty) * std::size_t(fogGridW) + std::size_t(tx)];
-    if (f & 0x01u) return 1.0f;
-    return (f & 0x10u) ? 0.70f : 0.44f;
+    const int viewer = localOwner();
+    if (f & static_cast<std::uint8_t>(1u << viewer)) return 1.0f;
+    return (f & static_cast<std::uint8_t>(0x10u << viewer)) ? 0.70f : 0.44f;
 }
 
 bool GameSession::ensureGpuInfantrySlot(const std::string& id) {
@@ -801,9 +830,11 @@ void GameSession::syncGpuSprites() {
 }
 
 bool GameSession::isAllyOwner(int owner) const {
-    return owner == 0 || (owner >= 0 && owner < 4 && owner != 3 &&
-                          missionPlayerTeams[static_cast<std::size_t>(owner)] != 3 &&
-                          missionPlayerTeams[static_cast<std::size_t>(owner)] == missionPlayerTeams[0]);
+    const int me = localOwner();
+    return owner == me || (owner >= 0 && owner < 4 && owner != 3 &&
+                           missionPlayerTeams[static_cast<std::size_t>(owner)] != 3 &&
+                           missionPlayerTeams[static_cast<std::size_t>(owner)] ==
+                               missionPlayerTeams[static_cast<std::size_t>(me)]);
 }
 
 bool GameSession::isHostileOwner(int owner) const {
@@ -1054,7 +1085,10 @@ void GameSession::updateMinimapFog(const std::vector<std::uint8_t>& fogGrid, boo
             int num = 38;
             if (tx >= 0 && ty >= 0 && tx < int(fogGridW) && ty < int(fogGridH)) {
                 const std::uint8_t f = fogGrid[std::size_t(ty) * fogGridW + std::size_t(tx)];
-                num = (f & 0x01u) ? 256 : ((f & 0x10u) ? 124 : 38);
+                const int viewer = localOwner();
+                num = (f & static_cast<std::uint8_t>(1u << viewer))
+                    ? 256
+                    : ((f & static_cast<std::uint8_t>(0x10u << viewer)) ? 124 : 38);
             }
             if (num < 256) {
                 const std::size_t idx = (std::size_t(py) * masked.width + px) * 4u;
@@ -1198,8 +1232,9 @@ std::optional<std::pair<size_t, size_t>> GameSession::spawnAndRegisterVehicle(co
                 : ((spec->shot2.damage > 0 && spec->shot2.range > 0) ? std::max(1, v.ammo) : 0);
         }
     }
+    const int initVis = multiplayer.enabled ? (isAllyOwner(v.owner) ? 1 : 0) : (v.visible ? 1 : 0);
     vehicleScene->update(*vIdx, v.x, v.y, v.hullDir, v.turretDir,
-                         realHp, v.visible ? 1 : 0, realAmmo);
+                         realHp, initVis, realAmmo);
     selection->addVehicle(scaleVehicle(vehicleScene->vehicles().at(*vIdx), mapScale));
     initialVehicleHp.push_back(maxVehHp);
     vehExpa.push_back(ss2::TutorialUnits::missionExpaToSim(v.expa));
@@ -1248,7 +1283,7 @@ void GameSession::spawnReinforcementWave(const MissionEvent& ev) {
     }
     bool hadPlayerInfantry = false;
     for (const auto& u : scene->units()) {
-        if (u.owner == 0 && u.hp > 0) { hadPlayerInfantry = true; break; }
+        if (u.owner == localOwner() && u.hp > 0) { hadPlayerInfantry = true; break; }
     }
     std::size_t spawnedInfantry = 0, spawnedVehicles = 0;
     std::vector<size_t> spawnedInfIndices, spawnedVehIndices;
@@ -1270,8 +1305,9 @@ void GameSession::spawnReinforcementWave(const MissionEvent& ev) {
             const int simExpa = ss2::TutorialUnits::missionExpaToSim(ru.expa);
             const size_t simIdx = simulation->spawnInfantry(unit, simExpa);
             const int realAmmo = scaledSoldierAmmo(unit.id, ru.ammo);
+            const int initWaveVis = multiplayer.enabled ? (isAllyOwner(unit.owner) ? 1 : 0) : -1;
             (void)scene->update(newIdx, unit.x, unit.y, unit.direction, unit.progress, unit.walking, unit.hp,
-                                -1, realAmmo);
+                                initWaveVis, realAmmo);
             selection->addUnit(scaleInfantry(scene->units().at(newIdx), mapScale));
             initialUnitHp.push_back(std::max(1, unit.hp));
             unitExpa.push_back(simExpa);
@@ -1323,12 +1359,22 @@ void GameSession::spawnReinforcementWave(const MissionEvent& ev) {
     }
     const std::size_t totalSpawned = spawnedInfantry + spawnedVehicles;
     if (totalSpawned > 0) {
-        if (ev.owner == 0 && ev.gate < data.gateTargets.size() &&
+        const bool humanMpOwner = multiplayer.enabled && static_cast<int>(ev.owner) < multiplayer.playerCount;
+        if ((ev.owner == 0 || humanMpOwner) && ev.gate < data.gateTargets.size() &&
             (data.gateTargets[ev.gate].first != 0 || data.gateTargets[ev.gate].second != 0)) {
             const auto [rx, ry] = data.gateTargets[ev.gate];
-            if (!spawnedInfIndices.empty()) (void)simulation->move(spawnedInfIndices, rx, ry);
-            if (!spawnedVehIndices.empty()) (void)simulation->moveVehicles(spawnedVehIndices, rx, ry);
-        } else if (ev.owner != 0) {
+            if (multiplayer.enabled) {
+                if (!spawnedInfIndices.empty()) {
+                    simulation->applyAs(static_cast<int>(ev.owner), cmd::Move{spawnedInfIndices, rx, ry, false});
+                }
+                if (!spawnedVehIndices.empty()) {
+                    simulation->applyAs(static_cast<int>(ev.owner), cmd::MoveVehicles{spawnedVehIndices, rx, ry, false});
+                }
+            } else {
+                if (!spawnedInfIndices.empty()) (void)simulation->move(spawnedInfIndices, rx, ry);
+                if (!spawnedVehIndices.empty()) (void)simulation->moveVehicles(spawnedVehIndices, rx, ry);
+            }
+        } else if (ev.owner != 0 && !humanMpOwner) {
             std::optional<std::pair<int, int>> rally;
             if (ev.destZone > 0 && ev.destZone < data.locations.size() &&
                 (data.locations[ev.destZone].first != 0 || data.locations[ev.destZone].second != 0)) {
@@ -1353,7 +1399,7 @@ void GameSession::spawnReinforcementWave(const MissionEvent& ev) {
         std::cout << "Reinforcements arrived: " << spawnedInfantry << " infantry, "
                   << spawnedVehicles << " vehicles (wave=" << ev.index
                   << " owner=" << ev.owner << " gate=" << ev.gate << " at " << firstX << ',' << firstY << ")\n";
-        if (ev.owner == 0) {
+        if (static_cast<int>(ev.owner) == localOwner()) {
             recordEventPos(static_cast<double>(firstX * mapScale), static_cast<double>(firstY * mapScale));
             pushMinimapPing(firstX, firstY, false);
             if (audio) audio->playGroup("e_reenforcement", 0.72f, ss2::VoicePriority::High);
@@ -1366,6 +1412,58 @@ void GameSession::spawnReinforcementWave(const MissionEvent& ev) {
     }
 }
 
+void GameSession::spawnAbandonedCrew(const std::vector<assets::Placement>& spawns) {
+    if (!scene || !simulation || !selection || spawns.empty()) return;
+    std::size_t crewCount = 0;
+    for (const auto& rawCp : spawns) {
+        auto cp = rawCp;
+        (void)ensureGpuInfantrySlot(cp.id);
+        auto spawned = scene->spawn(cp);
+        if (!spawned) {
+            for (const auto& existing : scene->units()) {
+                if (existing.owner == cp.owner) {
+                    cp.id = existing.id;
+                    (void)ensureGpuInfantrySlot(cp.id);
+                    spawned = scene->spawn(cp);
+                    if (spawned) break;
+                }
+            }
+        }
+        if (spawned) {
+            const auto& [newIdx, patch] = *spawned;
+            const auto& unit = scene->units().at(newIdx);
+            ensureUnitPortrait(unit.id, false);
+            if (!multiplayer.enabled) {
+                (void)simulation->spawnInfantry(unit, 0);
+            } else {
+                simulation->applyAs(unit.owner, cmd::SpawnInfantry{unit, 0});
+            }
+            const int realAmmo = scaledSoldierAmmo(unit.id, unit.ammo);
+            const int visFlag = multiplayer.enabled ? (isAllyOwner(unit.owner) ? 1 : 0) : -1;
+            (void)scene->update(newIdx, unit.x, unit.y, unit.direction, unit.progress, unit.walking, unit.hp,
+                                visFlag, realAmmo);
+            selection->addUnit(scaleInfantry(scene->units().at(newIdx), mapScale));
+            initialUnitHp.push_back(std::max(1, unit.hp));
+            unitExpa.push_back(0);
+            unitKills.push_back(0);
+            unitGrenades.push_back(initialGrenadesForId(unit.id));
+            unitMineAmmo.push_back(initialMinesForId(unit.id));
+            if (patch.pixels.width && patch.pixels.height) {
+                renderer.updateMapRegion(patch.x, patch.y, patch.pixels);
+            }
+            ++crewCount;
+        }
+    }
+    if (crewCount > 0) {
+        syncGpuSprites();
+        if (spawns.front().owner == localOwner()) {
+            playSelectionVoice("move");
+            showNotice(ss2::trf("Abandoned vehicle ({0} crew dismounted).", {std::to_string(crewCount)}),
+                       ss2::NoticeKind::accepted);
+        }
+    }
+}
+
 bool GameSession::isBuildingPointVisible(int simX, int simY) const {
     if (latestFog.empty() || fogGridW == 0 || fogGridH == 0) return true;
     const int originX = static_cast<int>(fogGridH) * 32;
@@ -1373,7 +1471,7 @@ bool GameSession::isBuildingPointVisible(int simX, int simY) const {
     const int tx = std::clamp(u >> 5, 0, static_cast<int>(fogGridW) - 1);
     const int ty = std::clamp(v >> 5, 0, static_cast<int>(fogGridH) - 1);
     const std::size_t idx = static_cast<std::size_t>(ty) * fogGridW + static_cast<std::size_t>(tx);
-    return idx < latestFog.size() && (latestFog[idx] & 1u) != 0;
+    return idx < latestFog.size() && (latestFog[idx] & static_cast<std::uint8_t>(1u << localOwner())) != 0;
 }
 
 } // namespace ss2

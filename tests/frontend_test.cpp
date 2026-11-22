@@ -152,12 +152,45 @@ int main() {
         quit.activate("quit");
         check(quit.screen() == FrontEnd::Screen::Quit, "Quit row exits");
 
-        // Deferred branch stays put and reports a notice; Load opens LoadGame browser.
+        // Multiplayer navigation, mode toggle, map selection, launch & validation notices; Load opens LoadGame browser.
         FrontEnd def;
+        check(def.shortcutId('m') == "multi", "Main Menu M -> Multiplayer");
         def.activate("multi");
-        check(def.screen() == FrontEnd::Screen::MainMenu, "Multiplayer is deferred, stays on Main Menu");
-        check(!def.takeNotice().empty(), "deferred branch reports a notice");
+        check(def.screen() == FrontEnd::Screen::Multiplayer && def.title() == "Multiplayer",
+              "Multiplayer opens Screen::Multiplayer");
+        def.activate("mp_start");
+        check(def.screen() == FrontEnd::Screen::Multiplayer && !def.takeNotice().empty(),
+              "Host Start with no multiplayer maps stays put and emits notice");
         check(def.takeNotice().empty(), "notice is cleared after reading");
+        check(def.shortcutId('m') == "mp_mode" && def.shortcutId('s') == "mp_start",
+              "Multiplayer advertises M (mode) and S (Start) shortcuts");
+        check(def.mpIsHost(), "Multiplayer defaults to Host Match");
+        def.activate("mp_mode");
+        check(!def.mpIsHost(), "mp_mode toggles to Join Match");
+        def.setMpHostAddress("");
+        def.activate("mp_start");
+        check(def.screen() == FrontEnd::Screen::Multiplayer && !def.takeNotice().empty(),
+              "Join Start with empty host address emits notice");
+        def.setMpHostAddress("127.0.0.1");
+        def.activate("mp_mode");
+        check(def.mpIsHost(), "mp_mode toggles back to Host Match");
+        def.setMultiplayerMissions({
+            {"Skirmish A", "/game/maps/mplay/1x1(102-0)_.smm", "Skirmish A", "128x128 Summer"},
+            {"Skirmish B", "/game/maps/mplay/2x2(101-0)_.smm", "Skirmish B", "256x256 Summer"},
+        });
+        check(hasId(def.items(), "mpmap:0") && hasId(def.items(), "mpmap:1"),
+              "Multiplayer lists installed map items");
+        def.activate("mpmap:1");
+        check(def.selectedMultiplayerMission() == 1 &&
+              def.launchMultiplayerPath() == "/game/maps/mplay/2x2(101-0)_.smm",
+              "mpmap:1 selects multiplayer map");
+        def.activate("mp_start");
+        check(def.screen() == FrontEnd::Screen::LaunchMultiplayer,
+              "mp_start enters Screen::LaunchMultiplayer");
+        def.back();
+        check(def.screen() == FrontEnd::Screen::Multiplayer, "Back from LaunchMultiplayer returns to Multiplayer");
+        def.back();
+        check(def.screen() == FrontEnd::Screen::MainMenu, "Back from Multiplayer returns to Main Menu");
         def.activate("single");
         def.activate("load");
         check(def.screen() == FrontEnd::Screen::LoadGame && def.title() == "Load Game",

@@ -73,6 +73,7 @@ public:
     void setCampaigns(std::vector<GoldCampaignEntry> campaigns);
     void setReplays(std::vector<FrontEnd::ReplayEntry> replays);
     void setSaves(std::vector<FrontEnd::SaveEntry> saves);
+    void setMultiplayerMissions(std::vector<GoldMissionEntry> missions);
     std::optional<std::string> takeDeleteSaveRequest();
     void showNotice(std::string text);
     void setDifficulty(int difficulty);
@@ -142,6 +143,10 @@ private:
     std::vector<GoldCampaignEntry> campaigns_;
     std::vector<FrontEnd::ReplayEntry> replays_;
     std::vector<FrontEnd::SaveEntry> saves_;
+    std::vector<GoldMissionEntry> mpMissions_;
+    enum class MpEditField { None, HostAddress, Port };
+    MpEditField mpEditField_{MpEditField::None};
+    std::string mpPortDraft_{"27015"};
     std::optional<std::string> pendingDeleteSave_;
     UserSettings settings_{};
     UserSettings optionsDraft_{};

@@ -951,6 +951,43 @@ void testSyntheticMissions() {
         writeMissionFile(wp, ws);
         check(readMissionData(wp).weather == expectedWeather, "synthetic I-MISXINF weather selector matches");
     }
+
+    // Synthetic MM2S multiplayer mission under Maps/mPlay/ should appear in listMultiplayerMissions only.
+    {
+        MissionSpec mpSpec{};
+        mpSpec.scheme = 1;
+        mpSpec.width = 128;
+        mpSpec.height = 128;
+        mpSpec.rawDescription = std::string("River crossing\nMore details");
+        Bytes mm2s = buildSyntheticMissionBytes(mpSpec);
+        mm2s[0] = 'M';
+        mm2s[1] = 'M';
+        mm2s[2] = '2';
+        mm2s[3] = 'S';
+        const auto mplayDir = gameDir / "mApS" / "mPlay";
+        writeGzipFile(mplayDir / "Skirmish_2p.smm", mm2s);
+        {
+            std::ofstream txt(mplayDir / "ignored.txt");
+            txt << "ignore";
+            std::ofstream bad(mplayDir / "broken.smm", std::ios::binary);
+            bad << "not gzip";
+        }
+        const auto mpData = readMissionData(mplayDir / "Skirmish_2p.smm");
+        check(mpData.width == 128 && mpData.height == 128 && mpData.scheme == 1 &&
+                  mpData.description == "River crossing\nMore details",
+              "readMissionData parses synthetic MM2S multiplayer archive");
+        const auto mpListed = listMultiplayerMissions(gameDir);
+        check(mpListed.size() == 1 && mpListed[0].name == "Skirmish_2p" &&
+                  mpListed[0].description == "River crossing",
+              "listMultiplayerMissions lists synthetic MM2S .smm cleanly");
+        const auto mpByIdx = findMultiplayerMission(gameDir, "1");
+        const auto mpByStem = findMultiplayerMission(gameDir, "skirmish_2p");
+        check(mpByIdx.has_value() && mpByStem.has_value() && mpByIdx->path == mpListed[0].path &&
+                  mpByStem->path == mpListed[0].path,
+              "findMultiplayerMission resolves by 1-based index and stem");
+        check(listSinglePlayerMissions(gameDir).size() == 3,
+              "listSinglePlayerMissions remains unaffected by Maps/mPlay archives");
+    }
 }
 
 void testSueAndPaths() {
@@ -1071,6 +1108,18 @@ void testOptionalRetailSweep() {
     }
     check(sawBasf, "retail sweep expected BASF mission");
     check(sawTutorial1, "retail sweep expected Tutorial I mission");
+
+    const auto mpMissions = ss2::assets::listMultiplayerMissions(gameDir);
+    check(mpMissions.size() == 35u, "retail sweep expected 35 multiplayer missions");
+    for (const auto& mp : mpMissions) {
+        const auto mpData = ss2::assets::readMissionData(mp.path);
+        check(mpData.width == mp.width && mpData.height == mp.height && mpData.scheme == mp.scheme,
+              "retail multiplayer mission metadata matches summary: " + mp.path.filename().string());
+        const auto mpOverview = ss2::assets::readMissionOverview(mp.path);
+        check(mpOverview.width > 0 && mpOverview.height > 0 &&
+                  mpOverview.rgba.size() == std::size_t(mpOverview.width) * std::size_t(mpOverview.height) * 4u,
+              "retail multiplayer overview non-empty: " + mp.path.filename().string());
+    }
 
     // Verify retail UnitCatalog across iconic WWII armor, soft vehicles & infantry.
     {

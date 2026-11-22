@@ -83,13 +83,14 @@ bool TutorialUnits::canGarrisonBuilding(size_t buildingIdx, int viewerOwner) con
 }
 
 size_t TutorialUnits::orderGarrisonBuilding(std::span<const size_t> soldierIds, size_t buildingIdx) {
-    if (!canGarrisonBuilding(buildingIdx, 0)) return 0;
+    const int actor = actorOwner();
+    if (!canGarrisonBuilding(buildingIdx, actor)) return 0;
     const auto& b = buildings_[buildingIdx];
     size_t accepted = 0;
     for (size_t id : soldierIds) {
         if (id >= soldiers_.size()) continue;
         auto& s = soldiers_[id];
-        if (s.owner != 0 || s.hp <= 0 || s.embarked || s.garrisonBuilding) continue;
+        if (s.owner != actor || s.hp <= 0 || s.embarked || s.garrisonBuilding) continue;
         s.garrisonTarget = buildingIdx;
         s.boardVehicleTarget.reset();
         s.captureVehicleTarget.reset();
@@ -120,6 +121,9 @@ size_t TutorialUnits::orderGarrisonBuilding(std::span<const size_t> soldierIds, 
 size_t TutorialUnits::evacuateBuilding(size_t buildingIdx, std::vector<SoldierPose>* outPoses) {
     if (buildingIdx >= buildings_.size()) return 0;
     auto& b = buildings_[buildingIdx];
+    if (commandActorActive_ && b.owner >= 0 && b.owner != actorOwner() && !isAlliedFor(actorOwner(), b.owner)) {
+        return 0;
+    }
     size_t evacuated = 0;
     for (size_t sid : b.occupants) {
         if (sid >= soldiers_.size()) continue;
@@ -138,7 +142,8 @@ size_t TutorialUnits::evacuateBuilding(size_t buildingIdx, std::vector<SoldierPo
         grid_.setOccupied(spot, true);
         if (outPoses) {
             const auto [u, w] = soldierWorld(s);
-            const bool vis = !fog_ || isAlliedWithPlayer(s.owner) || ((fog_->tile(spot.x / 2, spot.y / 2) & 1u) != 0);
+            const bool vis = !fog_ || isAlliedFor(viewerOwner_, s.owner) ||
+                             ((fog_->tile(spot.x / 2, spot.y / 2) & static_cast<std::uint8_t>(1u << viewerOwner_)) != 0);
             pushOrUpdateSoldierPose(*outPoses, {
                 sid, originX_ + u - w, (u + w) / 2, s.direction, 0, false,
                 s.hp, true, s.owner, s.group, false, vis, 0, 0, false
@@ -167,18 +172,20 @@ size_t TutorialUnits::evacuateBuilding(size_t buildingIdx, std::vector<SoldierPo
 }
 
 std::optional<bool> TutorialUnits::toggleBuildingHoldFire(size_t buildingIdx) {
+    const int actor = actorOwner();
     if (buildingIdx >= buildings_.size()) return std::nullopt;
     const auto& b = buildings_[buildingIdx];
-    if (b.destroyed || b.owner != 0 || b.occupants.empty()) return std::nullopt;
+    if (b.destroyed || b.owner != actor || b.occupants.empty()) return std::nullopt;
     return toggleHoldFire(b.occupants);
 }
 
 std::optional<bool> TutorialUnits::toggleBuildingBinoculars(size_t buildingIdx, std::vector<SoldierPose>* outPoses) {
+    const int actor = actorOwner();
     if (buildingIdx >= buildings_.size()) return std::nullopt;
     const auto& b = buildings_[buildingIdx];
-    if (b.destroyed || b.owner != 0 || b.occupants.empty()) return std::nullopt;
+    if (b.destroyed || b.owner != actor || b.occupants.empty()) return std::nullopt;
     const bool hasSpotter = std::ranges::any_of(b.occupants, [&](size_t sid) {
-        return sid < soldiers_.size() && soldiers_[sid].owner == 0 &&
+        return sid < soldiers_.size() && soldiers_[sid].owner == actor &&
                soldiers_[sid].hp > 0 && soldiers_[sid].hasBinoculars;
     });
     if (!hasSpotter) return std::nullopt;
@@ -186,9 +193,10 @@ std::optional<bool> TutorialUnits::toggleBuildingBinoculars(size_t buildingIdx, 
 }
 
 size_t TutorialUnits::orderBuildingAttack(size_t buildingIdx, bool targetIsVehicle, size_t targetIdx) {
+    const int actor = actorOwner();
     if (buildingIdx >= buildings_.size()) return 0;
     const auto& b = buildings_[buildingIdx];
-    if (b.destroyed || b.owner != 0 || b.occupants.empty()) return 0;
+    if (b.destroyed || b.owner != actor || b.occupants.empty()) return 0;
     std::vector<size_t> eligible;
     eligible.reserve(b.occupants.size());
     for (size_t occId : b.occupants) {
@@ -201,9 +209,10 @@ size_t TutorialUnits::orderBuildingAttack(size_t buildingIdx, bool targetIsVehic
 }
 
 size_t TutorialUnits::orderBuildingAttackBuilding(size_t buildingIdx, size_t targetBuildingIdx) {
+    const int actor = actorOwner();
     if (buildingIdx >= buildings_.size() || buildingIdx == targetBuildingIdx) return 0;
     const auto& b = buildings_[buildingIdx];
-    if (b.destroyed || b.owner != 0 || b.occupants.empty()) return 0;
+    if (b.destroyed || b.owner != actor || b.occupants.empty()) return 0;
     std::vector<size_t> eligible;
     eligible.reserve(b.occupants.size());
     for (size_t occId : b.occupants) {
@@ -216,14 +225,15 @@ size_t TutorialUnits::orderBuildingAttackBuilding(size_t buildingIdx, size_t tar
 }
 
 size_t TutorialUnits::orderAttackBuilding(std::span<const size_t> soldierIds, size_t buildingIdx) {
+    const int actor = actorOwner();
     if (buildingIdx >= buildings_.size()) return 0;
     const auto& b = buildings_[buildingIdx];
-    if (b.destroyed || b.owner < 0 || !isHostile(0, b.owner)) return 0;
+    if (b.destroyed || b.owner < 0 || !isHostile(actor, b.owner)) return 0;
     size_t accepted = 0;
     for (size_t id : soldierIds) {
         if (id >= soldiers_.size()) continue;
         auto& s = soldiers_[id];
-        if (s.owner != 0 || s.hp <= 0 || s.embarked || s.ammo <= 0) continue;
+        if (s.owner != actor || s.hp <= 0 || s.embarked || s.ammo <= 0) continue;
         s.boardVehicleTarget.reset();
         s.captureVehicleTarget.reset();
         s.garrisonTarget.reset();
@@ -247,14 +257,15 @@ size_t TutorialUnits::orderAttackBuilding(std::span<const size_t> soldierIds, si
 }
 
 size_t TutorialUnits::attackBuildingWithVehicles(std::span<const size_t> vehicleIds, size_t buildingIdx) {
+    const int actor = actorOwner();
     if (buildingIdx >= buildings_.size()) return 0;
     const auto& b = buildings_[buildingIdx];
-    if (b.destroyed || b.owner < 0 || !isHostile(0, b.owner)) return 0;
+    if (b.destroyed || b.owner < 0 || !isHostile(actor, b.owner)) return 0;
     size_t accepted = 0;
     for (size_t id : vehicleIds) {
         if (id >= vehicles_.size()) continue;
         auto& v = vehicles_[id];
-        if (!v.alive || v.hp <= 0 || v.owner != 0 || v.towedBy || !v.armed ||
+        if (!v.alive || v.hp <= 0 || v.owner != actor || v.towedBy || !v.armed ||
             (v.ammo <= 0 && (!v.hasSecondary || v.ammo2 <= 0)))
             continue;
         v.pendingTowGun.reset();

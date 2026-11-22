@@ -54,6 +54,7 @@ SIM_SRCS=(
     "$TMP/assets_stub.cpp"
     "$ROOT/src/sim/tutorial.cpp"
     "$ROOT/src/sim/command.cpp"
+    "$ROOT/src/sim/lockstep.cpp"
     "$ROOT/src/sim/mission_runner.cpp"
     "$ROOT/src/sim/infantry_step.cpp"
     "$ROOT/src/sim/tutorial_units.cpp"
@@ -82,18 +83,25 @@ run_toolchain() {
     "${cxx[@]}" -std=c++20 -ffp-contract=off -Wall -Wextra -Wpedantic -UNDEBUG \
         -I"$ROOT/src" "${SIM_SRCS[@]}" "$ROOT/tests/combat_parity_test.cpp" \
         -lpthread -o "$TMP/combat_$label"
+    "${cxx[@]}" -std=c++20 -ffp-contract=off -Wall -Wextra -Wpedantic -UNDEBUG \
+        -I"$ROOT/src" "${SIM_SRCS[@]}" "$ROOT/src/net/tcp_transport.cpp" "$ROOT/tests/lockstep_test.cpp" \
+        -lpthread -o "$TMP/lockstep_$label"
 
     echo "=== Running $label ==="
-    local out
+    local out lock_out
     if [ -n "$runner" ]; then
         out="$("$runner" "$TMP/sim_det_$label")"
         "$runner" "$TMP/combat_$label" "$ROOT/tests/combat_parity_golden.txt"
+        lock_out="$("$runner" "$TMP/lockstep_$label")"
     else
         out="$("$TMP/sim_det_$label")"
         "$TMP/combat_$label" "$ROOT/tests/combat_parity_golden.txt"
+        lock_out="$("$TMP/lockstep_$label")"
     fi
     printf '%s\n' "$out"
+    printf '%s\n' "$lock_out"
     printf '%s\n' "$out" | grep '^SIM_DETERMINISM_HASHES ' > "$TMP/hash_$label"
+    printf '%s\n' "$lock_out" | grep '^LOCKSTEP_DETERMINISM_HASH ' > "$TMP/lockhash_$label"
 }
 
 run_toolchain "arm64_gcc" "" g++ -O3
@@ -105,15 +113,27 @@ h_gcc="$(cat "$TMP/hash_arm64_gcc")"
 h_clang="$(cat "$TMP/hash_arm64_clang")"
 h_x86="$(cat "$TMP/hash_x86_64_musl")"
 h_x86_v3="$(cat "$TMP/hash_x86_64_v3_musl")"
+lh_gcc="$(cat "$TMP/lockhash_arm64_gcc")"
+lh_clang="$(cat "$TMP/lockhash_arm64_clang")"
+lh_x86="$(cat "$TMP/lockhash_x86_64_musl")"
+lh_x86_v3="$(cat "$TMP/lockhash_x86_64_v3_musl")"
 
 echo "=== Cross-ISA Comparison ==="
 echo "ARM64 GCC     : $h_gcc"
 echo "ARM64 Clang   : $h_clang"
 echo "x86-64 Zig    : $h_x86"
 echo "x86-64-v3 Zig : $h_x86_v3"
+echo "Lockstep GCC  : $lh_gcc"
+echo "Lockstep Clang: $lh_clang"
+echo "Lockstep x86  : $lh_x86"
+echo "Lockstep v3   : $lh_x86_v3"
 
 if [ "$h_gcc" != "$h_clang" ] || [ "$h_gcc" != "$h_x86" ] || [ "$h_gcc" != "$h_x86_v3" ]; then
     echo "ERROR: Cross-ISA simulation stateHash mismatch!" >&2
+    exit 1
+fi
+if [ "$lh_gcc" != "$lh_clang" ] || [ "$lh_gcc" != "$lh_x86" ] || [ "$lh_gcc" != "$lh_x86_v3" ]; then
+    echo "ERROR: Cross-ISA lockstep stateHash mismatch!" >&2
     exit 1
 fi
 

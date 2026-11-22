@@ -96,6 +96,24 @@ std::string FrontEnd::launchSavePath() const {
     return s ? s->path : std::string{};
 }
 
+void FrontEnd::setMultiplayerMissions(std::vector<Entry> missions) {
+    mpMissions_ = std::move(missions);
+    if (selectedMpMission_ >= mpMissions_.size()) selectedMpMission_ = 0;
+}
+
+void FrontEnd::selectMultiplayerMission(std::size_t index) {
+    if (index < mpMissions_.size()) selectedMpMission_ = index;
+}
+
+const FrontEnd::Entry* FrontEnd::selectedMultiplayerMissionEntry() const {
+    return selectedMpMission_ < mpMissions_.size() ? &mpMissions_[selectedMpMission_] : nullptr;
+}
+
+std::string FrontEnd::launchMultiplayerPath() const {
+    const auto* m = selectedMultiplayerMissionEntry();
+    return m ? m->path : std::string{};
+}
+
 void FrontEnd::select(std::size_t index) {
     selected_ = missions_.empty() ? 0 : (index < missions_.size() ? index : missions_.size() - 1);
 }
@@ -186,10 +204,12 @@ std::string FrontEnd::title() const {
         case Screen::Ratings: return tr("Ratings");
         case Screen::Replays: return tr("Replay Game");
         case Screen::LoadGame: return tr("Load Game");
+        case Screen::Multiplayer: return tr("Multiplayer");
         case Screen::Credits: return tr("Credits");
         case Screen::Launch:
         case Screen::LaunchReplay:
         case Screen::LaunchSave:
+        case Screen::LaunchMultiplayer:
         case Screen::Quit: break;
     }
     return {};
@@ -286,12 +306,25 @@ std::vector<MenuItem> FrontEnd::items() const {
             items.push_back({"load_delete", tr("Delete"), "D", !saves_.empty()});
             items.push_back({"cancel", tr("Cancel"), "Esc", true});
             break;
+        case Screen::Multiplayer:
+            items.push_back({"mp_mode", tr(mpIsHost_ ? "Host Match" : "Join Match"), "M", true});
+            if (mpMissions_.empty()) {
+                items.push_back({"mp_none", tr("No multiplayer maps installed."), "", false});
+            } else {
+                for (std::size_t i = 0; i < mpMissions_.size(); ++i) {
+                    items.push_back({"mpmap:" + std::to_string(i), mpMissions_[i].name, "", true});
+                }
+            }
+            items.push_back({"mp_start", tr("Start"), "S", !mpIsHost_ || !mpMissions_.empty()});
+            items.push_back({"cancel", tr("Cancel"), "Esc", true});
+            break;
         case Screen::Credits:
             items.push_back({"cancel", tr("Cancel"), "Esc", true});
             break;
         case Screen::Launch:
         case Screen::LaunchReplay:
         case Screen::LaunchSave:
+        case Screen::LaunchMultiplayer:
         case Screen::Quit:
             break;
     }
@@ -336,6 +369,12 @@ void FrontEnd::activate(const std::string& id) {
         }
         return;
     }
+    if (std::size_t index = 0; screen_ == Screen::Multiplayer && parseTailIndex(id, "mpmap:", index)) {
+        if (index < mpMissions_.size()) {
+            selectMultiplayerMission(index);
+        }
+        return;
+    }
 
     switch (screen_) {
         case Screen::MainMenu:
@@ -345,7 +384,7 @@ void FrontEnd::activate(const std::string& id) {
             else if (id == "replay") screen_ = Screen::Replays;
             else if (id == "credits") screen_ = Screen::Credits;
             else if (id == "quit") screen_ = Screen::Quit;
-            else if (id == "multi") notice_ = tr("Not implemented yet.");
+            else if (id == "multi") screen_ = Screen::Multiplayer;
             break;
         case Screen::SinglePlayer:
             if (id == "missions") {
@@ -428,9 +467,25 @@ void FrontEnd::activate(const std::string& id) {
         case Screen::Credits:
             if (id == "cancel" || id == "back") screen_ = Screen::MainMenu;
             break;
+        case Screen::Multiplayer:
+            if (id == "mp_mode") {
+                toggleMpMode();
+            } else if (id == "mp_start") {
+                if (mpIsHost_ && mpMissions_.empty()) {
+                    notice_ = tr("No multiplayer maps installed.");
+                } else if (!mpIsHost_ && mpHostAddress_.empty()) {
+                    notice_ = tr("Enter address");
+                } else {
+                    screen_ = Screen::LaunchMultiplayer;
+                }
+            } else if (id == "cancel" || id == "back") {
+                screen_ = Screen::MainMenu;
+            }
+            break;
         case Screen::Launch:
         case Screen::LaunchReplay:
         case Screen::LaunchSave:
+        case Screen::LaunchMultiplayer:
         case Screen::Quit:
             break;
     }
@@ -455,8 +510,12 @@ void FrontEnd::back() {
         case Screen::Options:
         case Screen::Ratings:
         case Screen::Replays:
+        case Screen::Multiplayer:
         case Screen::Credits:
             screen_ = Screen::MainMenu;
+            break;
+        case Screen::LaunchMultiplayer:
+            screen_ = Screen::Multiplayer;
             break;
         case Screen::Launch:
         case Screen::LaunchReplay:
@@ -516,11 +575,16 @@ std::string FrontEnd::shortcutId(char letter) const {
             if (c == 'l') return "load_start";
             if (c == 'd') return "load_delete";
             break;
+        case Screen::Multiplayer:
+            if (c == 'm') return "mp_mode";
+            if (c == 's') return "mp_start";
+            break;
         case Screen::Options:
         case Screen::Credits:
         case Screen::Launch:
         case Screen::LaunchReplay:
         case Screen::LaunchSave:
+        case Screen::LaunchMultiplayer:
         case Screen::Quit:
             break;
     }

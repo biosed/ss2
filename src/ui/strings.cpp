@@ -864,6 +864,21 @@ constexpr Entry table[] = {
     {"Could not delete saved game.", "Impossible de supprimer la sauvegarde.", "No se pudo eliminar la partida guardada."},
     {"Failed to load saved game.", "Impossible de charger la sauvegarde.", "Error al cargar la partida guardada."},
     {"Loaded saved game.", "Partie sauvegardée chargée.", "Partida guardada cargada."},
+    {"Host Game", "Héberger", "Crear partida"},
+    {"Join Game", "Rejoindre", "Unirse"},
+    {"Host Match", "Héberger", "Iniciar"},
+    {"Join Match", "Connexion", "Conectar"},
+    {"Host Address", "Adresse hôte", "Dirección del host"},
+    {"Port", "Port", "Puerto"},
+    {"No multiplayer maps installed.", "Aucune carte multijoueur installée.", "No hay mapas multijugador instalados."},
+    {"Waiting for peer...", "En attente du pair...", "Esperando al rival..."},
+    {"Save/load disabled in multiplayer.", "Sauvegarde désactivée en multijoueur.", "Guardado desactivado en multijugador."},
+    {"Lockstep desync detected!", "Désynchronisation détectée !", "¡Desincronización detectada!"},
+    {"Peer disconnected.", "Le pair s'est déconnecté.", "El rival se ha desconectado."},
+    {"Connection to peer lost.", "Connexion au pair perdue.", "Conexión con el rival perdida."},
+    {"Abandon order queued.", "Ordre d'abandon envoyé.", "Orden de abandono en cola."},
+    {"Connecting...", "Connexion...", "Conectando..."},
+    {"Enter address", "Entrer l'adresse", "Introducir dirección"},
 };
 
 std::atomic<Language> current{Language::english};

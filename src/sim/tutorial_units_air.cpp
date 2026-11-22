@@ -44,7 +44,7 @@ std::array<assets::AirSupportSlot, 5> TutorialUnits::airSupportFor(int owner) co
 }
 
 std::array<assets::AirSupportSlot, 5> TutorialUnits::playerAirSupport() const {
-    return airSupport_[0];
+    return airSupport_[static_cast<std::size_t>(viewerOwner_)];
 }
 
 bool TutorialUnits::callAirSupport(assets::AirMissionKind kind, int targetX, int targetY, int owner) {
@@ -223,7 +223,7 @@ void TutorialUnits::stepAirSupport(std::vector<SoldierPose>& changed) {
                 ss.spottedMask = 0;
                 fogDirty_ = true;
             }
-            const bool sVis = !fog_ || isAlliedWithPlayer(ss.owner) || (ss.spottedMask & 1u) != 0;
+            const bool sVis = isVisibleToViewer(ss.owner, ss.spottedMask);
             SoldierPose sp{k, sx, sy, ss.direction, 0, false, ss.hp, ss.hp > 0, ss.owner, ss.group, false, sVis};
             sp.suppressed = (ss.hp > 0 && ss.isSuppressed());
             pushOrUpdateSoldierPose(changed, sp);
@@ -466,7 +466,7 @@ void TutorialUnits::stepAirSupport(std::vector<SoldierPose>& changed) {
                     if (ss.hp < ss.maxHp || ss.ammo < maxInfAmmo) {
                         ss.hp = std::min(ss.maxHp, ss.hp + 40);
                         ss.ammo = std::max(ss.ammo, std::min(maxInfAmmo, ss.ammo + std::max(1, maxInfAmmo / 2)));
-                        const bool vis = !fog_ || isAlliedWithPlayer(ss.owner) || (ss.spottedMask & 1u) != 0;
+                        const bool vis = isVisibleToViewer(ss.owner, ss.spottedMask);
                         pushOrUpdateSoldierPose(changed, {
                             si, sx, sy, ss.direction, 0, false, ss.hp, true, ss.owner, ss.group, false, vis
                         });

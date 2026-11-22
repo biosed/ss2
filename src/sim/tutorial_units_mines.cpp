@@ -14,6 +14,15 @@
 #include "sim/tutorial_units_internal.hpp"
 
 namespace ss2 {
+namespace {
+int decodeMineOwner(std::uint8_t b) {
+    if ((b & 0x60u) == 0x60u) return 3;
+    if ((b & 0x40u) != 0u) return 1;
+    if ((b & 0x20u) != 0u) return 2;
+    return 0;
+}
+} // namespace
+
 void TutorialUnits::setMines(std::vector<std::uint8_t> mines) {
     const std::size_t expected = static_cast<std::size_t>(grid_.width() / 2) * static_cast<std::size_t>(grid_.height() / 2);
     if (mines.size() == expected) {
@@ -26,6 +35,7 @@ std::vector<MineEvent> TutorialUnits::takeMineEvents() {
 }
 
 size_t TutorialUnits::orderLayMine(std::span<const size_t> soldierIds, std::vector<SoldierPose>* outPoses) {
+    const int actor = actorOwner();
     const int tileW = grid_.width() / 2;
     const int tileH = grid_.height() / 2;
     if (tileW <= 0 || tileH <= 0) return 0;
@@ -33,20 +43,22 @@ size_t TutorialUnits::orderLayMine(std::span<const size_t> soldierIds, std::vect
     for (size_t id : soldierIds) {
         if (id >= soldiers_.size()) continue;
         auto& s = soldiers_[id];
-        if (s.owner != 0 || s.hp <= 0 || s.embarked || s.garrisonBuilding || !s.canLayMines || s.mineAmmo <= 0) continue;
+        if (s.owner != actor || s.hp <= 0 || s.embarked || s.garrisonBuilding || !s.canLayMines || s.mineAmmo <= 0) continue;
         const int tx = s.cell.x / 2;
         const int ty = s.cell.y / 2;
         if (tx < 0 || ty < 0 || tx >= tileW || ty >= tileH) continue;
         if (mines_.empty()) mines_.assign(static_cast<std::size_t>(tileW) * tileH, 0u);
         const std::size_t idx = static_cast<std::size_t>(ty) * static_cast<std::size_t>(tileW) + static_cast<std::size_t>(tx);
         if ((mines_[idx] & 0x01u) != 0) continue;
-        mines_[idx] = 0x85u; // present | anti-tank | player-0 | visible
+        const auto ownerBits = static_cast<std::uint8_t>(
+            actor == 1 ? 0x40u : (actor == 2 ? 0x20u : (actor == 3 ? 0x60u : 0x00u)));
+        mines_[idx] = static_cast<std::uint8_t>(0x05u | ownerBits | (multiplayerSymmetry_ ? 0x00u : 0x80u));
         --s.mineAmmo;
         const int wu = tx * 32 + 16, wv = ty * 32 + 16;
         mineEvents_.push_back({MineEvent::Laid, originX_ + wu - wv, (wu + wv) / 2, true});
         if (outPoses) {
             const auto [su, sv] = soldierWorld(s);
-            const bool vis = !fog_ || s.owner == 0 || (s.spottedMask & 1u) != 0;
+            const bool vis = isVisibleToViewer(s.owner, s.spottedMask);
             SoldierPose p{id, originX_ + su - sv, (su + sv) / 2, s.direction, 0, false,
                           s.hp, true, s.owner, s.group, false, vis, 0, 0, false,
                           s.expa, s.kills, false, s.atGrenades, false, isSoldierCamouflaged(s), s.mineAmmo};
@@ -58,16 +70,14 @@ size_t TutorialUnits::orderLayMine(std::span<const size_t> soldierIds, std::vect
 }
 
 std::optional<std::pair<int, int>> TutorialUnits::findDetectedHostileMineNear(int mapX, int mapY,
-                                                                              double maxDistPx) const {
+                                                                              double maxDistPx,
+                                                                              int viewerOwner) const {
     const int tileW = grid_.width() / 2;
     const int tileH = grid_.height() / 2;
     if (tileW <= 0 || tileH <= 0 || mines_.size() != static_cast<std::size_t>(tileW) * static_cast<std::size_t>(tileH) ||
         !mapBounds(mapX, mapY)) {
         return std::nullopt;
     }
-    const auto mineOwner = [](std::uint8_t b) -> int {
-        return (b & 0x40u) ? 1 : ((b & 0x20u) ? 2 : 0);
-    };
     const SubCell center = pointerCell(mapX, mapY, originX_);
     const int cx = center.x / 2;
     const int cy = center.y / 2;
@@ -80,7 +90,7 @@ std::optional<std::pair<int, int>> TutorialUnits::findDetectedHostileMineNear(in
             if (tx < 0 || ty < 0 || tx >= tileW || ty >= tileH) continue;
             const std::uint8_t m = mines_[static_cast<std::size_t>(ty) * static_cast<std::size_t>(tileW) +
                                           static_cast<std::size_t>(tx)];
-            if ((m & 0x81u) != 0x81u || !isHostile(mineOwner(m), 0)) continue;
+            if ((m & 0x81u) != 0x81u || !isHostile(decodeMineOwner(m), viewerOwner)) continue;
             const int wu = tx * 32 + 16;
             const int wv = ty * 32 + 16;
             const int mx = originX_ + wu - wv;
@@ -96,16 +106,17 @@ std::optional<std::pair<int, int>> TutorialUnits::findDetectedHostileMineNear(in
 }
 
 bool TutorialUnits::canDisarmMineAt(std::span<const size_t> soldierIds, int mapX, int mapY) const {
-    if (!findDetectedHostileMineNear(mapX, mapY, 28.0)) return false;
+    if (!findDetectedHostileMineNear(mapX, mapY, 28.0, viewerOwner_)) return false;
     return std::ranges::any_of(soldierIds, [&](size_t id) {
         if (id >= soldiers_.size()) return false;
         const auto& s = soldiers_[id];
-        return s.owner == 0 && s.hp > 0 && !s.embarked && !s.garrisonBuilding && s.isSapper;
+        return s.owner == viewerOwner_ && s.hp > 0 && !s.embarked && !s.garrisonBuilding && s.isSapper;
     });
 }
 
 size_t TutorialUnits::orderDisarmMine(std::span<const size_t> soldierIds, int mapX, int mapY) {
-    const auto mineTile = findDetectedHostileMineNear(mapX, mapY, 28.0);
+    const int actor = actorOwner();
+    const auto mineTile = findDetectedHostileMineNear(mapX, mapY, 28.0, actor);
     if (!mineTile) return 0;
     const int wu = mineTile->first * 32 + 16;
     const int wv = mineTile->second * 32 + 16;
@@ -118,7 +129,7 @@ size_t TutorialUnits::orderDisarmMine(std::span<const size_t> soldierIds, int ma
         if (id >= soldiers_.size() || std::ranges::find(seen, id) != seen.end()) continue;
         seen.push_back(id);
         auto& s = soldiers_[id];
-        if (s.owner != 0 || s.hp <= 0 || s.embarked || s.garrisonBuilding || !s.isSapper) continue;
+        if (s.owner != actor || s.hp <= 0 || s.embarked || s.garrisonBuilding || !s.isSapper) continue;
         s.queuedGoals.clear();
         s.patrolOrigin.reset();
         s.patrolDest.reset();
@@ -169,17 +180,14 @@ std::vector<VisibleMine> TutorialUnits::visibleMines(int viewerOwner) const {
     if (tileW <= 0 || tileH <= 0 || mines_.size() != static_cast<std::size_t>(tileW) * static_cast<std::size_t>(tileH)) {
         return {};
     }
-    const auto mineOwner = [](std::uint8_t b) -> int {
-        return (b & 0x40u) ? 1 : ((b & 0x20u) ? 2 : 0);
-    };
     std::vector<VisibleMine> out;
     for (int ty = 0; ty < tileH; ++ty) {
         for (int tx = 0; tx < tileW; ++tx) {
             const std::uint8_t m = mines_[static_cast<std::size_t>(ty) * static_cast<std::size_t>(tileW) +
                                           static_cast<std::size_t>(tx)];
             if ((m & 0x01u) == 0) continue;
-            const int owner = mineOwner(m);
-            const bool friendly = (owner == viewerOwner) || (viewerOwner == 0 && isAlliedWithPlayer(owner));
+            const int owner = decodeMineOwner(m);
+            const bool friendly = isAlliedFor(viewerOwner, owner);
             const bool detected = (m & 0x80u) != 0;
             if (!friendly && !detected) continue;
             const int wu = tx * 32 + 16, wv = ty * 32 + 16;
@@ -264,7 +272,7 @@ void TutorialUnits::triggerMineAtTile(int tx, int ty, std::vector<SoldierPose>& 
             ss.spottedMask = 0;
             fogDirty_ = true;
         }
-        const bool sVis = !fog_ || isAlliedWithPlayer(ss.owner) || (ss.spottedMask & 1u) != 0;
+        const bool sVis = isVisibleToViewer(ss.owner, ss.spottedMask);
         SoldierPose sp{k, sx, sy, ss.direction, 0, false, ss.hp, ss.hp > 0, ss.owner, ss.group, false, sVis};
         sp.suppressed = (ss.hp > 0 && ss.isSuppressed());
         pushOrUpdateSoldierPose(changed, sp);
@@ -298,9 +306,6 @@ void TutorialUnits::stepMines(std::vector<SoldierPose>& changed) {
     if (mines_.empty()) return;
     const int tileW = grid_.width() / 2;
     const int tileH = grid_.height() / 2;
-    const auto mineOwner = [](std::uint8_t b) {
-        return (b & 0x40u) ? 1 : ((b & 0x20u) ? 2 : 0);
-    };
     const auto mineTileAt = [&](int tx, int ty) -> std::uint8_t* {
         if (tx < 0 || ty < 0 || tx >= tileW || ty >= tileH) return nullptr;
         const std::size_t idx = static_cast<std::size_t>(ty) * static_cast<std::size_t>(tileW) + static_cast<std::size_t>(tx);
@@ -316,7 +321,7 @@ void TutorialUnits::stepMines(std::vector<SoldierPose>& changed) {
         if (!v.alive || v.hp <= 0) continue;
         const int tx = v.cell.x / 2, ty = v.cell.y / 2;
         if (const auto* mp = mineTileAt(tx, ty);
-            mp && ((*mp & 0x05u) == 0x05u) && isHostile(mineOwner(*mp), v.owner)) {
+            mp && ((*mp & 0x05u) == 0x05u) && isHostile(decodeMineOwner(*mp), v.owner)) {
             triggerMineAtTile(tx, ty, changed, false);
         }
     }
@@ -325,7 +330,7 @@ void TutorialUnits::stepMines(std::vector<SoldierPose>& changed) {
         if (s.hp <= 0 || s.embarked || s.garrisonBuilding) continue;
         const int tx = s.cell.x / 2, ty = s.cell.y / 2;
         if (const auto* mp = mineTileAt(tx, ty);
-            mp && ((*mp & 0x05u) == 0x01u) && isHostile(mineOwner(*mp), s.owner) &&
+            mp && ((*mp & 0x05u) == 0x01u) && isHostile(decodeMineOwner(*mp), s.owner) &&
             !(s.isSapper && (*mp & 0x80u) != 0)) {
             triggerMineAtTile(tx, ty, changed, false);
         }
@@ -351,15 +356,17 @@ void TutorialUnits::stepMines(std::vector<SoldierPose>& changed) {
     for (size_t i = 0; i < soldiers_.size(); ++i) {
         auto& s = soldiers_[i];
         if (!s.disarmMineTarget) continue;
-        if (s.owner != 0 || s.hp <= 0 || s.embarked || s.garrisonBuilding || !s.isSapper) {
+        const bool allowedOwner = multiplayerSymmetry_ ? (s.owner >= 0 && s.owner < 4) : (s.owner == 0);
+        if (!allowedOwner || s.hp <= 0 || s.embarked || s.garrisonBuilding || !s.isSapper) {
             s.disarmMineTarget.reset();
         s.disarmWorkTicks = 0;
             continue;
         }
+        const int sapOwner = multiplayerSymmetry_ ? s.owner : 0;
         const int tx = s.disarmMineTarget->first;
         const int ty = s.disarmMineTarget->second;
         const auto* mp = mineTileAt(tx, ty);
-        const bool targetAlive = mp && ((*mp & 0x81u) == 0x81u) && isHostile(mineOwner(*mp), 0);
+        const bool targetAlive = mp && ((*mp & 0x81u) == 0x81u) && isHostile(decodeMineOwner(*mp), sapOwner);
         if (!targetAlive) {
             const int cx = s.cell.x / 2;
             const int cy = s.cell.y / 2;
@@ -370,7 +377,7 @@ void TutorialUnits::stepMines(std::vector<SoldierPose>& changed) {
                     const int ntx = cx + dx;
                     const int nty = cy + dy;
                     const auto* cand = mineTileAt(ntx, nty);
-                    if (!cand || ((*cand & 0x81u) != 0x81u) || !isHostile(mineOwner(*cand), 0)) continue;
+                    if (!cand || ((*cand & 0x81u) != 0x81u) || !isHostile(decodeMineOwner(*cand), sapOwner)) continue;
                     const int d2 = dx * dx + dy * dy;
                     if (d2 < bestD2) {
                         bestD2 = d2;
@@ -406,8 +413,10 @@ void TutorialUnits::stepMines(std::vector<SoldierPose>& changed) {
 
     if (tick_ % 15 == 0) {
         for (auto& s : soldiers_) {
-            if (s.owner != 0 || s.hp <= 0 || s.embarked || s.garrisonBuilding) continue;
+            const bool allowedOwner = multiplayerSymmetry_ ? (s.owner >= 0 && s.owner < 4) : (s.owner == 0);
+            if (!allowedOwner || s.hp <= 0 || s.embarked || s.garrisonBuilding) continue;
             if (!s.isSapper && !s.isOfficer && !s.isMedic) continue;
+            const int sapOwner = multiplayerSymmetry_ ? s.owner : 0;
             const int cx = s.cell.x / 2, cy = s.cell.y / 2;
             const bool canInstantDisarm = s.isSapper && s.getMineTime <= 0 &&
                 ((!s.motion && s.route.empty()) || s.disarmMineTarget.has_value() || s.attackMove);
@@ -416,7 +425,7 @@ void TutorialUnits::stepMines(std::vector<SoldierPose>& changed) {
                 const int tx = s.disarmMineTarget->first;
                 const int ty = s.disarmMineTarget->second;
                 if (std::abs(tx - cx) <= 2 && std::abs(ty - cy) <= 2) {
-                    if (auto* tp = mineTileAt(tx, ty); tp && (*tp & 0x01u) != 0 && isHostile(mineOwner(*tp), 0)) {
+                    if (auto* tp = mineTileAt(tx, ty); tp && (*tp & 0x01u) != 0 && isHostile(decodeMineOwner(*tp), sapOwner)) {
                         const auto [mx, my] = tileCenter(tx, ty);
                         const bool antiTank = (*tp & 0x04u) != 0;
                         *tp = 0;
@@ -428,7 +437,7 @@ void TutorialUnits::stepMines(std::vector<SoldierPose>& changed) {
             for (int dy = -3; dy <= 3; ++dy) {
                 for (int dx = -3; dx <= 3; ++dx) {
                     auto* mp = mineTileAt(cx + dx, cy + dy);
-                    if (!mp || (*mp & 0x01u) == 0 || !isHostile(mineOwner(*mp), 0)) continue;
+                    if (!mp || (*mp & 0x01u) == 0 || !isHostile(decodeMineOwner(*mp), sapOwner)) continue;
                     const auto [mx, my] = tileCenter(cx + dx, cy + dy);
                     if ((*mp & 0x80u) == 0) {
                         *mp |= 0x80u;
@@ -447,10 +456,12 @@ void TutorialUnits::stepMines(std::vector<SoldierPose>& changed) {
 
     for (auto& s : soldiers_) {
         if (!s.isSapper || s.getMineTime <= 0) continue;
-        if (s.owner != 0 || s.hp <= 0 || s.embarked || s.garrisonBuilding) {
+        const bool allowedOwner = multiplayerSymmetry_ ? (s.owner >= 0 && s.owner < 4) : (s.owner == 0);
+        if (!allowedOwner || s.hp <= 0 || s.embarked || s.garrisonBuilding) {
             s.disarmWorkTicks = 0;
             continue;
         }
+        const int sapOwner = multiplayerSymmetry_ ? s.owner : 0;
         const bool canDisarmNow = (!s.motion && s.route.empty()) || s.disarmMineTarget.has_value() || s.attackMove;
         if (!canDisarmNow) {
             s.disarmWorkTicks = 0;
@@ -462,7 +473,7 @@ void TutorialUnits::stepMines(std::vector<SoldierPose>& changed) {
             const int tx = s.disarmMineTarget->first;
             const int ty = s.disarmMineTarget->second;
             if (std::abs(tx - cx) <= 2 && std::abs(ty - cy) <= 2) {
-                if (const auto* tp = mineTileAt(tx, ty); tp && (*tp & 0x01u) != 0 && isHostile(mineOwner(*tp), 0)) {
+                if (const auto* tp = mineTileAt(tx, ty); tp && (*tp & 0x01u) != 0 && isHostile(decodeMineOwner(*tp), sapOwner)) {
                     targetTile = std::pair{tx, ty};
                 }
             }
@@ -472,7 +483,7 @@ void TutorialUnits::stepMines(std::vector<SoldierPose>& changed) {
             for (int dy = -2; dy <= 2; ++dy) {
                 for (int dx = -2; dx <= 2; ++dx) {
                     const auto* mp = mineTileAt(cx + dx, cy + dy);
-                    if (!mp || (*mp & 0x01u) == 0 || !isHostile(mineOwner(*mp), 0)) continue;
+                    if (!mp || (*mp & 0x01u) == 0 || !isHostile(decodeMineOwner(*mp), sapOwner)) continue;
                     const int d2 = dx * dx + dy * dy;
                     if (d2 < bestD2) {
                         bestD2 = d2;

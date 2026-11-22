@@ -156,12 +156,13 @@ std::vector<std::pair<size_t, std::pair<int, int>>> TutorialUnits::vehicleFormat
 }
 
 size_t TutorialUnits::moveVehicles(std::span<const size_t> indices, int mapX, int mapY, bool append) {
+    const int actor = actorOwner();
     std::vector<size_t> eligible;
     eligible.reserve(indices.size());
     for (size_t id : indices) {
         if (id >= vehicles_.size() || std::ranges::find(eligible, id) != eligible.end()) continue;
         const auto& v = vehicles_[id];
-        if (!v.alive || v.hp <= 0 || v.owner != 0 || v.speedPx <= 0.0 || v.towedBy) continue;
+        if (!v.alive || v.hp <= 0 || v.owner != actor || v.speedPx <= 0.0 || v.towedBy) continue;
         eligible.push_back(id);
     }
     size_t accepted = 0;
@@ -182,12 +183,13 @@ size_t TutorialUnits::moveVehicles(std::span<const size_t> indices, int mapX, in
 }
 
 size_t TutorialUnits::reverseMoveVehicles(std::span<const size_t> indices, int mapX, int mapY) {
+    const int actor = actorOwner();
     std::vector<size_t> eligible;
     eligible.reserve(indices.size());
     for (size_t id : indices) {
         if (id >= vehicles_.size() || std::ranges::find(eligible, id) != eligible.end()) continue;
         const auto& v = vehicles_[id];
-        if (!v.alive || v.hp <= 0 || v.owner != 0 || !v.canMoveBackward ||
+        if (!v.alive || v.hp <= 0 || v.owner != actor || !v.canMoveBackward ||
             v.backSpeedPx <= 0.0 || v.towedBy)
             continue;
         eligible.push_back(id);
@@ -207,13 +209,14 @@ size_t TutorialUnits::reverseMoveVehicles(std::span<const size_t> indices, int m
 }
 
 size_t TutorialUnits::faceVehicles(std::span<const size_t> indices, int mapX, int mapY) {
+    const int actor = actorOwner();
     const int clampedX = std::clamp(mapX, 0, std::max(0, mapPixelW_ - 1));
     const int clampedY = std::clamp(mapY, 0, std::max(0, mapPixelH_ - 1));
     size_t accepted = 0;
     for (size_t id : indices) {
         if (id >= vehicles_.size()) continue;
         auto& v = vehicles_[id];
-        if (!v.alive || v.hp <= 0 || v.owner != 0 || !v.hasCrew || v.towedBy) continue;
+        if (!v.alive || v.hp <= 0 || v.owner != actor || !v.hasCrew || v.towedBy) continue;
         const double dx = static_cast<double>(clampedX) - v.fx;
         const double dy = static_cast<double>(clampedY) - v.fy;
         if (det::detHypot(dx, dy) < 4.0) continue;
@@ -246,12 +249,13 @@ size_t TutorialUnits::faceVehicles(std::span<const size_t> indices, int mapX, in
 }
 
 size_t TutorialUnits::attackMoveVehicles(std::span<const size_t> indices, int mapX, int mapY, bool append) {
+    const int actor = actorOwner();
     std::vector<size_t> eligible;
     eligible.reserve(indices.size());
     for (size_t id : indices) {
         if (id >= vehicles_.size() || std::ranges::find(eligible, id) != eligible.end()) continue;
         const auto& v = vehicles_[id];
-        if (!v.alive || v.hp <= 0 || v.owner != 0 || v.speedPx <= 0.0 || v.towedBy) continue;
+        if (!v.alive || v.hp <= 0 || v.owner != actor || v.speedPx <= 0.0 || v.towedBy) continue;
         eligible.push_back(id);
     }
     size_t accepted = 0;
@@ -273,12 +277,13 @@ size_t TutorialUnits::attackMoveVehicles(std::span<const size_t> indices, int ma
 }
 
 size_t TutorialUnits::patrolVehicles(std::span<const size_t> indices, int mapX, int mapY) {
+    const int actor = actorOwner();
     std::vector<size_t> eligible;
     eligible.reserve(indices.size());
     for (size_t id : indices) {
         if (id >= vehicles_.size() || std::ranges::find(eligible, id) != eligible.end()) continue;
         const auto& v = vehicles_[id];
-        if (!v.alive || v.hp <= 0 || v.owner != 0 || v.speedPx <= 0.0 || v.towedBy) continue;
+        if (!v.alive || v.hp <= 0 || v.owner != actor || v.speedPx <= 0.0 || v.towedBy) continue;
         eligible.push_back(id);
     }
     size_t accepted = 0;
@@ -305,11 +310,12 @@ size_t TutorialUnits::patrolVehicles(std::span<const size_t> indices, int mapX, 
 }
 
 size_t TutorialUnits::stopVehicles(std::span<const size_t> indices) {
+    const int actor = actorOwner();
     size_t stopped = 0;
     for (size_t id : indices) {
         if (id >= vehicles_.size()) continue;
         auto& v = vehicles_[id];
-        if (!v.alive || v.hp <= 0 || v.owner != 0) continue;
+        if (!v.alive || v.hp <= 0 || v.owner != actor) continue;
         const bool wasMoving = v.moveTarget.has_value() || v.wasMoving;
         v.moveTarget.reset();
         v.waypoints.clear();
@@ -338,12 +344,13 @@ size_t TutorialUnits::stopVehicles(std::span<const size_t> indices) {
 }
 
 std::optional<bool> TutorialUnits::toggleVehicleHoldFire(std::span<const size_t> indices) {
+    const int actor = actorOwner();
     bool anyValid = false;
     bool anyFree = false;
     for (size_t id : indices) {
         if (id >= vehicles_.size()) continue;
         const auto& v = vehicles_[id];
-        if (!v.alive || v.hp <= 0 || v.owner != 0) continue;
+        if (!v.alive || v.hp <= 0 || v.owner != actor) continue;
         anyValid = true;
         if (!v.holdFire) anyFree = true;
     }
@@ -351,19 +358,20 @@ std::optional<bool> TutorialUnits::toggleVehicleHoldFire(std::span<const size_t>
     for (size_t id : indices) {
         if (id >= vehicles_.size()) continue;
         auto& v = vehicles_[id];
-        if (!v.alive || v.hp <= 0 || v.owner != 0) continue;
+        if (!v.alive || v.hp <= 0 || v.owner != actor) continue;
         v.holdFire = anyFree;
     }
     return anyFree;
 }
 
 std::optional<bool> TutorialUnits::toggleMarchMode(std::span<const size_t> vehicleIds) {
+    const int actor = actorOwner();
     bool anyValid = false;
     bool anyClosed = false;
     for (size_t id : vehicleIds) {
         if (id >= vehicles_.size()) continue;
         const auto& v = vehicles_[id];
-        if (!v.alive || v.hp <= 0 || v.owner != 0 || !v.hasCrew || !v.marchEnabled) continue;
+        if (!v.alive || v.hp <= 0 || v.owner != actor || !v.hasCrew || !v.marchEnabled) continue;
         anyValid = true;
         if (!v.hatchOpen) anyClosed = true;
     }
@@ -371,7 +379,7 @@ std::optional<bool> TutorialUnits::toggleMarchMode(std::span<const size_t> vehic
     for (size_t id : vehicleIds) {
         if (id >= vehicles_.size()) continue;
         auto& v = vehicles_[id];
-        if (!v.alive || v.hp <= 0 || v.owner != 0 || !v.hasCrew || !v.marchEnabled) continue;
+        if (!v.alive || v.hp <= 0 || v.owner != actor || !v.hasCrew || !v.marchEnabled) continue;
         v.hatchOpen = anyClosed;
         emitVehiclePose(id);
     }
@@ -380,14 +388,15 @@ std::optional<bool> TutorialUnits::toggleMarchMode(std::span<const size_t> vehic
 }
 
 size_t TutorialUnits::attackWithVehicles(std::span<const size_t> indices, bool targetIsVehicle, size_t targetIdx) {
-    const bool valid = targetIsVehicle ? isValidVehicleAttackTarget(targetIdx)
-                                       : isValidAttackTarget(targetIdx, 0);
+    const int actor = actorOwner();
+    const bool valid = targetIsVehicle ? isValidVehicleAttackTarget(targetIdx, actor)
+                                       : isValidAttackTarget(targetIdx, actor);
     if (!valid) return 0;
     size_t accepted = 0;
     for (size_t id : indices) {
         if (id >= vehicles_.size()) continue;
         auto& v = vehicles_[id];
-        if (!v.alive || v.hp <= 0 || v.owner != 0 || v.towedBy || !v.armed ||
+        if (!v.alive || v.hp <= 0 || v.owner != actor || v.towedBy || !v.armed ||
             (v.ammo <= 0 && (!v.hasSecondary || v.ammo2 <= 0)))
             continue;
         v.pendingTowGun.reset();
@@ -413,12 +422,13 @@ size_t TutorialUnits::attackWithVehicles(std::span<const size_t> indices, bool t
 }
 
 size_t TutorialUnits::attackVehicle(std::span<const size_t> indices, size_t targetVehicleIdx) {
-    if (!isValidVehicleAttackTarget(targetVehicleIdx)) return 0;
+    const int actor = actorOwner();
+    if (!isValidVehicleAttackTarget(targetVehicleIdx, actor)) return 0;
     size_t accepted = 0;
     for (size_t id : indices) {
         if (id >= soldiers_.size()) continue;
         auto& s = soldiers_[id];
-        if (s.owner != 0 || s.hp <= 0 || s.embarked ||
+        if (s.owner != actor || s.hp <= 0 || s.embarked ||
             (s.ammo <= 0 && (s.isAntiVehicle || s.isSniper || s.isFlamer || s.atGrenades <= 0)))
             continue;
         s.boardVehicleTarget.reset();
@@ -443,10 +453,13 @@ size_t TutorialUnits::attackVehicle(std::span<const size_t> indices, size_t targ
     return accepted;
 }
 
-bool TutorialUnits::isValidVehicleAttackTarget(size_t targetIdx) const {
+bool TutorialUnits::isValidVehicleAttackTarget(size_t targetIdx, int viewerOwner) const {
     if (targetIdx >= vehicles_.size()) return false;
     const auto& v = vehicles_[targetIdx];
-    return v.alive && v.hp > 0 && isHostile(0, v.owner) && v.visible;
+    if (!v.alive || v.hp <= 0 || !isHostile(viewerOwner, v.owner)) return false;
+    if (viewerOwner == 0 && !multiplayerSymmetry_) return v.visible;
+    return !fog_ || isAlliedFor(viewerOwner, v.owner) ||
+           (v.spottedMask & static_cast<std::uint8_t>(1u << viewerOwner)) != 0u;
 }
 
 size_t TutorialUnits::spawnVehicle(const assets::VehicleUnit& unit) {
@@ -505,12 +518,13 @@ bool TutorialUnits::embarkImmediate(size_t soldierIdx, size_t vehicleIdx) {
 }
 
 size_t TutorialUnits::orderBoardVehicle(std::span<const size_t> soldierIds, size_t vehicleIdx) {
-    if (!canBoardVehicle(vehicleIdx, 0)) return 0;
+    const int actor = actorOwner();
+    if (!canBoardVehicle(vehicleIdx, actor)) return 0;
     size_t accepted = 0;
     for (size_t id : soldierIds) {
         if (id >= soldiers_.size()) continue;
         auto& s = soldiers_[id];
-        if (s.owner != 0 || s.hp <= 0 || s.embarked || s.garrisonBuilding) continue;
+        if (s.owner != actor || s.hp <= 0 || s.embarked || s.garrisonBuilding) continue;
         s.boardVehicleTarget = vehicleIdx;
         s.captureVehicleTarget.reset();
         s.garrisonTarget.reset();
@@ -534,11 +548,12 @@ size_t TutorialUnits::orderBoardVehicle(std::span<const size_t> soldierIds, size
 }
 
 size_t TutorialUnits::unloadVehicles(std::span<const size_t> vehicleIds, std::vector<SoldierPose>* outPoses) {
+    const int actor = actorOwner();
     size_t unloaded = 0;
     for (size_t vid : vehicleIds) {
         if (vid >= vehicles_.size()) continue;
         auto& v = vehicles_[vid];
-        if (!v.alive || v.hp <= 0 || v.owner != 0 || v.passengers.empty()) continue;
+        if (!v.alive || v.hp <= 0 || v.owner != actor || v.passengers.empty()) continue;
         for (size_t sIdx : v.passengers) {
             if (sIdx >= soldiers_.size()) continue;
             auto& s = soldiers_[sIdx];
@@ -584,18 +599,21 @@ size_t TutorialUnits::unloadVehicles(std::span<const size_t> vehicleIds, std::ve
 }
 
 bool TutorialUnits::canCaptureVehicle(size_t vehicleIdx, int viewerOwner) const {
-    if (vehicleIdx >= vehicles_.size()) return false;
+    if (vehicleIdx >= vehicles_.size() || viewerOwner < 0 || viewerOwner >= 4) return false;
     const auto& v = vehicles_[vehicleIdx];
-    return viewerOwner == 0 && v.alive && v.hp > 0 && v.visible && v.owner == 3;
+    if (!v.alive || v.hp <= 0 || v.owner != 3) return false;
+    if (viewerOwner == 0 && !multiplayerSymmetry_) return v.visible;
+    return !fog_ || (v.spottedMask & static_cast<std::uint8_t>(1u << viewerOwner)) != 0u;
 }
 
 size_t TutorialUnits::orderCaptureVehicle(std::span<const size_t> soldierIds, size_t vehicleIdx) {
-    if (!canCaptureVehicle(vehicleIdx, 0)) return 0;
+    const int actor = actorOwner();
+    if (!canCaptureVehicle(vehicleIdx, actor)) return 0;
     size_t accepted = 0;
     for (size_t id : soldierIds) {
         if (id >= soldiers_.size()) continue;
         auto& s = soldiers_[id];
-        if (s.owner != 0 || s.hp <= 0 || s.embarked || s.garrisonBuilding) continue;
+        if (s.owner != actor || s.hp <= 0 || s.embarked || s.garrisonBuilding) continue;
         s.captureVehicleTarget = vehicleIdx;
         s.boardVehicleTarget.reset();
         s.garrisonTarget.reset();
@@ -627,7 +645,7 @@ std::vector<VehicleRangePreview> TutorialUnits::selectionRangePreviews(std::span
         if (std::ranges::find(seen, vid) != seen.end()) continue;
         seen.push_back(vid);
         const auto& v = vehicles_[vid];
-        if (!v.alive || v.hp <= 0 || v.owner != 0 || !v.hasCrew || !v.hasPrimary || v.range <= 0.0) continue;
+        if (!v.alive || v.hp <= 0 || v.owner != viewerOwner_ || !v.hasCrew || !v.hasPrimary || v.range <= 0.0) continue;
         out.push_back({v.x, v.y, static_cast<float>(v.range), static_cast<float>(v.deadzone)});
         if (out.size() >= 4u) break;
     }
@@ -638,7 +656,7 @@ std::vector<VehicleRangePreview> TutorialUnits::selectionRangePreviews(std::span
             if (std::ranges::find(seenSoldiers, sid) != seenSoldiers.end()) continue;
             seenSoldiers.push_back(sid);
             const auto& s = soldiers_[sid];
-            if (s.owner != 0 || s.hp <= 0 || s.embarked || s.garrisonBuilding ||
+            if (s.owner != viewerOwner_ || s.hp <= 0 || s.embarked || s.garrisonBuilding ||
                 (!s.isMortar && !s.isFlamer)) {
                 continue;
             }
@@ -658,11 +676,13 @@ std::vector<VehicleRangePreview> TutorialUnits::selectionRangePreviews(std::span
 
 std::vector<assets::Placement> TutorialUnits::abandonVehicles(std::span<const size_t> vehicleIds,
                                                               std::vector<SoldierPose>* outPoses) {
+    const int actor = actorOwner();
     std::vector<assets::Placement> crewPlacements;
     for (size_t vid : vehicleIds) {
         if (vid >= vehicles_.size()) continue;
         auto& v = vehicles_[vid];
-        if (!v.alive || v.hp <= 0 || v.owner != 0 || !v.hasCrew) continue;
+        if (!v.alive || v.hp <= 0 || v.owner != actor || !v.hasCrew) continue;
+        const int prevOwner = v.owner;
         if (!v.passengers.empty()) {
             (void)unloadVehicles(std::array<size_t, 1>{vid}, outPoses);
         }
@@ -706,7 +726,7 @@ std::vector<assets::Placement> TutorialUnits::abandonVehicles(std::span<const si
 
         const int cx = std::clamp(v.x + 18, 16, std::max(16, mapPixelW_ - 16));
         const int cy = std::clamp(v.y + 10, 16, std::max(16, mapPixelH_ - 16));
-        crewPlacements.push_back({crewId, cx, cy, 0, 100, 40, v.group, 0});
+        crewPlacements.push_back({crewId, cx, cy, 0, 100, 40, v.group, prevOwner});
     }
     if (!crewPlacements.empty() && fog_) {
         refreshSpotting(outPoses, true);
@@ -715,13 +735,14 @@ std::vector<assets::Placement> TutorialUnits::abandonVehicles(std::span<const si
 }
 
 size_t TutorialUnits::orderAttackGroundVehicles(std::span<const size_t> indices, int mapX, int mapY) {
+    const int actor = actorOwner();
     const int clampedX = std::clamp(mapX, 0, std::max(0, mapPixelW_ - 1));
     const int clampedY = std::clamp(mapY, 0, std::max(0, mapPixelH_ - 1));
     size_t accepted = 0;
     for (size_t id : indices) {
         if (id >= vehicles_.size()) continue;
         auto& v = vehicles_[id];
-        if (!v.alive || v.hp <= 0 || v.owner != 0 || v.towedBy || !v.hasPrimary || v.ammo <= 0) continue;
+        if (!v.alive || v.hp <= 0 || v.owner != actor || v.towedBy || !v.hasPrimary || v.ammo <= 0) continue;
         v.pendingTowGun.reset();
         v.attackGround = std::pair{clampedX, clampedY};
         v.attackTarget.reset();
@@ -838,7 +859,7 @@ void TutorialUnits::destroyVehicle(size_t vehicleIdx, std::vector<SoldierPose>& 
                 ss.spottedMask = 0;
                 fogDirty_ = true;
             }
-            const bool sVis = !fog_ || isAlliedWithPlayer(ss.owner) || (ss.spottedMask & 1u) != 0;
+            const bool sVis = isVisibleToViewer(ss.owner, ss.spottedMask);
             SoldierPose sp{k, sx, sy, ss.direction, 0, false, ss.hp, ss.hp > 0, ss.owner, ss.group, false, sVis};
             sp.suppressed = (ss.hp > 0 && ss.isSuppressed());
             pushOrUpdateSoldierPose(changed, sp);
@@ -908,7 +929,11 @@ bool TutorialUnits::canTowVehicle(size_t tractorIdx, size_t gunIdx, int viewerOw
 }
 
 size_t TutorialUnits::orderTowVehicle(size_t tractorIdx, size_t gunIdx) {
-    if (tractorIdx >= vehicles_.size() || !canTowVehicle(tractorIdx, gunIdx, vehicles_[tractorIdx].owner)) return 0;
+    const int actor = actorOwner();
+    if (tractorIdx >= vehicles_.size() || vehicles_[tractorIdx].owner != actor ||
+        !canTowVehicle(tractorIdx, gunIdx, actor)) {
+        return 0;
+    }
     auto& tr = vehicles_[tractorIdx];
     auto& gun = vehicles_[gunIdx];
     tr.attackTarget.reset();
@@ -951,11 +976,12 @@ size_t TutorialUnits::orderTowVehicle(size_t tractorIdx, size_t gunIdx) {
 }
 
 size_t TutorialUnits::unhitchVehicles(std::span<const size_t> vehicleIndices) {
+    const int actor = actorOwner();
     size_t unhitched = 0;
     for (size_t vid : vehicleIndices) {
         if (vid >= vehicles_.size()) continue;
         const auto& v = vehicles_[vid];
-        if (!v.alive || v.hp <= 0 || v.owner != 0) continue;
+        if (!v.alive || v.hp <= 0 || v.owner != actor) continue;
         if (v.towedVehicle) {
             detachTowedGun(vid);
             ++unhitched;
@@ -1028,7 +1054,7 @@ void TutorialUnits::emitVehiclePose(size_t index, bool fired, int targetX, int t
         v.hp,
         v.ammo,
         v.alive,
-        v.visible,
+        fog_ ? isVisibleToViewer(v.owner, v.spottedMask) : v.visible,
         v.moveTarget.has_value(),
         fired,
         targetX,
@@ -1115,7 +1141,8 @@ bool TutorialUnits::isVehicleTargetValidFor(int attackerOwner, bool targetIsVehi
         const auto& tv = vehicles_[targetIdx];
         if (!tv.alive || tv.hp <= 0 || !isHostile(attackerOwner, tv.owner)) return false;
         if (!fog_) return tv.visible;
-        return attackerOwner == 0 ? tv.visible : (tv.spottedMask & (1u << attackerOwner)) != 0;
+        return (attackerOwner == 0 && !multiplayerSymmetry_) ? tv.visible
+                                                              : (tv.spottedMask & (1u << attackerOwner)) != 0;
     }
     if (targetIdx >= soldiers_.size()) return false;
     const auto& ts = soldiers_[targetIdx];
@@ -1144,7 +1171,7 @@ void TutorialUnits::bailoutPassengers(size_t vehicleIdx, std::vector<SoldierPose
         ps.boardVehicleTarget.reset();
         grid_.setOccupied(spot, true);
         const auto [pu, pv] = soldierWorld(ps);
-        const bool pVis = !fog_ || ps.owner == 0 || (ps.spottedMask & 1u) != 0;
+        const bool pVis = isVisibleToViewer(ps.owner, ps.spottedMask);
         pushOrUpdateSoldierPose(changed, {
             sIdx, originX_ + pu - pv, (pu + pv) / 2, ps.direction, 0, false,
             ps.hp, true, ps.owner, ps.group, false, pVis
@@ -1559,7 +1586,7 @@ void TutorialUnits::stepVehicles(std::vector<SoldierPose>& changed) {
                 ss.binoculars = false;
                 ss.spottedMask = 0;
                 fogDirty_ = true;
-                const bool sVis = !fog_ || isAlliedWithPlayer(ss.owner) || (ss.spottedMask & 1u) != 0;
+                const bool sVis = isVisibleToViewer(ss.owner, ss.spottedMask);
                 pushOrUpdateSoldierPose(changed, {
                     k, sx, sy, ss.direction, 0, false, 0, false, ss.owner, ss.group, false, sVis
                 });
@@ -1703,11 +1730,24 @@ void TutorialUnits::stepVehicleCombat(std::vector<SoldierPose>& changed) {
         }
     };
     const auto markMuzzleFlashReveal = [&](Vehicle& veh, bool isSecondary, bool isHeavy, int dmg) {
-        if (!fog_ || isSecondary || !isHostile(0, veh.owner)) return;
+        if (!fog_ || isSecondary) return;
+        if (!multiplayerSymmetry_ && !isHostile(0, veh.owner)) return;
         if (!veh.isArtillery && !veh.isRocketArtillery && !isHeavy && dmg < 80) return;
         const unsigned dur = (veh.isArtillery || veh.isRocketArtillery) ? 125u : 75u;
         veh.muzzleRevealTicks = std::max(veh.muzzleRevealTicks, dur);
-        if (!veh.visible) {
+        if (multiplayerSymmetry_) {
+            bool changedMask = false;
+            for (int p = 0; p < 4; ++p) {
+                if (!isHostile(p, veh.owner)) continue;
+                const auto pBit = static_cast<std::uint8_t>(1u << p);
+                if ((veh.spottedMask & pBit) == 0u) {
+                    veh.spottedMask = static_cast<std::uint8_t>(veh.spottedMask | pBit);
+                    if (p == 0) veh.visible = true;
+                    changedMask = true;
+                }
+            }
+            if (changedMask) fogDirty_ = true;
+        } else if (!veh.visible) {
             veh.visible = true;
             veh.spottedMask = static_cast<std::uint8_t>(veh.spottedMask | 1u);
             fogDirty_ = true;
@@ -1929,7 +1969,7 @@ void TutorialUnits::stepVehicleCombat(std::vector<SoldierPose>& changed) {
                     ss.spottedMask = 0;
                     fogDirty_ = true;
                 }
-                const bool sVis = !fog_ || isAlliedWithPlayer(ss.owner) || (ss.spottedMask & 1u) != 0;
+                const bool sVis = isVisibleToViewer(ss.owner, ss.spottedMask);
                 pushOrUpdateSoldierPose(changed, {
                     k, sx, sy, ss.direction, 0, false, ss.hp, ss.hp > 0, ss.owner, ss.group, false, sVis
                 });
@@ -2286,7 +2326,7 @@ void TutorialUnits::stepVehicleCombat(std::vector<SoldierPose>& changed) {
                 ts.spottedMask = 0;
                 fogDirty_ = true;
             }
-            const bool tVis = !fog_ || isAlliedWithPlayer(ts.owner) || (ts.spottedMask & 1u) != 0;
+            const bool tVis = isVisibleToViewer(ts.owner, ts.spottedMask);
             pushOrUpdateSoldierPose(changed, {
                 tid, originX_ + tu - tv, (tu + tv) / 2, ts.direction, 0, false,
                 ts.hp, ts.hp > 0, ts.owner, ts.group, false, tVis

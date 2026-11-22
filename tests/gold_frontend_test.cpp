@@ -123,12 +123,45 @@ void testFallbackInteraction() {
     check(fe.state().screen() == ss2::FrontEnd::Screen::MainMenu, "starts MainMenu");
 
     fe.handleMouseDown(188.0, 195.0, 1);  // Multiplayer
-    check(fe.state().screen() == ss2::FrontEnd::Screen::MainMenu, "multiplayer stays MainMenu");
-    check(!fe.activeNotice().empty(), "multiplayer notice active");
+    check(fe.state().screen() == ss2::FrontEnd::Screen::Multiplayer, "multiplayer enters Screen::Multiplayer");
+    fe.handleMouseDown(188.0, 529.0, 1);  // Start on empty Host MP list
+    check(fe.state().screen() == ss2::FrontEnd::Screen::Multiplayer, "empty MP Start stays Multiplayer");
+    check(!fe.activeNotice().empty(), "empty MP Start notice active");
     fe.advance(std::chrono::seconds(7));
     check(!fe.activeNotice().empty(), "notice remains visible past 7s");
     fe.advance(std::chrono::seconds(24));
     check(fe.activeNotice().empty(), "notice expires after 30s total");
+
+    // Toggle Host/Join, edit Host Address & Port, select MP mission, render, then return to MainMenu
+    std::vector<std::uint8_t> mpBuf;
+    fe.handleMouseDown(600.0, 153.0, 1);  // mp_mode
+    check(!fe.state().mpIsHost(), "mp_mode clicked -> Join Match");
+    fe.handleMouseDown(500.0, 220.0, 1);  // mp_host_field
+    for (int i = 0; i < 9; ++i) fe.handleKey(SDLK_BACKSPACE);
+    {
+        SDL_Event te{};
+        te.type = SDL_EVENT_TEXT_INPUT;
+        te.text.text = "10.0.0.5";
+        fe.handleEvent(te);
+    }
+    check(fe.state().mpHostAddress() == "10.0.0.5", "edited Host Address in Multiplayer screen");
+    fe.handleMouseDown(500.0, 284.0, 1);  // mp_port_field
+    for (int i = 0; i < 5; ++i) fe.handleKey(SDLK_BACKSPACE);
+    {
+        SDL_Event pe{};
+        pe.type = SDL_EVENT_TEXT_INPUT;
+        pe.text.text = "28000";
+        fe.handleEvent(pe);
+    }
+    fe.handleMouseDown(600.0, 153.0, 1);  // commit port and toggle back to Host Match
+    check(fe.state().mpIsHost() && fe.state().mpPort() == 28000u, "edited Port committed in Multiplayer screen");
+    fe.setMultiplayerMissions(makeSyntheticMissions(5));
+    fe.handleMouseDown(120.0, 168.0, 1);  // row 1
+    check(fe.state().selectedMultiplayerMission() == 1, "clicked MP map row 1");
+    fe.renderToBuffer(1280, 720, mpBuf);
+    check(mpBuf.size() == 1280u * 720u * 4u, "fallback Multiplayer buffer size");
+    fe.handleKey(SDLK_ESCAPE);
+    check(fe.state().screen() == ss2::FrontEnd::Screen::MainMenu, "Esc from Multiplayer returns to MainMenu");
 
     // Navigate Main -> SinglePlayer -> SingleMissions -> Briefing -> Cancel preserves selection -> Launch
     fe.handleMouseDown(188.0, 128.0, 1);  // SINGLE PLAYER [65,111,246,35]
@@ -387,6 +420,17 @@ void testRetailGoldAssets(const std::filesystem::path& gameDir) {
     }
     fe.setMissions(std::move(entries));
 
+    const auto mpList = ss2::assets::listMultiplayerMissions(gameDir);
+    check(mpList.size() == 35u, "retail 35 multiplayer missions listed");
+    std::vector<ss2::GoldMissionEntry> mpEntries;
+    mpEntries.reserve(mpList.size());
+    for (const auto& m : mpList) {
+        mpEntries.push_back({m.name, m.path.string(), m.description,
+                             m.scheme == 2 ? "Beach" : "Summer",
+                             m.width, m.height, m.scheme, false, 0});
+    }
+    fe.setMultiplayerMissions(std::move(mpEntries));
+
     // Load all 5 retail campaigns (31 missions)
     const auto campList = ss2::assets::listCampaigns(gameDir);
     check(campList.size() == 5, "retail 5 campaigns listed");
@@ -550,6 +594,13 @@ void testRetailGoldAssets(const std::filesystem::path& gameDir) {
     fe.handleKey(SDLK_ESCAPE);
     fe.handleKey(SDLK_ESCAPE);
     check(fe.state().screen() == ss2::FrontEnd::Screen::MainMenu, "returned from LoadGame to MainMenu");
+
+    fe.handleKey(SDLK_M);
+    check(fe.state().screen() == ss2::FrontEnd::Screen::Multiplayer, "retail Multiplayer");
+    fe.renderToBuffer(1280, 720, frame);
+    if (!capDir.empty()) writePng(capDir / "screen10_multiplayer.png", 1280, 720, frame);
+    fe.handleKey(SDLK_ESCAPE);
+    check(fe.state().screen() == ss2::FrontEnd::Screen::MainMenu, "returned from Multiplayer to MainMenu");
 }
 
 void testVulkanWindowOverlay(bool validate, const std::filesystem::path& gameDir) {
@@ -566,8 +617,9 @@ void testVulkanWindowOverlay(bool validate, const std::filesystem::path& gameDir
     ss2::GoldFrontEnd fe(win, gameDir, 0);
     fe.setMissions(makeSyntheticMissions(3));
     fe.setCampaigns(makeSyntheticCampaigns());
+    fe.setMultiplayerMissions(makeSyntheticMissions(3));
     const ss2::Snapshot empty{};
-    for (int i = 0; i < 19; ++i) {
+    for (int i = 0; i < 21; ++i) {
         if (i == 1) fe.handleKey(SDLK_O);       // Options
         if (i == 2) fe.handleKey(SDLK_ESCAPE);  // Back to MainMenu
         if (i == 3) fe.handleKey(SDLK_P);       // Replays
@@ -585,6 +637,9 @@ void testVulkanWindowOverlay(bool validate, const std::filesystem::path& gameDir
         if (i == 15) fe.handleKey(SDLK_G);      // German Campaign missions
         if (i == 16) fe.handleKey(SDLK_D);      // Cycle difficulty
         if (i == 17) fe.handleKey(SDLK_RETURN); // Campaign Briefing
+        if (i == 18) { fe.handleKey(SDLK_ESCAPE); fe.handleKey(SDLK_ESCAPE); fe.handleKey(SDLK_ESCAPE); fe.handleKey(SDLK_ESCAPE); } // Back to MainMenu
+        if (i == 19) fe.handleKey(SDLK_M);      // Multiplayer
+        if (i == 20) fe.handleKey(SDLK_ESCAPE); // Back to MainMenu
         fe.draw(renderer);
         renderer.present(empty);
     }

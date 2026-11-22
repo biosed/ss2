@@ -21,11 +21,12 @@ bool needsSupplyService(int hp, int maxHp, int ammo, int maxAmmo, int ammo2, int
 }
 }
 bool TutorialUnits::canSupportVehicle(std::span<const size_t> supporterVehicleIds, size_t targetVehicleIdx) const {
+    const int owner = effectiveQueryOwner();
     if (targetVehicleIdx >= vehicles_.size()) return false;
     const auto& target = vehicles_[targetVehicleIdx];
     if (!target.alive || target.hp <= 0) return false;
-    const bool targetIsAccessibleCrate = target.isCrate && (target.owner == 0 || target.owner == 3);
-    if (!targetIsAccessibleCrate && target.owner != 0) return false;
+    const bool targetIsAccessibleCrate = target.isCrate && (target.owner == owner || target.owner == 3);
+    if (!targetIsAccessibleCrate && target.owner != owner) return false;
 
     const bool targetNeedsRepair = !target.isCrate && target.hp < target.maxHp;
     const bool targetNeedsAmmo1 = !target.isSupply && target.maxAmmo > 0 && target.ammo < target.maxAmmo;
@@ -36,7 +37,7 @@ bool TutorialUnits::canSupportVehicle(std::span<const size_t> supporterVehicleId
     return std::ranges::any_of(supporterVehicleIds, [&](size_t id) {
         if (id >= vehicles_.size() || id == targetVehicleIdx) return false;
         const auto& v = vehicles_[id];
-        if (!v.alive || v.hp <= 0 || v.owner != 0 || !v.isSupply || v.isCrate || v.speedPx <= 0.0 || v.towedBy) {
+        if (!v.alive || v.hp <= 0 || v.owner != owner || !v.isSupply || v.isCrate || v.speedPx <= 0.0 || v.towedBy) {
             return false;
         }
         if (targetIsAccessibleCrate) {
@@ -49,6 +50,7 @@ bool TutorialUnits::canSupportVehicle(std::span<const size_t> supporterVehicleId
 }
 
 size_t TutorialUnits::orderSupportVehicle(std::span<const size_t> supporterVehicleIds, size_t targetVehicleIdx) {
+    const int actor = actorOwner();
     if (!canSupportVehicle(supporterVehicleIds, targetVehicleIdx)) return 0;
     const auto& target = vehicles_[targetVehicleIdx];
     size_t accepted = 0;
@@ -57,7 +59,7 @@ size_t TutorialUnits::orderSupportVehicle(std::span<const size_t> supporterVehic
         if (id >= vehicles_.size() || id == targetVehicleIdx || std::ranges::find(seen, id) != seen.end()) continue;
         seen.push_back(id);
         auto& v = vehicles_[id];
-        if (!v.alive || v.hp <= 0 || v.owner != 0 || !v.isSupply || v.isCrate || v.speedPx <= 0.0 || v.towedBy) continue;
+        if (!v.alive || v.hp <= 0 || v.owner != actor || !v.isSupply || v.isCrate || v.speedPx <= 0.0 || v.towedBy) continue;
         v.pendingTowGun.reset();
         v.queuedOrders.clear();
         v.attackMove = false;
@@ -89,16 +91,17 @@ size_t TutorialUnits::orderSupportVehicle(std::span<const size_t> supporterVehic
 }
 
 bool TutorialUnits::canSupportBuilding(std::span<const size_t> supporterVehicleIds, size_t buildingIdx) const {
+    const int owner = effectiveQueryOwner();
     if (buildingIdx >= buildings_.size()) return false;
     const auto& b = buildings_[buildingIdx];
-    if (b.destroyed || (b.owner >= 0 && b.owner != 0)) return false;
+    if (b.destroyed || (b.owner >= 0 && b.owner != owner)) return false;
     bool needsSupply = b.hp < b.maxHp;
     bool needsMedic = false;
-    if (b.owner == 0) {
+    if (b.owner == owner) {
         for (size_t sIdx : b.occupants) {
             if (sIdx >= soldiers_.size()) continue;
             const auto& s = soldiers_[sIdx];
-            if (s.owner != 0 || s.hp <= 0) continue;
+            if (s.owner != owner || s.hp <= 0) continue;
             if (s.hp < s.maxHp) needsMedic = true;
             const bool canCarryGrenades = !s.isAntiVehicle && !s.isMedic && !s.isOfficer && !s.isMortar;
             const int maxInfAmmo = std::max(1, s.desc.maxAmmo);
@@ -113,21 +116,22 @@ bool TutorialUnits::canSupportBuilding(std::span<const size_t> supporterVehicleI
     return std::ranges::any_of(supporterVehicleIds, [&](size_t id) {
         if (id >= vehicles_.size()) return false;
         const auto& v = vehicles_[id];
-        if (!v.alive || v.hp <= 0 || v.owner != 0 || v.speedPx <= 0.0 || v.towedBy) return false;
+        if (!v.alive || v.hp <= 0 || v.owner != owner || v.speedPx <= 0.0 || v.towedBy) return false;
         return (needsSupply && v.isSupply) || (needsMedic && v.isAmbulance);
     });
 }
 
 size_t TutorialUnits::orderSupportBuilding(std::span<const size_t> supporterVehicleIds, size_t buildingIdx) {
+    const int actor = actorOwner();
     if (!canSupportBuilding(supporterVehicleIds, buildingIdx)) return 0;
     const auto& b = buildings_[buildingIdx];
     bool needsSupply = b.hp < b.maxHp;
     bool needsMedic = false;
-    if (b.owner == 0) {
+    if (b.owner == actor) {
         for (size_t sIdx : b.occupants) {
             if (sIdx >= soldiers_.size()) continue;
             const auto& s = soldiers_[sIdx];
-            if (s.owner != 0 || s.hp <= 0) continue;
+            if (s.owner != actor || s.hp <= 0) continue;
             if (s.hp < s.maxHp) needsMedic = true;
             const bool canCarryGrenades = !s.isAntiVehicle && !s.isMedic && !s.isOfficer && !s.isMortar;
             const int maxInfAmmo = std::max(1, s.desc.maxAmmo);
@@ -146,7 +150,7 @@ size_t TutorialUnits::orderSupportBuilding(std::span<const size_t> supporterVehi
         if (id >= vehicles_.size() || std::ranges::find(seen, id) != seen.end()) continue;
         seen.push_back(id);
         auto& v = vehicles_[id];
-        if (!v.alive || v.hp <= 0 || v.owner != 0 || v.speedPx <= 0.0 || v.towedBy) continue;
+        if (!v.alive || v.hp <= 0 || v.owner != actor || v.speedPx <= 0.0 || v.towedBy) continue;
         if (!((needsSupply && v.isSupply) || (needsMedic && v.isAmbulance))) continue;
         v.pendingTowGun.reset();
         v.queuedOrders.clear();
@@ -181,24 +185,26 @@ size_t TutorialUnits::orderSupportBuilding(std::span<const size_t> supporterVehi
 
 bool TutorialUnits::canHealSoldier(std::span<const size_t> medicSoldierIds, std::span<const size_t> ambulanceVehicleIds,
                                    size_t targetSoldierIdx) const {
+    const int owner = effectiveQueryOwner();
     if (targetSoldierIdx >= soldiers_.size()) return false;
     const auto& t = soldiers_[targetSoldierIdx];
-    if (t.owner != 0 || t.hp <= 0 || t.embarked || t.garrisonBuilding || t.hp >= t.maxHp) return false;
+    if (t.owner != owner || t.hp <= 0 || t.embarked || t.garrisonBuilding || t.hp >= t.maxHp) return false;
     const bool hasMedic = std::ranges::any_of(medicSoldierIds, [&](size_t id) {
         if (id >= soldiers_.size() || id == targetSoldierIdx) return false;
         const auto& s = soldiers_[id];
-        return s.owner == 0 && s.hp > 0 && !s.embarked && !s.garrisonBuilding && s.isMedic;
+        return s.owner == owner && s.hp > 0 && !s.embarked && !s.garrisonBuilding && s.isMedic;
     });
     if (hasMedic) return true;
     return std::ranges::any_of(ambulanceVehicleIds, [&](size_t id) {
         if (id >= vehicles_.size()) return false;
         const auto& v = vehicles_[id];
-        return v.alive && v.hp > 0 && v.owner == 0 && v.isAmbulance && v.speedPx > 0.0 && !v.towedBy;
+        return v.alive && v.hp > 0 && v.owner == owner && v.isAmbulance && v.speedPx > 0.0 && !v.towedBy;
     });
 }
 
 size_t TutorialUnits::orderHealSoldier(std::span<const size_t> medicSoldierIds, std::span<const size_t> ambulanceVehicleIds,
                                        size_t targetSoldierIdx) {
+    const int actor = actorOwner();
     if (!canHealSoldier(medicSoldierIds, ambulanceVehicleIds, targetSoldierIdx)) return 0;
     const auto& t = soldiers_[targetSoldierIdx];
     const auto [tu, tv] = soldierWorld(t);
@@ -213,7 +219,7 @@ size_t TutorialUnits::orderHealSoldier(std::span<const size_t> medicSoldierIds, 
         }
         seenMedics.push_back(id);
         auto& s = soldiers_[id];
-        if (s.owner != 0 || s.hp <= 0 || s.embarked || s.garrisonBuilding || !s.isMedic) continue;
+        if (s.owner != actor || s.hp <= 0 || s.embarked || s.garrisonBuilding || !s.isMedic) continue;
         const auto [su, sv] = soldierWorld(s);
         const double worldDist = det::detHypot(static_cast<double>(su - tu), static_cast<double>(sv - tv));
         if (worldDist <= 84.0) {
@@ -256,7 +262,7 @@ size_t TutorialUnits::orderHealSoldier(std::span<const size_t> medicSoldierIds, 
         if (id >= vehicles_.size() || std::ranges::find(seenAmbs, id) != seenAmbs.end()) continue;
         seenAmbs.push_back(id);
         auto& v = vehicles_[id];
-        if (!v.alive || v.hp <= 0 || v.owner != 0 || !v.isAmbulance || v.speedPx <= 0.0 || v.towedBy) continue;
+        if (!v.alive || v.hp <= 0 || v.owner != actor || !v.isAmbulance || v.speedPx <= 0.0 || v.towedBy) continue;
         v.pendingTowGun.reset();
         v.queuedOrders.clear();
         v.attackMove = false;
@@ -290,44 +296,47 @@ size_t TutorialUnits::orderHealSoldier(std::span<const size_t> medicSoldierIds, 
 
 bool TutorialUnits::canEscortVehicle(std::span<const size_t> soldierIds, std::span<const size_t> vehicleIds,
                                      size_t targetVehicleIdx) const {
+    const int owner = effectiveQueryOwner();
     if (targetVehicleIdx >= vehicles_.size()) return false;
     const auto& t = vehicles_[targetVehicleIdx];
-    if (!t.alive || t.hp <= 0 || t.owner != 0) return false;
+    if (!t.alive || t.hp <= 0 || t.owner != owner) return false;
     const bool hasSol = std::ranges::any_of(soldierIds, [&](size_t id) {
         if (id >= soldiers_.size()) return false;
         const auto& s = soldiers_[id];
-        return s.owner == 0 && s.hp > 0 && !s.embarked && !s.garrisonBuilding;
+        return s.owner == owner && s.hp > 0 && !s.embarked && !s.garrisonBuilding;
     });
     if (hasSol) return true;
     return std::ranges::any_of(vehicleIds, [&](size_t id) {
         if (id >= vehicles_.size() || id == targetVehicleIdx) return false;
         const auto& v = vehicles_[id];
-        return v.alive && v.hp > 0 && v.owner == 0 && v.speedPx > 0.0 && !v.towedBy &&
+        return v.alive && v.hp > 0 && v.owner == owner && v.speedPx > 0.0 && !v.towedBy &&
                v.towedVehicle != targetVehicleIdx;
     });
 }
 
 bool TutorialUnits::canEscortSoldier(std::span<const size_t> soldierIds, std::span<const size_t> vehicleIds,
                                      size_t targetSoldierIdx) const {
+    const int owner = effectiveQueryOwner();
     if (targetSoldierIdx >= soldiers_.size()) return false;
     const auto& t = soldiers_[targetSoldierIdx];
-    if (t.owner != 0 || t.hp <= 0 || t.embarked || t.garrisonBuilding) return false;
+    if (t.owner != owner || t.hp <= 0 || t.embarked || t.garrisonBuilding) return false;
     const bool hasSol = std::ranges::any_of(soldierIds, [&](size_t id) {
         if (id >= soldiers_.size() || id == targetSoldierIdx) return false;
         const auto& s = soldiers_[id];
-        return s.owner == 0 && s.hp > 0 && !s.embarked && !s.garrisonBuilding;
+        return s.owner == owner && s.hp > 0 && !s.embarked && !s.garrisonBuilding;
     });
     if (hasSol) return true;
     return std::ranges::any_of(vehicleIds, [&](size_t id) {
         if (id >= vehicles_.size()) return false;
         const auto& v = vehicles_[id];
-        return v.alive && v.hp > 0 && v.owner == 0 && v.speedPx > 0.0 && !v.towedBy;
+        return v.alive && v.hp > 0 && v.owner == owner && v.speedPx > 0.0 && !v.towedBy;
     });
 }
 
 size_t TutorialUnits::dispatchEscort(std::span<const size_t> soldierIds, std::span<const size_t> vehicleIds,
                                      double targetX, double targetY, std::optional<size_t> targetVehicleIdx,
                                      std::optional<size_t> targetSoldierIdx) {
+    const int actor = actorOwner();
     size_t accepted = 0;
     std::vector<size_t> seenSoldiers;
     seenSoldiers.reserve(soldierIds.size());
@@ -338,7 +347,7 @@ size_t TutorialUnits::dispatchEscort(std::span<const size_t> soldierIds, std::sp
         }
         seenSoldiers.push_back(id);
         auto& s = soldiers_[id];
-        if (s.owner != 0 || s.hp <= 0 || s.embarked || s.garrisonBuilding) continue;
+        if (s.owner != actor || s.hp <= 0 || s.embarked || s.garrisonBuilding) continue;
         s.queuedGoals.clear();
         s.patrolOrigin.reset();
         s.patrolDest.reset();
@@ -386,7 +395,7 @@ size_t TutorialUnits::dispatchEscort(std::span<const size_t> soldierIds, std::sp
         }
         seenVehicles.push_back(id);
         auto& v = vehicles_[id];
-        if (!v.alive || v.hp <= 0 || v.owner != 0 || v.speedPx <= 0.0 || v.towedBy) continue;
+        if (!v.alive || v.hp <= 0 || v.owner != actor || v.speedPx <= 0.0 || v.towedBy) continue;
         if (targetVehicleIdx && v.towedVehicle == targetVehicleIdx) continue;
         v.pendingTowGun.reset();
         v.queuedOrders.clear();
@@ -546,7 +555,7 @@ void TutorialUnits::stepMedicHeal(std::vector<SoldierPose>& changed) {
             const unsigned dir = target.motion ? target.motion->direction : target.direction;
             const unsigned prog = target.motion ? target.motion->progress : 0u;
             const bool walking = target.motion ? target.motion->running : false;
-            const bool vis = !fog_ || target.owner == 0 || (target.spottedMask & 1u) != 0;
+            const bool vis = isVisibleToViewer(target.owner, target.spottedMask);
             changed.push_back({*bestIdx, originX_ + tu - tv, (tu + tv) / 2, dir, prog, walking,
                                target.hp, true, target.owner, target.group, false, vis});
         }
@@ -569,7 +578,7 @@ void TutorialUnits::stepSupplyAndRepair(std::vector<SoldierPose>& changed) {
         const unsigned dir = s.motion ? s.motion->direction : s.direction;
         const unsigned prog = s.motion ? s.motion->progress : 0u;
         const bool walking = s.motion ? s.motion->running : false;
-        const bool vis = !fog_ || s.owner == 0 || (s.spottedMask & 1u) != 0;
+        const bool vis = isVisibleToViewer(s.owner, s.spottedMask);
         changed.push_back({idx, originX_ + tu - tv, (tu + tv) / 2, dir, prog, walking,
                            s.hp, true, s.owner, s.group, false, vis, 0, 0, false,
                            s.expa, s.kills, false, s.atGrenades, false, isSoldierCamouflaged(s),

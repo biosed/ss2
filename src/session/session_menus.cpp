@@ -383,7 +383,7 @@ void GameSession::openForceOverviewMenu(bool fromPauseMenu) {
     const auto& units = scene->units();
     for (std::size_t idx = 0; idx < units.size(); ++idx) {
         const auto& u = units[idx];
-        if (u.owner != 0 || u.hp <= 0 || !u.visible) continue;
+        if (u.owner != localOwner() || u.hp <= 0 || !u.visible) continue;
         ++activeInfField;
         auto& entry = byClass[hudDisplayName(u.id)];
         entry.infIds.push_back(idx);
@@ -396,7 +396,7 @@ void GameSession::openForceOverviewMenu(bool fromPauseMenu) {
         const auto& vehs = vehicleScene->vehicles();
         for (std::size_t idx = 0; idx < vehs.size(); ++idx) {
             const auto& v = vehs[idx];
-            if (!v.alive || v.hp <= 0 || v.owner != 0 || !v.visible) continue;
+            if (!v.alive || v.hp <= 0 || v.owner != localOwner() || !v.visible) continue;
             ++activeVeh;
             auto& entry = byClass[hudDisplayName(v.id)];
             entry.vehIds.push_back(idx);
@@ -409,7 +409,7 @@ void GameSession::openForceOverviewMenu(bool fromPauseMenu) {
     }
     unsigned garrisonedInf = 0;
     for (const auto& lb : liveBuildings) {
-        if (!lb.destroyed && lb.owner == 0 && lb.occupantCount > 0) {
+        if (!lb.destroyed && lb.owner == localOwner() && lb.occupantCount > 0) {
             garrisonedInf += static_cast<unsigned>(lb.occupantCount);
         }
     }
@@ -428,7 +428,7 @@ void GameSession::openForceOverviewMenu(bool fromPauseMenu) {
     items.push_back({"", ss2::tr("Battle score"),
                      std::to_string(std::max(0, enemyScoreEarned - friendlyScoreLost / 2)), false});
     int totalAirReady = 0;
-    for (const auto& as : simulation->playerAirSupport()) {
+    for (const auto& as : simulation->airSupportFor(localOwner())) {
         totalAirReady += std::max(0, as.ready);
     }
     if (totalAirReady > 0) {
@@ -449,7 +449,7 @@ void GameSession::openForceOverviewMenu(bool fromPauseMenu) {
     }
     for (std::size_t bi = 0; bi < liveBuildings.size(); ++bi) {
         const auto& lb = liveBuildings[bi];
-        if (lb.destroyed || lb.owner != 0 || lb.occupantCount <= 0) continue;
+        if (lb.destroyed || lb.owner != localOwner() || lb.occupantCount <= 0) continue;
         items.push_back({"force_bldg:" + std::to_string(bi), ss2::tr("Garrisoned building"),
                          std::to_string(lb.occupantCount) + "/" + std::to_string(lb.capacity) +
                              " | HP " + std::to_string(lb.hp) + "/" + std::to_string(lb.maxHp),
@@ -489,6 +489,10 @@ std::filesystem::path GameSession::quickSavePath(int slot) const {
 
 void GameSession::doSaveSlot(int slot) {
     if (!simulation) return;
+    if (multiplayer.enabled) {
+        orderNotice.show(ss2::tr("Save/load disabled in multiplayer."), ss2::NoticeKind::unsupported);
+        return;
+    }
     const auto path = quickSavePath(slot);
     SaveFileMetadata meta{};
     meta.hasMetadata = true;
@@ -537,6 +541,12 @@ void GameSession::doSaveSlot(int slot) {
 bool GameSession::loadSaveFromPath(const std::filesystem::path& path, const std::string& loadedNotice,
                                    bool isStartupLoad) {
     if (!simulation || !scene || !selection) return false;
+    if (multiplayer.enabled) {
+        if (!isStartupLoad) {
+            orderNotice.show(ss2::tr("Save/load disabled in multiplayer."), ss2::NoticeKind::unsupported);
+        }
+        return false;
+    }
     std::error_code ec;
     if (!std::filesystem::is_regular_file(path, ec)) {
         if (!isStartupLoad) {
@@ -731,6 +741,10 @@ void GameSession::doQuickLoad() { doLoadSlot(0); }
 
 void GameSession::openSaveLoadMenu() {
     if (!simulation) return;
+    if (multiplayer.enabled) {
+        orderNotice.show(ss2::tr("Save/load disabled in multiplayer."), ss2::NoticeKind::unsupported);
+        return;
+    }
     std::vector<ss2::MenuItem> items;
     items.push_back({"back", ss2::tr("Back to pause menu"), "", true});
     items.push_back({"", ss2::tr("Save Game"), "", false});

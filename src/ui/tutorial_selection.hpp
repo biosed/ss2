@@ -30,6 +30,8 @@ public:
     }
 
     void setVehicles(std::vector<assets::VehicleUnit> vehicles);
+    void setLocalPlayer(int owner);
+    int localPlayer() const noexcept { return localPlayer_; }
     const std::set<size_t>& selected() const { return selected_; }
     const std::set<size_t>& selectedVehicles() const { return selectedVehicles_; }
     std::optional<size_t> infantryAt(int mapX, int mapY) const;
@@ -57,6 +59,7 @@ private:
     std::vector<assets::VehicleUnit> vehicles_;
     int mapScale_;
     int originX_{4096};
+    int localPlayer_{0};
     std::string missionTitle_{"Tutorial I"};
     size_t nextVehicle_{};
     std::set<size_t> selected_;

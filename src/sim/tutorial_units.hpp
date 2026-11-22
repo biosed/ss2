@@ -253,7 +253,7 @@ public:
     std::optional<bool> toggleMarchMode(std::span<const size_t> vehicleIds);
     size_t attackWithVehicles(std::span<const size_t> indices, bool targetIsVehicle, size_t targetIdx);
     size_t attackVehicle(std::span<const size_t> indices, size_t targetVehicleIdx);
-    bool isValidVehicleAttackTarget(size_t targetIdx) const;
+    bool isValidVehicleAttackTarget(size_t targetIdx, int viewerOwner = 0) const;
     size_t spawnVehicle(const assets::VehicleUnit& unit);
     std::vector<VehiclePose> takeVehiclePoses();
 
@@ -272,7 +272,31 @@ public:
     void setPlayerTeams(std::array<int, 4> teams);
     int playerTeam(int owner) const noexcept;
     bool isHostile(int ownerA, int ownerB) const;
+    bool isAlliedFor(int viewer, int owner) const;
     bool isAlliedWithPlayer(int owner) const;
+    void setViewerOwner(int owner);
+    int viewerOwner() const noexcept { return viewerOwner_; }
+    void setMultiplayerSymmetry(bool enabled);
+    bool multiplayerSymmetry() const noexcept { return multiplayerSymmetry_; }
+    bool isVisibleToViewer(int owner, std::uint8_t spottedMask) const;
+    int actorOwner() const noexcept { return commandActor_; }
+    int effectiveQueryOwner() const noexcept { return commandActorActive_ ? commandActor_ : viewerOwner_; }
+    struct ScopedCommandActor {
+        TutorialUnits& units;
+        int previous{0};
+        bool prevActive{false};
+        ScopedCommandActor(TutorialUnits& u, int actor) noexcept
+            : units(u), previous(u.commandActor_), prevActive(u.commandActorActive_) {
+            u.commandActor_ = (actor >= 0 && actor < 4) ? actor : 0;
+            u.commandActorActive_ = true;
+        }
+        ~ScopedCommandActor() {
+            units.commandActor_ = previous;
+            units.commandActorActive_ = prevActive;
+        }
+        ScopedCommandActor(const ScopedCommandActor&) = delete;
+        ScopedCommandActor& operator=(const ScopedCommandActor&) = delete;
+    };
     void setMines(std::vector<std::uint8_t> mines);
     std::vector<MineEvent> takeMineEvents();
     size_t orderLayMine(std::span<const size_t> soldierIds, std::vector<SoldierPose>* outPoses = nullptr);
@@ -701,6 +725,12 @@ private:
     std::vector<ReserveUnit> reserveUnits_;
     int cookOffDepth_{0};
     WeatherKind weather_{WeatherKind::Clear};
+    // View-only presentation seat (0..3); NEVER read by simulation logic or included in stateHash().
+    int viewerOwner_{0};
+    // Transient command executor seat (0..3) set via ScopedCommandActor; always 0 at rest.
+    int commandActor_{0};
+    bool commandActorActive_{false};
+    bool multiplayerSymmetry_{false};
     struct Destination { size_t soldier; int mapX, mapY; };
     std::vector<Destination> formationTargets(std::span<const size_t>, int mapX, int mapY) const;
     std::vector<std::pair<size_t, std::pair<int, int>>> vehicleFormationTargets(
@@ -765,7 +795,8 @@ private:
     void stepBoarding(std::vector<SoldierPose>& changed);
     void stepCaptures(std::vector<SoldierPose>& changed);
     void recordHit(int owner, int group = -1);
-    std::optional<std::pair<int, int>> findDetectedHostileMineNear(int mapX, int mapY, double maxDistPx) const;
+    std::optional<std::pair<int, int>> findDetectedHostileMineNear(int mapX, int mapY, double maxDistPx,
+                                                                   int viewerOwner = 0) const;
     void triggerMineAtTile(int tx, int ty, std::vector<SoldierPose>& changed, bool forceAny = false);
     void stepMines(std::vector<SoldierPose>& changed);
     void stepSoldierAttackVehicle(Soldier& s, size_t index, std::vector<SoldierPose>& changed);

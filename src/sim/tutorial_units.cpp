@@ -95,7 +95,7 @@ bool TutorialUnits::isElevatedMapPoint(int mapX, int mapY) const {
 bool TutorialUnits::canMove(size_t index, int x, int y) const {
     if (!mapBounds(x,y) || index >= soldiers_.size()) return false;
     const auto& soldier = soldiers_[index];
-    if (soldier.owner != 0 || soldier.hp <= 0 || soldier.embarked || soldier.garrisonBuilding) return false;
+    if (soldier.owner != actorOwner() || soldier.hp <= 0 || soldier.embarked || soldier.garrisonBuilding) return false;
     const auto dest = pointerCell(x,y,originX_);
     if (!grid_.inBounds(dest)) return false;
     return (soldier.goal && sameTile(dest, *soldier.goal)) || grid_.hasTerrainRoute(soldier.cell,dest);
@@ -184,11 +184,12 @@ bool TutorialUnits::canMoveSelection(std::span<const size_t> ids, int x, int y) 
 }
 
 size_t TutorialUnits::orderSelection(std::span<const size_t> ids, int x, int y, bool append) {
+    const int actor = actorOwner();
     size_t accepted = 0;
     for (const auto& t : formationTargets(ids, x, y)) {
         auto& s = soldiers_[t.soldier];
         const bool busy = s.motion || s.goal || !s.route.empty();
-        if (append && busy && s.owner == 0 && s.hp > 0 && !s.embarked && mapBounds(t.mapX, t.mapY)) {
+        if (append && busy && s.owner == actor && s.hp > 0 && !s.embarked && mapBounds(t.mapX, t.mapY)) {
             const auto dest = pointerCell(t.mapX, t.mapY, originX_);
             if (grid_.inBounds(dest) && grid_.hasTerrainRoute(s.cell, dest)) {
                 s.patrolOrigin.reset();
@@ -209,11 +210,12 @@ size_t TutorialUnits::orderSelection(std::span<const size_t> ids, int x, int y, 
 }
 
 size_t TutorialUnits::orderAttackMove(std::span<const size_t> ids, int mapX, int mapY, bool append) {
+    const int actor = actorOwner();
     size_t accepted = 0;
     for (const auto& t : formationTargets(ids, mapX, mapY)) {
         auto& s = soldiers_[t.soldier];
         const bool busy = s.motion || s.goal || !s.route.empty();
-        if (append && busy && s.owner == 0 && s.hp > 0 && !s.embarked && mapBounds(t.mapX, t.mapY)) {
+        if (append && busy && s.owner == actor && s.hp > 0 && !s.embarked && mapBounds(t.mapX, t.mapY)) {
             const auto dest = pointerCell(t.mapX, t.mapY, originX_);
             if (grid_.inBounds(dest) && grid_.hasTerrainRoute(s.cell, dest)) {
                 s.patrolOrigin.reset();
@@ -273,11 +275,12 @@ size_t TutorialUnits::orderScatter(std::span<const size_t> ids) {
     std::vector<size_t> seen;
     seen.reserve(ids.size());
     double sumX = 0.0, sumY = 0.0;
+    const int actor = actorOwner();
     for (const size_t id : ids) {
         if (id >= soldiers_.size() || std::ranges::find(seen, id) != seen.end()) continue;
         seen.push_back(id);
         const auto& s = soldiers_[id];
-        if (s.owner != 0 || s.hp <= 0 || s.embarked || s.garrisonBuilding) continue;
+        if (s.owner != actor || s.hp <= 0 || s.embarked || s.garrisonBuilding) continue;
         const auto [su, sw] = soldierWorld(s);
         const double sx = static_cast<double>(originX_ + su - sw);
         const double sy = static_cast<double>(su + sw) * 0.5;
@@ -339,11 +342,12 @@ size_t TutorialUnits::orderScatter(std::span<const size_t> ids) {
 }
 
 size_t TutorialUnits::stopSelection(std::span<const size_t> ids) {
+    const int actor = actorOwner();
     size_t stopped = 0;
     for (size_t id : ids) {
         if (id >= soldiers_.size()) continue;
         auto& s = soldiers_[id];
-        if (s.owner != 0 || s.hp <= 0 || s.embarked) continue;
+        if (s.owner != actor || s.hp <= 0 || s.embarked) continue;
         s.goal.reset();
         s.route.clear();
         s.cursor = 0;
@@ -375,15 +379,16 @@ size_t TutorialUnits::stopSelection(std::span<const size_t> ids) {
 }
 
 bool TutorialUnits::toggleHoldFire(std::span<const size_t> ids) {
+    const int actor = actorOwner();
     bool anyFree = false;
     for (size_t id : ids) {
-        if (id < soldiers_.size() && soldiers_[id].owner == 0 && soldiers_[id].hp > 0 && !soldiers_[id].holdFire)
+        if (id < soldiers_.size() && soldiers_[id].owner == actor && soldiers_[id].hp > 0 && !soldiers_[id].holdFire)
             anyFree = true;
     }
     for (size_t id : ids) {
         if (id >= soldiers_.size()) continue;
         auto& s = soldiers_[id];
-        if (s.owner != 0 || s.hp <= 0) continue;
+        if (s.owner != actor || s.hp <= 0) continue;
         s.holdFire = anyFree;
         if (anyFree) s.autoTarget.reset();
     }
@@ -391,15 +396,16 @@ bool TutorialUnits::toggleHoldFire(std::span<const size_t> ids) {
 }
 
 bool TutorialUnits::toggleCrouch(std::span<const size_t> ids) {
+    const int actor = actorOwner();
     bool anyStanding = false;
     for (size_t id : ids) {
-        if (id < soldiers_.size() && soldiers_[id].owner == 0 && soldiers_[id].hp > 0 && !soldiers_[id].crouched)
+        if (id < soldiers_.size() && soldiers_[id].owner == actor && soldiers_[id].hp > 0 && !soldiers_[id].crouched)
             anyStanding = true;
     }
     for (size_t id : ids) {
         if (id >= soldiers_.size()) continue;
         auto& s = soldiers_[id];
-        if (s.owner != 0 || s.hp <= 0) continue;
+        if (s.owner != actor || s.hp <= 0) continue;
         s.crouched = anyStanding;
     }
     if (fog_) {
@@ -414,12 +420,13 @@ bool TutorialUnits::toggleBinoculars(std::span<const size_t> ids) {
 }
 
 bool TutorialUnits::toggleBinocularsWithPoses(std::span<const size_t> ids, std::vector<SoldierPose>* changed) {
+    const int actor = actorOwner();
     bool anyOfficer = false;
     bool anyOff = false;
     for (size_t id : ids) {
         if (id >= soldiers_.size()) continue;
         const auto& s = soldiers_[id];
-        if (s.owner != 0 || s.hp <= 0 || !s.hasBinoculars) continue;
+        if (s.owner != actor || s.hp <= 0 || !s.hasBinoculars) continue;
         anyOfficer = true;
         if (!s.binoculars) anyOff = true;
     }
@@ -427,7 +434,7 @@ bool TutorialUnits::toggleBinocularsWithPoses(std::span<const size_t> ids, std::
     for (size_t id : ids) {
         if (id >= soldiers_.size()) continue;
         auto& s = soldiers_[id];
-        if (s.owner != 0 || s.hp <= 0 || !s.hasBinoculars) continue;
+        if (s.owner != actor || s.hp <= 0 || !s.hasBinoculars) continue;
         s.binoculars = anyOff;
     }
     if (fog_) {
@@ -1009,7 +1016,7 @@ size_t TutorialUnits::transferGroupOwner(unsigned group, int newOwner, std::vect
                 const auto [su, sv] = s.garrisonBuilding
                     ? tutorialFootWorld(buildings_[*s.garrisonBuilding].x, buildings_[*s.garrisonBuilding].y, originX_)
                     : soldierWorld(s);
-                const bool vis = !fog_ || isAlliedWithPlayer(s.owner) || (s.spottedMask & 1u) != 0;
+                const bool vis = isVisibleToViewer(s.owner, s.spottedMask);
                 pushOrUpdateSoldierPose(*outSoldiers, {
                     sid, originX_ + su - sv, (su + sv) / 2, s.direction, 0, false,
                     s.hp, true, s.owner, s.group, false, vis, 0, 0, s.garrisonBuilding.has_value(),
@@ -1071,7 +1078,7 @@ size_t TutorialUnits::reassignGroupInZone(std::span<const std::uint8_t> zones, u
             const auto [su, sv] = s.garrisonBuilding
                 ? tutorialFootWorld(buildings_[*s.garrisonBuilding].x, buildings_[*s.garrisonBuilding].y, originX_)
                 : soldierWorld(s);
-            const bool vis = !fog_ || isAlliedWithPlayer(s.owner) || (s.spottedMask & 1u) != 0;
+            const bool vis = isVisibleToViewer(s.owner, s.spottedMask);
             pushOrUpdateSoldierPose(*outSoldiers, {
                 i, originX_ + su - sv, (su + sv) / 2, s.direction, 0, false,
                 s.hp, true, s.owner, s.group, false, vis, 0, 0, s.garrisonBuilding.has_value(),
@@ -1155,18 +1162,42 @@ bool TutorialUnits::isHostile(int ownerA, int ownerB) const {
     return true;
 }
 
-bool TutorialUnits::isAlliedWithPlayer(int owner) const {
-    if (owner == 0) return true;
+bool TutorialUnits::isAlliedFor(int viewer, int owner) const {
+    if (viewer < 0 || viewer >= 4) return owner == viewer;
+    if (owner == viewer) return true;
     if (owner < 0 || owner >= 4 || owner == 3) return false;
     const int team = playerTeams_[static_cast<std::size_t>(owner)];
-    return team != 3 && team == playerTeams_[0];
+    return team != 3 && team == playerTeams_[static_cast<std::size_t>(viewer)];
+}
+
+bool TutorialUnits::isAlliedWithPlayer(int owner) const {
+    return isAlliedFor(0, owner);
+}
+
+void TutorialUnits::setViewerOwner(int owner) {
+    const int clamped = std::clamp(owner, 0, 3);
+    if (viewerOwner_ != clamped) {
+        viewerOwner_ = clamped;
+        fogSnapshotDirty_ = true;
+    }
+}
+
+void TutorialUnits::setMultiplayerSymmetry(bool enabled) {
+    multiplayerSymmetry_ = enabled;
+    if (enabled) difficulty_ = 2;
+}
+
+bool TutorialUnits::isVisibleToViewer(int owner, std::uint8_t spottedMask) const {
+    if (!fog_) return true;
+    if (isAlliedFor(viewerOwner_, owner)) return true;
+    return (spottedMask & static_cast<std::uint8_t>(1u << viewerOwner_)) != 0u;
 }
 
 std::vector<IdleUnit> TutorialUnits::idlePlayerUnits() const {
     std::vector<IdleUnit> out;
     for (size_t i = 0; i < soldiers_.size(); ++i) {
         const auto& s = soldiers_[i];
-        if (s.owner == 0 && s.hp > 0 && !s.embarked && !s.garrisonBuilding && !s.motion && !s.goal &&
+        if (s.owner == viewerOwner_ && s.hp > 0 && !s.embarked && !s.garrisonBuilding && !s.motion && !s.goal &&
             s.route.empty() && !s.attackTarget && !s.attackVehicleTarget && !s.attackBuildingTarget &&
             !s.attackGround && !s.autoTarget && !s.boardVehicleTarget && !s.captureVehicleTarget &&
             !s.garrisonTarget && !s.healTarget && !s.escortVehicleTarget && !s.escortSoldierTarget &&
@@ -1176,7 +1207,7 @@ std::vector<IdleUnit> TutorialUnits::idlePlayerUnits() const {
     }
     for (size_t i = 0; i < vehicles_.size(); ++i) {
         const auto& v = vehicles_[i];
-        if (v.alive && v.hp > 0 && v.owner == 0 && v.hasCrew && !v.towedBy && !v.moveTarget &&
+        if (v.alive && v.hp > 0 && v.owner == viewerOwner_ && v.hasCrew && !v.towedBy && !v.moveTarget &&
             v.waypoints.empty() && !v.attackTarget && !v.attackGround && !v.attackBuildingTarget &&
             !v.pendingTowGun && !v.facingTargetDir && !v.supportTargetVehicle &&
             !v.supportTargetBuilding && !v.supportTargetSoldier &&
@@ -1212,7 +1243,7 @@ std::vector<TacticalOrderLine> TutorialUnits::selectionOrderLines(std::span<cons
         if (lines.size() >= 48u) break;
         if (id >= soldiers_.size()) continue;
         const auto& s = soldiers_[id];
-        if (s.hp <= 0 || s.embarked || s.owner != 0) continue;
+        if (s.hp <= 0 || s.embarked || s.owner != viewerOwner_) continue;
         const auto [su, sv] = soldierWorld(s);
         const int sx = s.garrisonBuilding ? buildings_[*s.garrisonBuilding].x : (originX_ + su - sv);
         const int sy = s.garrisonBuilding ? buildings_[*s.garrisonBuilding].y : ((su + sv) / 2);
@@ -1270,7 +1301,7 @@ std::vector<TacticalOrderLine> TutorialUnits::selectionOrderLines(std::span<cons
         if (lines.size() >= 48u) break;
         if (id >= vehicles_.size()) continue;
         const auto& v = vehicles_[id];
-        if (!v.alive || v.hp <= 0 || v.owner != 0) continue;
+        if (!v.alive || v.hp <= 0 || v.owner != viewerOwner_) continue;
 
         if (v.patrolOrigin && v.patrolDest) {
             const auto active = v.patrolToDest ? *v.patrolDest : *v.patrolOrigin;
@@ -1561,8 +1592,7 @@ void TutorialUnits::refreshSpotting(std::vector<SoldierPose>* changed, bool emit
             s.spottedMask = 0;
             continue;
         }
-        const bool allyVis = isAlliedWithPlayer(s.owner);
-        const bool wasVisible = allyVis || (s.spottedMask & 1u) != 0;
+        const bool wasVisible = isVisibleToViewer(s.owner, s.spottedMask);
         const std::uint8_t tileFog = fog_->tile(s.cell.x / 2, s.cell.y / 2) & 0x0fu;
         std::uint8_t mask = static_cast<std::uint8_t>(tileFog & ~(1u << s.owner));
         const bool camo = isSoldierCamouflaged(s);
@@ -1599,7 +1629,7 @@ void TutorialUnits::refreshSpotting(std::vector<SoldierPose>* changed, bool emit
             }
         }
         s.spottedMask = mask;
-        const bool nowVisible = allyVis || (s.spottedMask & 1u) != 0;
+        const bool nowVisible = isVisibleToViewer(s.owner, s.spottedMask);
         if (changed && nowVisible != wasVisible) {
             const auto [u, v] = soldierWorld(s);
             changed->push_back({i, originX_ + u - v, (u + v) / 2, s.direction, 0, false, s.hp, true,
@@ -1609,19 +1639,27 @@ void TutorialUnits::refreshSpotting(std::vector<SoldierPose>* changed, bool emit
     }
     for (size_t i = 0; i < vehicles_.size(); ++i) {
         auto& v = vehicles_[i];
-        const bool wasVisible = v.visible;
+        const bool wasViewerVis = fog_ ? isVisibleToViewer(v.owner, v.spottedMask) : v.visible;
         if (!v.alive || v.hp <= 0) {
             v.spottedMask = 0;
             continue;
         }
         const std::uint8_t tileFog = fog_->tile(v.cell.x / 2, v.cell.y / 2) & 0x0fu;
         v.spottedMask = static_cast<std::uint8_t>(tileFog & ~(1u << v.owner));
-        if (v.muzzleRevealTicks > 0u && isHostile(0, v.owner)) {
-            v.spottedMask = static_cast<std::uint8_t>(v.spottedMask | 1u);
+        if (v.muzzleRevealTicks > 0u) {
+            if (multiplayerSymmetry_) {
+                for (int p = 0; p < 4; ++p) {
+                    if (isHostile(p, v.owner)) {
+                        v.spottedMask = static_cast<std::uint8_t>(v.spottedMask | (1u << p));
+                    }
+                }
+            } else if (isHostile(0, v.owner)) {
+                v.spottedMask = static_cast<std::uint8_t>(v.spottedMask | 1u);
+            }
         }
-        const bool nowVisible = isAlliedWithPlayer(v.owner) || ((v.spottedMask & 1u) != 0);
-        v.visible = nowVisible;
-        if (emitVehiclePoses && nowVisible != wasVisible) {
+        v.visible = isAlliedWithPlayer(v.owner) || ((v.spottedMask & 1u) != 0);
+        const bool nowViewerVis = isVisibleToViewer(v.owner, v.spottedMask);
+        if (emitVehiclePoses && nowViewerVis != wasViewerVis) {
             emitVehiclePose(i);
         }
     }
@@ -1892,7 +1930,7 @@ std::vector<SoldierPose> TutorialUnits::step() {
             s.wasSuppressed = nowSup;
             const auto [su, sv] = soldierWorld(s);
             const bool vis = s.hp > 0 && !s.embarked && !s.garrisonBuilding &&
-                (!fog_ || isAlliedWithPlayer(s.owner) || (s.spottedMask & 1u) != 0);
+                isVisibleToViewer(s.owner, s.spottedMask);
             pushOrUpdateSoldierPose(changed, {
                 i, originX_ + su - sv, (su + sv) / 2, s.direction, 0, false, s.hp, s.hp > 0,
                 s.owner, s.group, false, vis, 0, 0, s.garrisonBuilding.has_value(),

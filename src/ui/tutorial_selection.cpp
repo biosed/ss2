@@ -55,20 +55,38 @@ TutorialSelection::TutorialSelection(SDL_Window* window, VulkanWindow& renderer,
     refresh();
 }
 
+void TutorialSelection::setLocalPlayer(int owner) {
+    const int clamped = std::clamp(owner, 0, 3);
+    if (localPlayer_ == clamped) return;
+    localPlayer_ = clamped;
+    selected_.clear();
+    selectedVehicles_.clear();
+    for (auto& g : groups_) g.clear();
+    for (auto& vg : vehicleGroups_) vg.clear();
+    focusInitialUnit();
+    refresh();
+}
+
 void TutorialSelection::focusInitialUnit() {
     // Focus the placed German officer (Tutorial I), or any player officer, or first player unit.
-    auto first = std::ranges::find_if(units_, [](const auto& u) { return u.owner == 0 && u.hp > 0 && u.id == "dofficer"; });
+    auto first = std::ranges::find_if(units_, [this](const auto& u) {
+        return u.owner == localPlayer_ && u.hp > 0 && u.id == "dofficer";
+    });
     if (first == units_.end())
-        first = std::ranges::find_if(units_, [](const auto& u) { return u.owner == 0 && u.hp > 0 && u.id.find("officer") != std::string::npos; });
+        first = std::ranges::find_if(units_, [this](const auto& u) {
+            return u.owner == localPlayer_ && u.hp > 0 && u.id.find("officer") != std::string::npos;
+        });
     if (first == units_.end())
-        first = std::ranges::find_if(units_, [](const auto& u) { return u.owner == 0 && u.hp > 0; });
+        first = std::ranges::find_if(units_, [this](const auto& u) {
+            return u.owner == localPlayer_ && u.hp > 0;
+        });
     if (first != units_.end()) {
         selected_.insert(static_cast<size_t>(first - units_.begin()));
         renderer_.focusMap(first->x, first->y);
         return;
     }
-    auto firstVeh = std::ranges::find_if(vehicles_, [](const auto& v) {
-        return v.owner == 0 && v.alive && v.hp > 0 && v.visible;
+    auto firstVeh = std::ranges::find_if(vehicles_, [this](const auto& v) {
+        return v.owner == localPlayer_ && v.alive && v.hp > 0 && v.visible;
     });
     if (firstVeh != vehicles_.end()) {
         selectedVehicles_.insert(static_cast<size_t>(firstVeh - vehicles_.begin()));
@@ -82,12 +100,12 @@ void TutorialSelection::setVehicles(std::vector<assets::VehicleUnit> vehicles) {
     for (auto& group : vehicleGroups_) group.clear();
     nextVehicle_ = 0;
     if (selected_.empty()) {
-        const bool hasPlayerInfantry = std::ranges::any_of(units_, [](const auto& u) {
-            return u.owner == 0 && u.hp > 0;
+        const bool hasPlayerInfantry = std::ranges::any_of(units_, [this](const auto& u) {
+            return u.owner == localPlayer_ && u.hp > 0;
         });
         if (!hasPlayerInfantry) {
-            auto firstVeh = std::ranges::find_if(vehicles_, [](const auto& v) {
-                return v.owner == 0 && v.alive && v.hp > 0 && v.visible;
+            auto firstVeh = std::ranges::find_if(vehicles_, [this](const auto& v) {
+                return v.owner == localPlayer_ && v.alive && v.hp > 0 && v.visible;
             });
             if (firstVeh != vehicles_.end()) {
                 selectedVehicles_.insert(static_cast<size_t>(firstVeh - vehicles_.begin()));
@@ -148,7 +166,7 @@ std::optional<size_t> TutorialSelection::vehicleAt(int mapX, int mapY) const {
 
 void TutorialSelection::update(size_t index, const assets::Infantry& unit) {
     units_.at(index) = unit;
-    if (!alive(index) || unit.owner != 0) {
+    if (!alive(index) || unit.owner != localPlayer_) {
         const bool wasSelected = selected_.erase(index) != 0;
         for (auto& group : groups_) group.erase(index);
         // A box being dragged owns the highlight; its release refreshes everything.
@@ -165,7 +183,7 @@ void TutorialSelection::update(size_t index, const assets::Infantry& unit) {
 void TutorialSelection::updateVehicle(size_t index, const assets::VehicleUnit& v) {
     vehicles_.at(index) = v;
     const bool dead = !vehicleAlive(index);
-    if (dead || v.owner != 0) {
+    if (dead || v.owner != localPlayer_) {
         if (dead) vehicles_[index].alive = false;
         const bool wasSelected = selectedVehicles_.erase(index) != 0;
         for (auto& group : vehicleGroups_) group.erase(index);
@@ -188,11 +206,11 @@ void TutorialSelection::addVehicle(const assets::VehicleUnit& v) {
 }
 
 size_t TutorialSelection::playerLosses() const {
-    const auto infLosses = std::ranges::count_if(units_, [](const auto& u) {
-        return u.owner == 0 && u.hp <= 0;
+    const auto infLosses = std::ranges::count_if(units_, [this](const auto& u) {
+        return u.owner == localPlayer_ && u.hp <= 0;
     });
-    const auto vehLosses = std::ranges::count_if(vehicles_, [](const auto& v) {
-        return v.owner == 0 && (!v.alive || v.hp <= 0);
+    const auto vehLosses = std::ranges::count_if(vehicles_, [this](const auto& v) {
+        return v.owner == localPlayer_ && (!v.alive || v.hp <= 0);
     });
     return static_cast<size_t>(infLosses + vehLosses);
 }
@@ -213,8 +231,8 @@ void TutorialSelection::recallControlGroup(unsigned digit, bool additive) {
     if (digit >= 10u) return;
     auto& group = groups_[digit];
     auto& vgroup = vehicleGroups_[digit];
-    std::erase_if(group, [&](size_t i) { return i >= units_.size() || !alive(i) || units_[i].owner != 0; });
-    std::erase_if(vgroup, [&](size_t i) { return i >= vehicles_.size() || !vehicleAlive(i) || vehicles_[i].owner != 0; });
+    std::erase_if(group, [&](size_t i) { return i >= units_.size() || !alive(i) || units_[i].owner != localPlayer_; });
+    std::erase_if(vgroup, [&](size_t i) { return i >= vehicles_.size() || !vehicleAlive(i) || vehicles_[i].owner != localPlayer_; });
     if (additive) {
         selected_.insert(group.begin(), group.end());
         selectedVehicles_.insert(vgroup.begin(), vgroup.end());
@@ -227,10 +245,10 @@ void TutorialSelection::recallControlGroup(unsigned digit, bool additive) {
 
 void TutorialSelection::setSelection(std::set<size_t> infantry, std::set<size_t> vehicles) {
     std::erase_if(infantry, [&](size_t i) {
-        return i >= units_.size() || !alive(i) || !units_[i].visible || units_[i].owner != 0;
+        return i >= units_.size() || !alive(i) || !units_[i].visible || units_[i].owner != localPlayer_;
     });
     std::erase_if(vehicles, [&](size_t i) {
-        return i >= vehicles_.size() || !vehicleAlive(i) || !vehicles_[i].visible || vehicles_[i].owner != 0;
+        return i >= vehicles_.size() || !vehicleAlive(i) || !vehicles_[i].visible || vehicles_[i].owner != localPlayer_;
     });
     selected_ = std::move(infantry);
     selectedVehicles_ = std::move(vehicles);
@@ -241,14 +259,14 @@ std::optional<std::pair<int, int>> TutorialSelection::selectionCentroid() const 
     long long sumX = 0, sumY = 0;
     long long count = 0;
     for (const auto i : selected_) {
-        if (i < units_.size() && alive(i) && units_[i].owner == 0) {
+        if (i < units_.size() && alive(i) && units_[i].owner == localPlayer_) {
             sumX += units_[i].x;
             sumY += units_[i].y;
             ++count;
         }
     }
     for (const auto i : selectedVehicles_) {
-        if (i < vehicles_.size() && vehicleAlive(i) && vehicles_[i].owner == 0) {
+        if (i < vehicles_.size() && vehicleAlive(i) && vehicles_[i].owner == localPlayer_) {
             sumX += vehicles_[i].x;
             sumY += vehicles_[i].y;
             ++count;
@@ -267,14 +285,14 @@ size_t TutorialSelection::selectAllPlayerUnits(bool screenOnly) {
     }
     std::set<size_t> infHits;
     for (size_t i = 0; i < units_.size(); ++i) {
-        if (alive(i) && units_[i].visible && units_[i].owner == 0 &&
+        if (alive(i) && units_[i].visible && units_[i].owner == localPlayer_ &&
             (!screenOnly || contains(visible, units_[i].x, units_[i].y))) {
             infHits.insert(i);
         }
     }
     std::set<size_t> vehHits;
     for (size_t i = 0; i < vehicles_.size(); ++i) {
-        if (vehicleAlive(i) && vehicles_[i].visible && vehicles_[i].owner == 0 &&
+        if (vehicleAlive(i) && vehicles_[i].visible && vehicles_[i].owner == localPlayer_ &&
             (!screenOnly || contains(visible, vehicles_[i].x, vehicles_[i].y))) {
             vehHits.insert(i);
         }
@@ -322,10 +340,11 @@ void TutorialSelection::release(const SDL_MouseButtonEvent& button) {
     if (isSelectionBox(*drag_, end)) {
         const auto area = box(*drag_, end);
         for (size_t i = 0; i < units_.size(); ++i)
-            if (alive(i) && units_[i].visible && units_[i].owner == 0 && contains(area, units_[i].x, units_[i].y))
+            if (alive(i) && units_[i].visible && units_[i].owner == localPlayer_ &&
+                contains(area, units_[i].x, units_[i].y))
                 infHits.insert(i);
         for (size_t i = 0; i < vehicles_.size(); ++i)
-            if (vehicleAlive(i) && vehicles_[i].visible && vehicles_[i].owner == 0 &&
+            if (vehicleAlive(i) && vehicles_[i].visible && vehicles_[i].owner == localPlayer_ &&
                 contains(area, vehicles_[i].x, vehicles_[i].y))
                 vehHits.insert(i);
     } else {
@@ -336,7 +355,7 @@ void TutorialSelection::release(const SDL_MouseButtonEvent& button) {
         const int mapX = int(std::floor(x)), mapY = int(std::floor(y));
         const auto pickedInf = infantryAt(mapX, mapY);
         const auto pickedVeh = vehicleAt(mapX, mapY);
-        if (pickedInf && alive(*pickedInf) && units_[*pickedInf].owner == 0) {
+        if (pickedInf && alive(*pickedInf) && units_[*pickedInf].owner == localPlayer_) {
             const auto& u = units_[*pickedInf];
             infHits.insert(*pickedInf);
             if (button.clicks >= 2) {
@@ -350,7 +369,7 @@ void TutorialSelection::release(const SDL_MouseButtonEvent& button) {
                         infHits.insert(j);
                 }
             }
-        } else if (pickedVeh && vehicleAlive(*pickedVeh) && vehicles_[*pickedVeh].owner == 0) {
+        } else if (pickedVeh && vehicleAlive(*pickedVeh) && vehicles_[*pickedVeh].owner == localPlayer_) {
             const auto& u = vehicles_[*pickedVeh];
             vehHits.insert(*pickedVeh);
             if (button.clicks >= 2) {
@@ -388,9 +407,9 @@ void TutorialSelection::handle(const SDL_Event& e) {
         auto& vgroup = vehicleGroups_[slot];
         if (e.key.mod & SDL_KMOD_CTRL) {
             group.clear();
-            for (const auto i : selected_) if (alive(i) && units_[i].owner == 0) group.insert(i);
+            for (const auto i : selected_) if (alive(i) && units_[i].owner == localPlayer_) group.insert(i);
             vgroup.clear();
-            for (const auto i : selectedVehicles_) if (vehicleAlive(i) && vehicles_[i].owner == 0) vgroup.insert(i);
+            for (const auto i : selectedVehicles_) if (vehicleAlive(i) && vehicles_[i].owner == localPlayer_) vgroup.insert(i);
             refresh();
         } else {
             const bool additive = (e.key.mod & SDL_KMOD_SHIFT) != 0;
@@ -423,7 +442,7 @@ void TutorialSelection::handle(const SDL_Event& e) {
             : ((*selectedVehicles_.rbegin() + 1) % vehicles_.size());
         for (size_t i = 0; i < vehicles_.size(); ++i) {
             const size_t next = (begin + i) % vehicles_.size();
-            if (vehicles_[next].owner != 0 || !vehicleAlive(next) || !vehicles_[next].visible) continue;
+            if (vehicles_[next].owner != localPlayer_ || !vehicleAlive(next) || !vehicles_[next].visible) continue;
             nextVehicle_ = (next + 1) % vehicles_.size();
             selected_.clear();
             selectedVehicles_ = {next};
@@ -435,13 +454,13 @@ void TutorialSelection::handle(const SDL_Event& e) {
         if (selected_.size() + selectedVehicles_.size() > 1) {
             int x = 0, y = 0, count = 0;
             for (auto i : selected_) {
-                if (units_[i].owner != 0 || !alive(i)) continue;
+                if (units_[i].owner != localPlayer_ || !alive(i)) continue;
                 x += units_[i].x;
                 y += units_[i].y;
                 ++count;
             }
             for (auto i : selectedVehicles_) {
-                if (vehicles_[i].owner != 0 || !vehicleAlive(i)) continue;
+                if (vehicles_[i].owner != localPlayer_ || !vehicleAlive(i)) continue;
                 x += vehicles_[i].x;
                 y += vehicles_[i].y;
                 ++count;
@@ -451,14 +470,14 @@ void TutorialSelection::handle(const SDL_Event& e) {
                 return;
             }
         }
-        const bool hasPlayerInfantry = std::ranges::any_of(units_, [](const auto& u) {
-            return u.owner == 0 && u.hp > 0;
+        const bool hasPlayerInfantry = std::ranges::any_of(units_, [this](const auto& u) {
+            return u.owner == localPlayer_ && u.hp > 0;
         });
         if (hasPlayerInfantry) {
             const size_t begin = selected_.empty() ? 0 : (*selected_.rbegin() + 1) % units_.size();
             for (size_t i = 0; i < units_.size(); ++i) {
                 const size_t next = (begin + i) % units_.size();
-                if (units_[next].owner != 0 || !alive(next) || !units_[next].visible) continue;
+                if (units_[next].owner != localPlayer_ || !alive(next) || !units_[next].visible) continue;
                 selected_ = {next};
                 selectedVehicles_.clear();
                 renderer_.focusMap(units_[next].x, units_[next].y, true);
@@ -469,7 +488,7 @@ void TutorialSelection::handle(const SDL_Event& e) {
             const size_t begin = selectedVehicles_.empty() ? 0 : (*selectedVehicles_.rbegin() + 1) % vehicles_.size();
             for (size_t i = 0; i < vehicles_.size(); ++i) {
                 const size_t next = (begin + i) % vehicles_.size();
-                if (vehicles_[next].owner != 0 || !vehicleAlive(next) || !vehicles_[next].visible) continue;
+                if (vehicles_[next].owner != localPlayer_ || !vehicleAlive(next) || !vehicles_[next].visible) continue;
                 selected_.clear();
                 selectedVehicles_ = {next};
                 renderer_.focusMap(vehicles_[next].x, vehicles_[next].y, true);

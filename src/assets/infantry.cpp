@@ -394,6 +394,10 @@ MapImage InfantryScene::compose() const {
     return result;
 }
 
+void InfantryScene::setFogViewerOwner(int owner) {
+    fogViewerOwner_ = std::clamp(owner, 0, 3);
+}
+
 MapPatch InfantryScene::updateFog(std::span<const std::uint8_t> fog) {
     const std::size_t expectedSize = std::size_t(fogW_) * std::size_t(fogH_);
     if (fog.size() != expectedSize) return {0, 0, {}};
@@ -402,12 +406,14 @@ MapPatch InfantryScene::updateFog(std::span<const std::uint8_t> fog) {
         return repaint(0, 0, int(ground_.width), int(ground_.height));
     }
     const int originX = int(fogH_) * 32;
+    const auto fogMask = static_cast<std::uint8_t>(0x11u << fogViewerOwner_);
     int minX = int(ground_.width), minY = int(ground_.height), maxX = 0, maxY = 0;
     for (unsigned ty = 0; ty < fogH_; ++ty) {
         for (unsigned tx = 0; tx < fogW_; ++tx) {
             const std::size_t idx = std::size_t(ty) * std::size_t(fogW_) + std::size_t(tx);
-            if ((fog_[idx] & 0x11u) == (fog[idx] & 0x11u)) continue;
+            const std::uint8_t prev = fog_[idx];
             fog_[idx] = fog[idx];
+            if ((prev & fogMask) == (fog[idx] & fogMask)) continue;
             const int cx = originX + (int(tx) - int(ty)) * 32;
             const int cy = (int(tx) + int(ty)) * 16 + 16;
             minX = std::min(minX, (cx - 32) * resolution_);
@@ -467,8 +473,10 @@ MapPatch InfantryScene::repaint(int left, int top, int right, int bottom) const 
                 unsigned scale = 112u; // unexplored shroud (~44%)
                 if (tx >= 0 && tx < int(fogW_) && ty >= 0 && ty < int(fogH_)) {
                     const std::uint8_t f = fog_[std::size_t(ty) * std::size_t(fogW_) + std::size_t(tx)];
-                    if ((f & 0x01u) != 0) scale = 256u;      // visible
-                    else if ((f & 0x10u) != 0) scale = 178u; // explored fog (~70%)
+                    const auto curBit = static_cast<std::uint8_t>(1u << fogViewerOwner_);
+                    const auto expBit = static_cast<std::uint8_t>(0x10u << fogViewerOwner_);
+                    if ((f & curBit) != 0) scale = 256u;      // visible
+                    else if ((f & expBit) != 0) scale = 178u; // explored fog (~70%)
                 }
                 if (scale < 256u) {
                     auto* p = dst + col * 4;

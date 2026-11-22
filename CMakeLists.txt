@@ -50,7 +50,7 @@ add_library(ss2_assets STATIC src/assets/sprite.cpp src/assets/mission.cpp src/a
 target_include_directories(ss2_assets PUBLIC src)
 target_link_libraries(ss2_assets PRIVATE ZLIB::ZLIB JPEG::JPEG PNG::PNG)
 find_package(Threads REQUIRED)
-add_library(ss2_sim STATIC src/sim/tutorial.cpp src/sim/command.cpp src/sim/mission_runner.cpp src/sim/infantry_step.cpp
+add_library(ss2_sim STATIC src/sim/tutorial.cpp src/sim/command.cpp src/sim/lockstep.cpp src/sim/mission_runner.cpp src/sim/infantry_step.cpp
     src/sim/tutorial_units.cpp src/sim/tutorial_units_combat.cpp src/sim/tutorial_units_vehicles.cpp
     src/sim/tutorial_units_support.cpp src/sim/tutorial_units_air.cpp src/sim/tutorial_units_mines.cpp
     src/sim/tutorial_units_buildings.cpp src/sim/tutorial_units_snapshot.cpp
@@ -58,7 +58,10 @@ add_library(ss2_sim STATIC src/sim/tutorial.cpp src/sim/command.cpp src/sim/miss
     src/sim/infantry_path.cpp src/sim/infantry_combat.cpp)
 target_link_libraries(ss2_sim PUBLIC ss2_assets Threads::Threads)
 target_compile_options(ss2_sim PRIVATE ${SS2_WARNINGS} ${SS2_STRICT_FP})
-target_link_libraries(ss2 PRIVATE ss2_sim)
+add_library(ss2_net STATIC src/net/tcp_transport.cpp)
+target_link_libraries(ss2_net PUBLIC ss2_sim)
+target_compile_options(ss2_net PRIVATE ${SS2_WARNINGS})
+target_link_libraries(ss2 PRIVATE ss2_sim ss2_net)
 pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET libavformat libavcodec libswscale libswresample libavutil)
 add_library(ss2_video STATIC src/video/movie_player.cpp)
 target_include_directories(ss2_video PUBLIC src)
@@ -69,7 +72,7 @@ add_library(ss2_session STATIC
     src/session/session_menus.cpp src/session/session_orders.cpp src/session/session_tick.cpp
     src/session/session_input.cpp src/session/session_hud.cpp src/session/session_view.cpp
     src/ui/tutorial_selection.cpp src/audio/sound_player.cpp)
-target_link_libraries(ss2_session PUBLIC ss2_window ss2_briefing ss2_sim)
+target_link_libraries(ss2_session PUBLIC ss2_window ss2_briefing ss2_sim ss2_net)
 target_compile_options(ss2_session PRIVATE ${SS2_WARNINGS})
 target_link_libraries(ss2 PRIVATE ss2_session ss2_gold_frontend ss2_video)
 target_compile_options(ss2_assets PRIVATE ${SS2_WARNINGS})
@@ -173,6 +176,10 @@ if(BUILD_TESTING)
   target_link_libraries(replay_test PRIVATE ss2_sim)
   target_compile_options(replay_test PRIVATE ${SS2_WARNINGS})
   add_test(NAME command_replay COMMAND replay_test)
+  add_executable(lockstep_test tests/lockstep_test.cpp)
+  target_link_libraries(lockstep_test PRIVATE ss2_net)
+  target_compile_options(lockstep_test PRIVATE ${SS2_WARNINGS} ${SS2_STRICT_FP} ${SS2_ENABLE_ASSERTIONS})
+  add_test(NAME lockstep COMMAND lockstep_test)
   set(SS2_PRIVATE_GAME "" CACHE PATH "Optional local Gold 2.2 installation for retail trace tests")
   if(SS2_PRIVATE_GAME)
     add_executable(infantry_scene_test tests/infantry_scene_test.cpp)
@@ -204,6 +211,15 @@ if(BUILD_TESTING)
     -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_failure.cmake)
   add_test(NAME invalid_load_save_flags COMMAND ${CMAKE_COMMAND} -DPROGRAM=$<TARGET_FILE:ss2>
     "-DARGS=--load-save;a.ss2save;--replay;b.ss2rep" "-DEXPECTED=--load-save cannot be combined with"
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_failure.cmake)
+  add_test(NAME invalid_mp_conflict_flags COMMAND ${CMAKE_COMMAND} -DPROGRAM=$<TARGET_FILE:ss2>
+    "-DARGS=--host;27015;--join;127.0.0.1:27015" "-DEXPECTED=Choose either --host or --join"
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_failure.cmake)
+  add_test(NAME invalid_mp_host_without_mission COMMAND ${CMAKE_COMMAND} -DPROGRAM=$<TARGET_FILE:ss2>
+    "-DARGS=--host;27015" "-DEXPECTED=--host requires --mission"
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_failure.cmake)
+  add_test(NAME invalid_mp_join_replay COMMAND ${CMAKE_COMMAND} -DPROGRAM=$<TARGET_FILE:ss2>
+    "-DARGS=--join;127.0.0.1:27015;--replay;b.ss2rep" "-DEXPECTED=--host/--join cannot be combined with"
     -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_failure.cmake)
   option(SS2_TEST_WINDOW "Present frames during CTest (requires Vulkan WSI)" OFF)
   if(SS2_TEST_WINDOW)

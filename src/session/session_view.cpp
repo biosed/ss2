@@ -71,7 +71,7 @@ bool GameSession::updateViewTooltipAndPresent() {
                         ss2::TooltipContent tc;
                         tc.title = ss2::tr(hudDisplayName(u.id));
                         tc.gauge = std::clamp(static_cast<float>(u.hp) / static_cast<float>(maxHp), 0.0f, 1.0f);
-                        if (u.owner == 0) {
+                        if (u.owner == localOwner()) {
                             tc.lines.push_back(ss2::trf("Health {0} / {1}", {std::to_string(u.hp), std::to_string(maxHp)}));
                             const int maxInfAmmo = (uSpec && !uSpec->isVehicle && uSpec->ammo1 > 0) ? uSpec->ammo1 : 40;
                             tc.lines.push_back(ss2::trf("Ammo {0} / {1}", {std::to_string(u.ammo), std::to_string(maxInfAmmo)}));
@@ -179,7 +179,7 @@ bool GameSession::updateViewTooltipAndPresent() {
                             ss2::TooltipContent tc;
                             tc.title = ss2::tr(hudDisplayName(v.id));
                             tc.gauge = std::clamp(static_cast<float>(v.hp) / static_cast<float>(maxHp), 0.0f, 1.0f);
-                            if (v.owner == 0) {
+                            if (v.owner == localOwner()) {
                                 tc.lines.push_back(ss2::trf("Health {0} / {1}", {std::to_string(v.hp), std::to_string(maxHp)}));
                                 if (vSpec && vSpec->shot1.damage > 0 && vSpec->shot2.damage > 0) {
                                     const int a2 = (*vHovered < vehicleAmmo2.size()) ? vehicleAmmo2[*vHovered] : 0;
@@ -362,7 +362,7 @@ bool GameSession::updateViewTooltipAndPresent() {
                     const int simY = int(std::floor(mapY / mapScale));
                     if (const auto bHovered = buildingAtMap(simX, simY)) {
                         const auto& b = liveBuildings[*bHovered];
-                        if (!b.destroyed && (b.owner == 0 || isBuildingPointVisible(b.x, b.y))) {
+                        if (!b.destroyed && (b.owner == localOwner() || isAllyOwner(b.owner) || isBuildingPointVisible(b.x, b.y))) {
                             ss2::TooltipContent tc;
                             tc.title = ss2::tr("Building");
                             tc.gauge = std::clamp(static_cast<float>(b.hp) / static_cast<float>(std::max(1, b.maxHp)),
@@ -370,7 +370,7 @@ bool GameSession::updateViewTooltipAndPresent() {
                             tc.lines.push_back(ss2::trf("Integrity {0} / {1}",
                                                         {std::to_string(b.hp), std::to_string(b.maxHp)}));
                             if (b.occupantCount > 0) {
-                                if (b.owner == 0) {
+                                if (b.owner == localOwner()) {
                                     tc.lines.push_back(ss2::trf("Garrison {0} / {1}",
                                                                 {std::to_string(b.occupantCount), std::to_string(b.capacity)}));
                                     if (scene && !b.occupantIds.empty()) {
@@ -430,7 +430,7 @@ bool GameSession::updateViewTooltipAndPresent() {
                             if (b.hp > 0 && b.hp <= critThresh) {
                                 tc.lines.push_back(ss2::tr("Critical structure — collapse imminent (U to evacuate)"));
                             }
-                            if (b.hp < b.maxHp && (b.owner == -1 || b.owner == 0)) {
+                            if (b.hp < b.maxHp && (b.owner == -1 || b.owner == localOwner())) {
                                 tc.lines.push_back(ss2::tr("Right-click with supply truck to repair"));
                             }
                             tooltip.show(tc, mx, my);

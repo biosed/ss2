@@ -37,12 +37,13 @@ bool TutorialUnits::isValidAttackTarget(size_t targetIndex, int viewerOwner) con
 }
 
 size_t TutorialUnits::orderAttack(std::span<const size_t> ids, size_t targetIndex) {
-    if (!isValidAttackTarget(targetIndex, 0)) return 0;
+    const int actor = actorOwner();
+    if (!isValidAttackTarget(targetIndex, actor)) return 0;
     size_t accepted = 0;
     for (size_t id : ids) {
         if (id >= soldiers_.size()) continue;
         auto& s = soldiers_[id];
-        if (s.owner != 0 || s.hp <= 0 || s.embarked || s.ammo <= 0) continue;
+        if (s.owner != actor || s.hp <= 0 || s.embarked || s.ammo <= 0) continue;
         s.boardVehicleTarget.reset();
         s.captureVehicleTarget.reset();
         s.garrisonTarget.reset();
@@ -204,6 +205,7 @@ void TutorialUnits::applySoldierShotReload(Soldier& s) {
 }
 
 size_t TutorialUnits::orderAttackGroundSoldiers(std::span<const size_t> indices, int mapX, int mapY) {
+    const int actor = actorOwner();
     const int clampedX = std::clamp(mapX, 0, std::max(0, mapPixelW_ - 1));
     const int clampedY = std::clamp(mapY, 0, std::max(0, mapPixelH_ - 1));
     size_t accepted = 0;
@@ -212,7 +214,7 @@ size_t TutorialUnits::orderAttackGroundSoldiers(std::span<const size_t> indices,
         auto& s = soldiers_[id];
         const bool mortarOrFlamer = (s.isMortar || s.isFlamer) && s.ammo > 0;
         const bool smgGrenade = s.canGrenadeGround && s.atGrenades > 0;
-        if (s.owner != 0 || s.hp <= 0 || s.embarked || s.garrisonBuilding ||
+        if (s.owner != actor || s.hp <= 0 || s.embarked || s.garrisonBuilding ||
             (!mortarOrFlamer && !smgGrenade)) {
             continue;
         }
@@ -334,7 +336,7 @@ void TutorialUnits::detonateKamikazeSoldier(size_t index, int impactX, int impac
     s.binoculars = false;
     s.spottedMask = 0;
     fogDirty_ = true;
-    const bool vis = !s.garrisonBuilding && (!fog_ || isAlliedWithPlayer(s.owner) || (s.spottedMask & 1u) != 0);
+    const bool vis = !s.garrisonBuilding && isVisibleToViewer(s.owner, s.spottedMask);
     pushOrUpdateSoldierPose(changed, {
         index, sx, sy, s.direction, 0, false, 0, false, s.owner, s.group,
         true, vis, impactX, impactY, false, s.expa, s.kills, false,
@@ -661,7 +663,7 @@ void TutorialUnits::stepSoldierAttackVehicle(Soldier& s, size_t index, std::vect
             s.direction = directionFromDelta(vu - su, vv - sv);
             s.attackReload = 4;
             fogDirty_ = true;
-            const bool vis = s.owner == 0 || (s.spottedMask & 1u) != 0;
+            const bool vis = isVisibleToViewer(s.owner, s.spottedMask);
             pushOrUpdateSoldierPose(changed, {
                 index, sx, sy, s.direction, 0, false, s.hp, true, s.owner, s.group, false, vis,
                 0, 0, false, s.expa, s.kills, false, s.atGrenades, false, isSoldierCamouflaged(s),
@@ -718,7 +720,7 @@ void TutorialUnits::stepSoldierAttackVehicle(Soldier& s, size_t index, std::vect
             --s.ammo;
         }
         applySoldierShotReload(s);
-        const bool vis = !isGar && (!fog_ || s.owner == 0 || (s.spottedMask & 1u) != 0);
+        const bool vis = !isGar && isVisibleToViewer(s.owner, s.spottedMask);
         pushOrUpdateSoldierPose(changed, {
             index, sx, sy, s.direction, 0, false, s.hp, true, s.owner, s.group, true, vis, tv.x, tv.y,
             isGar, s.expa, s.kills, throwGrenade, s.atGrenades, !throwGrenade && s.isFlamer,
@@ -771,7 +773,7 @@ void TutorialUnits::applyFlameSplash(int impactX, int impactY, int rawDamage, in
             ss.spottedMask = 0;
             fogDirty_ = true;
         }
-        const bool sVis = !fog_ || isAlliedWithPlayer(ss.owner) || (ss.spottedMask & 1u) != 0;
+        const bool sVis = isVisibleToViewer(ss.owner, ss.spottedMask);
         pushOrUpdateSoldierPose(changed, {
             k, sx, sy, ss.direction, 0, false, ss.hp, ss.hp > 0, ss.owner, ss.group, false, sVis
         });
@@ -862,7 +864,7 @@ void TutorialUnits::applyMortarSplash(int impactX, int impactY, int rawDamage, i
             ss.spottedMask = 0;
             fogDirty_ = true;
         }
-        const bool sVis = !fog_ || isAlliedWithPlayer(ss.owner) || (ss.spottedMask & 1u) != 0;
+        const bool sVis = isVisibleToViewer(ss.owner, ss.spottedMask);
         pushOrUpdateSoldierPose(changed, {
             k, sx, sy, ss.direction, 0, false, ss.hp, ss.hp > 0, ss.owner, ss.group, false, sVis
         });
@@ -1075,7 +1077,7 @@ void TutorialUnits::stepCombat(std::vector<SoldierPose>& changed) {
                     }
                 }
                 applySoldierShotReload(s);
-                const bool vis = s.owner == 0 || (s.spottedMask & 1u) != 0;
+                const bool vis = isVisibleToViewer(s.owner, s.spottedMask);
                 changed.push_back({
                     i, sx, sy, s.direction, 0, false, s.hp, true, s.owner, s.group,
                     true, vis, gx, gy, false, s.expa, s.kills, threwGrenade, s.atGrenades,
@@ -1189,7 +1191,7 @@ void TutorialUnits::stepCombat(std::vector<SoldierPose>& changed) {
                 damageBuilding(*activeBldTarget, rawDamage, hitType, s.owner, changed);
                 --s.ammo;
                 applySoldierShotReload(s);
-                const bool vis = !isGar && (s.owner == 0 || (s.spottedMask & 1u) != 0);
+                const bool vis = !isGar && isVisibleToViewer(s.owner, s.spottedMask);
                 changed.push_back({
                     i, sx, sy, s.direction, 0, false, s.hp, true, s.owner, s.group,
                     true, vis, tb.x, tb.y, isGar, s.expa, s.kills, false, s.atGrenades,
@@ -1242,7 +1244,7 @@ void TutorialUnits::stepCombat(std::vector<SoldierPose>& changed) {
                 s.direction = directionFromDelta(tu - su, tv - sv);
                 s.attackReload = 4;
                 fogDirty_ = true;
-                const bool vis = s.owner == 0 || (s.spottedMask & 1u) != 0;
+                const bool vis = isVisibleToViewer(s.owner, s.spottedMask);
                 pushOrUpdateSoldierPose(changed, {
                     i, sx, sy, s.direction, 0, false, s.hp, true, s.owner, s.group, false, vis,
                     0, 0, false, s.expa, s.kills, false, s.atGrenades, false, isSoldierCamouflaged(s),
@@ -1276,7 +1278,7 @@ void TutorialUnits::stepCombat(std::vector<SoldierPose>& changed) {
             s.expa = std::min(0x8000, s.expa + expaGain);
             --s.ammo;
             applySoldierShotReload(s);
-            const bool vis = !isGar && (s.owner == 0 || (s.spottedMask & 1u) != 0);
+            const bool vis = !isGar && isVisibleToViewer(s.owner, s.spottedMask);
             changed.push_back({
                 i, sx, sy, s.direction, 0, false, s.hp, true, s.owner, s.group, true, vis,
                 originX_ + tu - tv, (tu + tv) / 2, isGar, s.expa, s.kills, false, s.atGrenades,
@@ -1329,7 +1331,7 @@ void TutorialUnits::stepCombat(std::vector<SoldierPose>& changed) {
                         if (att.hp > 0) {
                             const auto [au, av] = soldierWorld(att);
                             const bool aVis = !att.embarked && !att.garrisonBuilding &&
-                                (!fog_ || isAlliedWithPlayer(att.owner) || (att.spottedMask & 1u) != 0);
+                                isVisibleToViewer(att.owner, att.spottedMask);
                             pushOrUpdateSoldierPose(changed, {
                                 p.attacker, originX_ + au - av, (au + av) / 2,
                                 att.motion ? att.motion->direction : att.direction,
@@ -1355,7 +1357,7 @@ void TutorialUnits::stepCombat(std::vector<SoldierPose>& changed) {
                     fogDirty_ = true;
                 }
                 const bool tVis = !tgt.garrisonBuilding &&
-                    (!fog_ || isAlliedWithPlayer(tgt.owner) || (tgt.spottedMask & 1u) != 0);
+                    isVisibleToViewer(tgt.owner, tgt.spottedMask);
                 changed.push_back({
                     p.target, impX, impY, tgt.direction, 0, false, tgt.hp, tgt.hp > 0, tgt.owner, tgt.group,
                     false, tVis, 0, 0, tgt.garrisonBuilding.has_value(), tgt.expa, tgt.kills, false,

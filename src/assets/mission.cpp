@@ -225,8 +225,13 @@ std::optional<BytesView> findRecordIn(BytesView rest, std::string_view expectedM
     return found;
 }
 
+std::string_view standaloneArchiveMagic(BytesView bytes) {
+    if (bytes.size() >= 8 && std::memcmp(bytes.data(), "MM2S", 4) == 0) return "MM2S";
+    return "MS2S";
+}
+
 std::optional<BytesView> findRecord(BytesView rest, std::string_view wanted) {
-    return findRecordIn(rest, "MS2S", wanted);
+    return findRecordIn(rest, standaloneArchiveMagic(rest), wanted);
 }
 
 BytesView requireRecordIn(BytesView rest, std::string_view expectedMagic, std::string_view wanted) {
@@ -254,7 +259,7 @@ MissionInfo parseInfoIn(BytesView bytes, std::string_view magic) {
 }
 
 MissionInfo parseInfo(BytesView bytes) {
-    return parseInfoIn(bytes, "MS2S");
+    return parseInfoIn(bytes, standaloneArchiveMagic(bytes));
 }
 
 std::optional<std::filesystem::path> findChildFileIgnoreCase(const std::filesystem::path& dir, std::string_view wanted) {
@@ -424,21 +429,21 @@ std::string decodeMissionText(std::string_view raw) {
 }
 
 std::optional<BytesView> MissionArchive::findMapRecord(std::string_view wanted) const {
-    return findRecordIn(mapBytes, isCampaign ? "P2SS" : "MS2S", wanted);
+    return findRecordIn(mapBytes, isCampaign ? "P2SS" : (isMultiplayer ? "MM2S" : "MS2S"), wanted);
 }
 
 std::optional<BytesView> MissionArchive::findMissionRecord(std::string_view wanted) const {
     if (isCampaign) return findRecordIn(missionBytes, "I2SS", wanted);
-    return findRecordIn(mapBytes, "MS2S", wanted);
+    return findRecordIn(mapBytes, isMultiplayer ? "MM2S" : "MS2S", wanted);
 }
 
 BytesView MissionArchive::requireMapRecord(std::string_view wanted) const {
-    return requireRecordIn(mapBytes, isCampaign ? "P2SS" : "MS2S", wanted);
+    return requireRecordIn(mapBytes, isCampaign ? "P2SS" : (isMultiplayer ? "MM2S" : "MS2S"), wanted);
 }
 
 BytesView MissionArchive::requireMissionRecord(std::string_view wanted) const {
     if (isCampaign) return requireRecordIn(missionBytes, "I2SS", wanted);
-    return requireRecordIn(mapBytes, "MS2S", wanted);
+    return requireRecordIn(mapBytes, isMultiplayer ? "MM2S" : "MS2S", wanted);
 }
 
 MissionArchive loadMissionArchive(const std::filesystem::path& path) {
@@ -447,8 +452,10 @@ MissionArchive loadMissionArchive(const std::filesystem::path& path) {
         throw std::runtime_error("Unsupported mission header");
 
     MissionArchive out;
-    if (std::memcmp(bytes.data(), "MS2S", 4) == 0) {
-        const auto info = parseInfoIn(bytes, "MS2S");
+    if (std::memcmp(bytes.data(), "MS2S", 4) == 0 || std::memcmp(bytes.data(), "MM2S", 4) == 0) {
+        const auto magic = standaloneArchiveMagic(bytes);
+        const auto info = parseInfoIn(bytes, magic);
+        out.isMultiplayer = (magic == "MM2S");
         out.scheme = info.scheme;
         out.baseWidth = info.width;
         out.baseHeight = info.height;
@@ -697,18 +704,22 @@ MissionData readMissionData(const std::filesystem::path& mission) {
     return data;
 }
 
-std::vector<MissionSummary> listSinglePlayerMissions(const std::filesystem::path& gameDir) {
+namespace {
+std::vector<MissionSummary> listMissionsInSubdir(const std::filesystem::path& gameDir,
+                                                 std::string_view subdirName,
+                                                 std::initializer_list<std::string_view> extensions) {
     const auto mapsDir = findChildDirIgnoreCase(gameDir, "maps");
     if (!mapsDir) return {};
-    const auto singleDir = findChildDirIgnoreCase(*mapsDir, "single");
-    if (!singleDir) return {};
+    const auto targetDir = findChildDirIgnoreCase(*mapsDir, subdirName);
+    if (!targetDir) return {};
 
     std::vector<std::filesystem::path> files;
     std::error_code ec;
-    for (std::filesystem::directory_iterator it(*singleDir, ec), end; !ec && it != end; it.increment(ec)) {
+    for (std::filesystem::directory_iterator it(*targetDir, ec), end; !ec && it != end; it.increment(ec)) {
         std::error_code fileEc;
         if (!it->is_regular_file(fileEc)) continue;
-        if (asciiEqualsIgnoreCase(it->path().extension().string(), ".ssm"))
+        const std::string ext = it->path().extension().string();
+        if (std::ranges::any_of(extensions, [&](std::string_view want) { return asciiEqualsIgnoreCase(ext, want); }))
             files.push_back(it->path());
     }
     std::ranges::sort(files);
@@ -771,12 +782,9 @@ std::vector<MissionSummary> listSinglePlayerMissions(const std::filesystem::path
     return out;
 }
 
-std::optional<MissionSummary> findSinglePlayerMission(const std::filesystem::path& gameDir, std::string_view query) {
+std::optional<MissionSummary> findMissionInList(const std::vector<MissionSummary>& missions, std::string_view query) {
     const std::string_view q = trimAscii(query);
-    if (q.empty()) return std::nullopt;
-
-    const auto missions = listSinglePlayerMissions(gameDir);
-    if (missions.empty()) return std::nullopt;
+    if (q.empty() || missions.empty()) return std::nullopt;
 
     const bool allDigits = std::ranges::all_of(q, [](char c) { return c >= '0' && c <= '9'; });
     if (allDigits) {
@@ -815,6 +823,23 @@ std::optional<MissionSummary> findSinglePlayerMission(const std::filesystem::pat
     if (sub.empty()) return std::nullopt;
     if (sub.size() == 1) return *sub.front();
     throw std::invalid_argument("Ambiguous mission query '" + std::string(q) + "': " + joinCandidateNames(sub));
+}
+} // namespace
+
+std::vector<MissionSummary> listSinglePlayerMissions(const std::filesystem::path& gameDir) {
+    return listMissionsInSubdir(gameDir, "single", {".ssm"});
+}
+
+std::optional<MissionSummary> findSinglePlayerMission(const std::filesystem::path& gameDir, std::string_view query) {
+    return findMissionInList(listSinglePlayerMissions(gameDir), query);
+}
+
+std::vector<MissionSummary> listMultiplayerMissions(const std::filesystem::path& gameDir) {
+    return listMissionsInSubdir(gameDir, "mplay", {".smm", ".ssm"});
+}
+
+std::optional<MissionSummary> findMultiplayerMission(const std::filesystem::path& gameDir, std::string_view query) {
+    return findMissionInList(listMultiplayerMissions(gameDir), query);
 }
 
 std::vector<CampaignSummary> listCampaigns(const std::filesystem::path& gameDir) {

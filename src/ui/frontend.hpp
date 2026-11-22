@@ -18,7 +18,8 @@ class FrontEnd {
 public:
     enum class Screen {
         MainMenu, SinglePlayer, SingleMissions, Campaigns, CampaignMissions,
-        Briefing, Options, Ratings, Replays, LoadGame, Credits, Launch, LaunchReplay, LaunchSave, Quit
+        Briefing, Multiplayer, Options, Ratings, Replays, LoadGame, Credits,
+        Launch, LaunchReplay, LaunchSave, LaunchMultiplayer, Quit
     };
     enum class RatingsMode { Campaigns, SingleMissions };
 
@@ -69,6 +70,7 @@ public:
     void setCampaigns(std::vector<CampaignEntry> campaigns);
     void setReplays(std::vector<ReplayEntry> replays);
     void setSaves(std::vector<SaveEntry> saves);
+    void setMultiplayerMissions(std::vector<Entry> missions);
 
     Screen screen() const { return screen_; }
     std::string title() const;
@@ -113,6 +115,21 @@ public:
     const SaveEntry* selectedSaveEntry() const;
     std::string launchSavePath() const;
 
+    const std::vector<Entry>& multiplayerMissions() const { return mpMissions_; }
+    std::size_t selectedMultiplayerMission() const { return selectedMpMission_; }
+    void selectMultiplayerMission(std::size_t index);
+    const Entry* selectedMultiplayerMissionEntry() const;
+    std::string launchMultiplayerPath() const;
+    bool mpIsHost() const { return mpIsHost_; }
+    void setMpIsHost(bool isHost) { mpIsHost_ = isHost; }
+    void toggleMpMode() { mpIsHost_ = !mpIsHost_; }
+    const std::string& mpHostAddress() const { return mpHostAddress_; }
+    void setMpHostAddress(std::string addr) { mpHostAddress_ = std::move(addr); }
+    std::uint16_t mpPort() const { return mpPort_; }
+    void setMpPort(std::uint16_t port) { if (port > 0) mpPort_ = port; }
+    const std::string& mpStatusText() const { return mpStatusText_; }
+    void setMpStatusText(std::string text) { mpStatusText_ = std::move(text); }
+
     // A deferred branch was chosen; the message stays on the current screen. Cleared on read.
     std::string takeNotice();
 
@@ -128,12 +145,18 @@ private:
     std::vector<CampaignEntry> campaigns_;
     std::vector<ReplayEntry> replays_;
     std::vector<SaveEntry> saves_;
+    std::vector<Entry> mpMissions_;
     std::size_t selected_ = 0;
     std::size_t selectedCampaign_ = 0;
     std::size_t selectedCampaignMission_ = 0;
     std::size_t selectedReplay_ = 0;
     std::size_t selectedSave_ = 0;
+    std::size_t selectedMpMission_ = 0;
     bool briefingFromCampaign_ = false;
+    bool mpIsHost_ = true;
+    std::string mpHostAddress_ = "127.0.0.1";
+    std::uint16_t mpPort_ = 27015;
+    std::string mpStatusText_;
     int difficulty_ = 2;
     RatingsMode ratingsMode_ = RatingsMode::Campaigns;
     std::string notice_;

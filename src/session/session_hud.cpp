@@ -125,7 +125,7 @@ void GameSession::updateHudAndBeams() {
         for (const auto id : selection->selectedVehicles()) {
             if (id >= vehUnits.size()) continue;
             const auto& v = vehUnits[id];
-            if (!v.alive || v.hp <= 0 || v.owner != 0) continue;
+            if (!v.alive || v.hp <= 0 || v.owner != localOwner()) continue;
             const int maxHp = (id < initialVehicleHp.size() && initialVehicleHp[id] > 0) ? initialVehicleHp[id] : 100;
             const auto* vSpec = unitCatalog ? unitCatalog->find(v.id) : nullptr;
             const bool vArmed = !vSpec || (vSpec->shot1.damage > 0 && vSpec->shot1.range > 0) ||
@@ -166,7 +166,7 @@ void GameSession::updateHudAndBeams() {
         }
         if (selectedBuilding && *selectedBuilding < liveBuildings.size()) {
             const auto& lb = liveBuildings[*selectedBuilding];
-            if (!lb.destroyed && lb.owner == 0 && lb.occupantCount > 0) hs.hasCargo = true;
+            if (!lb.destroyed && lb.owner == localOwner() && lb.occupantCount > 0) hs.hasCargo = true;
         }
         hs.attackMoveArmed = attackMoveArmed;
         hs.patrolArmed = patrolArmed;
@@ -197,7 +197,7 @@ void GameSession::updateHudAndBeams() {
             if (u.hp <= 0 || !u.visible) continue;
             const float du = std::round(std::clamp(static_cast<float>(u.x) * invW, 0.0f, 1.0f) * 256.0f) / 256.0f;
             const float dv = std::round(std::clamp(static_cast<float>(u.y) * invH, 0.0f, 1.0f) * 128.0f) / 128.0f;
-            hs.dots.push_back({du, dv, isHostileOwner(u.owner), isAllyOwner(u.owner) && u.owner != 0, u.owner == 3});
+            hs.dots.push_back({du, dv, isHostileOwner(u.owner), isAllyOwner(u.owner) && u.owner != localOwner(), u.owner == 3});
             const int maxHp = (idx < initialUnitHp.size()) ? initialUnitHp[idx] : 100;
             if (selection->selected().contains(idx) || u.hp < maxHp) {
                 if (u.hp < maxHp && woundedBarLogged.insert(idx).second) {
@@ -219,7 +219,7 @@ void GameSession::updateHudAndBeams() {
             if (!v.alive || v.hp <= 0 || !v.visible) continue;
             const float du = std::round(std::clamp(static_cast<float>(v.x) * invW, 0.0f, 1.0f) * 256.0f) / 256.0f;
             const float dv = std::round(std::clamp(static_cast<float>(v.y) * invH, 0.0f, 1.0f) * 128.0f) / 128.0f;
-            hs.dots.push_back({du, dv, isHostileOwner(v.owner), isAllyOwner(v.owner) && v.owner != 0, v.owner == 3});
+            hs.dots.push_back({du, dv, isHostileOwner(v.owner), isAllyOwner(v.owner) && v.owner != localOwner(), v.owner == 3});
             const int maxHp = (idx < initialVehicleHp.size()) ? initialVehicleHp[idx] : 100;
             if (selection->selectedVehicles().contains(idx) || v.hp < maxHp) {
                 const float barW = 28.0f * static_cast<float>(mapScale);
@@ -235,11 +235,11 @@ void GameSession::updateHudAndBeams() {
         for (std::size_t bi = 0; bi < liveBuildings.size(); ++bi) {
             const auto& b = liveBuildings[bi];
             if (b.destroyed || (b.occupantCount == 0 && b.hp >= b.maxHp)) continue;
-            if (b.owner != 0 && !isAllyOwner(b.owner) && !isBuildingPointVisible(b.x, b.y)) continue;
+            if (b.owner != localOwner() && !isAllyOwner(b.owner) && !isBuildingPointVisible(b.x, b.y)) continue;
             if (b.occupantCount > 0 && b.owner >= 0) {
                 const float du = std::round(std::clamp(static_cast<float>(b.x) * invW, 0.0f, 1.0f) * 256.0f) / 256.0f;
                 const float dv = std::round(std::clamp(static_cast<float>(b.y) * invH, 0.0f, 1.0f) * 128.0f) / 128.0f;
-                hs.dots.push_back({du, dv, isHostileOwner(b.owner), isAllyOwner(b.owner) && b.owner != 0, false});
+                hs.dots.push_back({du, dv, isHostileOwner(b.owner), isAllyOwner(b.owner) && b.owner != localOwner(), false});
             }
             const float barW = static_cast<float>(std::clamp(b.width / 2, 24, 52) * mapScale);
             const float barY = static_cast<float>((b.top - 5) * mapScale);
@@ -417,7 +417,7 @@ void GameSession::updateHudAndBeams() {
         const auto& units = scene->units();
         for (std::size_t idx = 0; idx < units.size() && statusBadges.size() < 24u; ++idx) {
             const auto& u = units[idx];
-            if (u.owner != 0 || u.hp <= 0 || !u.visible) continue;
+            if (u.owner != localOwner() || u.hp <= 0 || !u.visible) continue;
             const float wx = static_cast<float>(u.x) * sScale;
             const float wy = static_cast<float>(u.y) * sScale;
             if (!inViewBounds(wx, wy)) continue;
@@ -432,7 +432,7 @@ void GameSession::updateHudAndBeams() {
             const auto& vehs = vehicleScene->vehicles();
             for (std::size_t idx = 0; idx < vehs.size() && statusBadges.size() < 24u; ++idx) {
                 const auto& v = vehs[idx];
-                if (v.owner != 0 || !v.alive || v.hp <= 0 || !v.visible) continue;
+                if (v.owner != localOwner() || !v.alive || v.hp <= 0 || !v.visible) continue;
                 const float wx = static_cast<float>(v.x) * sScale;
                 const float wy = static_cast<float>(v.y) * sScale;
                 if (!inViewBounds(wx, wy)) continue;
@@ -524,7 +524,7 @@ void GameSession::updateHudAndBeams() {
                 if (rays >= 6u) break;
                 if (vid >= vehs.size()) continue;
                 const auto& v = vehs[vid];
-                if (!v.alive || v.hp <= 0 || v.owner != 0) continue;
+                if (!v.alive || v.hp <= 0 || v.owner != localOwner()) continue;
                 const float vx = static_cast<float>(v.x) * s;
                 const float vy = static_cast<float>(v.y) * s;
                 beams.push_back({vx, vy, faceTargetX, faceTargetY, 2.0f * s, 105, 212, 235, 0.45f, 0.72f});

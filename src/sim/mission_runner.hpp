@@ -5,6 +5,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <exception>
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <set>
@@ -127,10 +128,19 @@ public:
     unsigned countByPlayerMask(int owner, unsigned mask) const;
     void acknowledge();
     bool togglePause();
+    bool isPaused() const;
+    void setViewerOwner(int owner);
+    int viewerOwner() const;
+    void setMultiplayerSymmetry(bool enabled);
+    bool multiplayerSymmetry() const;
+    void setCommandSink(std::function<void(cmd::Command)> sink);
+    std::vector<assets::Placement> pollCrewSpawns();
     const assets::TutorialData& data() const { return tutorial_.data(); }
 
     // Applies a command exactly as the matching wrapper would, discarding its result.
     void apply(const cmd::Command& command);
+    // Applies a command on behalf of seat `actorPlayer` (0..3), bypassing commandSink_.
+    void applyAs(int actorPlayer, const cmd::Command& command);
     // Starts a fresh in-memory log of every submitted command.
     void startRecording();
     // Stops recording and returns the log.
@@ -249,6 +259,9 @@ private:
     std::optional<std::pair<std::uint32_t, std::uint32_t>> nextMissionSignal_;
     std::exception_ptr error_;
     std::optional<std::vector<cmd::RecordedCommand>> recording_;
+    std::function<void(cmd::Command)> commandSink_;
+    std::vector<assets::Placement> pendingCrewSpawns_;
+    bool inLockstepApply_{false};
     std::jthread worker_;
 };
 }

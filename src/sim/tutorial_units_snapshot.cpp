@@ -394,8 +394,7 @@ bool TutorialUnits::loadSnapshot(const Snapshot& snap, std::vector<SoldierPose>*
             const auto [u, v] = soldierWorld(s);
             const bool isGar = s.garrisonBuilding.has_value();
             const bool alive = s.hp > 0;
-            const bool vis = alive && !s.embarked && !isGar &&
-                (!fog_ || isAlliedWithPlayer(s.owner) || (s.spottedMask & 1u) != 0);
+            const bool vis = alive && !s.embarked && !isGar && isVisibleToViewer(s.owner, s.spottedMask);
             const bool camo = isSoldierCamouflaged(s);
             const bool sup = alive && s.isSuppressed();
             soldiers_[si].wasCamouflaged = camo;

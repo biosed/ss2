@@ -5,6 +5,17 @@
 
 namespace ss2 {
 namespace {
+template<class C> consteval bool isLockstepPlayerCommand() {
+    return !std::is_same_v<C, cmd::SpawnInfantry> &&
+           !std::is_same_v<C, cmd::SpawnVehicle> &&
+           !std::is_same_v<C, cmd::EmbarkImmediate> &&
+           !std::is_same_v<C, cmd::GroupMove> &&
+           !std::is_same_v<C, cmd::AddReserveUnit> &&
+           !std::is_same_v<C, cmd::TakeReserveUnits> &&
+           !std::is_same_v<C, cmd::LoadSnapshot> &&
+           !std::is_same_v<C, cmd::Acknowledge>;
+}
+
 std::array<int, 64> extractReinforcementWaveOwners(const std::vector<std::vector<std::uint32_t>>& scripts) {
     std::array<int, 64> owners;
     owners.fill(-1);
@@ -32,11 +43,41 @@ template<class C> typename C::Result MissionRunner::submit(const C& c) {
 // Logged before applying, even when modal_ makes applyLocked reject the
 // command, so replay re-evaluates the same gate at the same tick.
 template<class C> typename C::Result MissionRunner::submitLocked(const C& c) {
+    if constexpr (isLockstepPlayerCommand<C>()) {
+        if (commandSink_ && !inLockstepApply_) {
+            commandSink_(cmd::Command{c});
+            if constexpr (std::is_same_v<C, cmd::CallAirSupport>) {
+                const auto slots = units_.airSupportFor(units_.viewerOwner());
+                const auto k = static_cast<std::size_t>(c.kind);
+                return k < slots.size() && slots[k].ready > 0;
+            } else if constexpr (std::is_same_v<C, cmd::TogglePause>) {
+                return paused_;
+            } else if constexpr (std::is_same_v<typename C::Result, std::optional<bool>>) {
+                return std::nullopt;
+            } else if constexpr (std::is_same_v<typename C::Result, std::optional<size_t>>) {
+                return size_t{1};
+            } else if constexpr (std::is_same_v<typename C::Result, size_t>) {
+                return size_t{1};
+            } else if constexpr (std::is_same_v<typename C::Result, bool>) {
+                return true;
+            } else {
+                return typename C::Result{};
+            }
+        }
+    }
     if (recording_) recording_->push_back({units_.tick_, c});
     return applyLocked(c);
 }
 void MissionRunner::apply(const cmd::Command& command) {
     std::visit([this](const auto& c) { (void)submit(c); }, command);
+}
+void MissionRunner::applyAs(int actorPlayer, const cmd::Command& command) {
+    std::lock_guard lock(mutex_);
+    TutorialUnits::ScopedCommandActor actorGuard(units_, actorPlayer);
+    const bool prevApply = inLockstepApply_;
+    inLockstepApply_ = true;
+    std::visit([this](const auto& c) { (void)submitLocked(c); }, command);
+    inLockstepApply_ = prevApply;
 }
 void MissionRunner::startRecording() {
     std::lock_guard lock(mutex_);
@@ -422,7 +463,7 @@ cmd::Scatter::Result MissionRunner::applyLocked(const cmd::Scatter& c) {
 }
 bool MissionRunner::isValidAttackTarget(size_t targetIndex) {
     std::lock_guard lock(mutex_);
-    return !modal_ && units_.isValidAttackTarget(targetIndex, 0);
+    return !modal_ && units_.isValidAttackTarget(targetIndex, units_.viewerOwner());
 }
 std::optional<size_t> MissionRunner::attack(std::span<const size_t> indices, size_t targetIndex) {
     return submit(cmd::Attack{ids(indices), targetIndex});
@@ -632,11 +673,11 @@ cmd::ToggleMarchMode::Result MissionRunner::applyLocked(const cmd::ToggleMarchMo
 }
 bool MissionRunner::isValidVehicleAttackTarget(size_t targetIdx) {
     std::lock_guard lock(mutex_);
-    return !modal_ && units_.isValidVehicleAttackTarget(targetIdx);
+    return !modal_ && units_.isValidVehicleAttackTarget(targetIdx, units_.viewerOwner());
 }
 bool MissionRunner::canBoardVehicle(size_t vehicleIdx) {
     std::lock_guard lock(mutex_);
-    return !modal_ && units_.canBoardVehicle(vehicleIdx, 0);
+    return !modal_ && units_.canBoardVehicle(vehicleIdx, units_.viewerOwner());
 }
 std::optional<size_t> MissionRunner::boardVehicle(std::span<const size_t> soldierIds, size_t vehicleIdx) {
     return submit(cmd::BoardVehicle{ids(soldierIds), vehicleIdx});
@@ -659,7 +700,7 @@ cmd::UnloadVehicles::Result MissionRunner::applyLocked(const cmd::UnloadVehicles
 }
 bool MissionRunner::canCaptureVehicle(size_t vehicleIdx) {
     std::lock_guard lock(mutex_);
-    return !modal_ && units_.canCaptureVehicle(vehicleIdx, 0);
+    return !modal_ && units_.canCaptureVehicle(vehicleIdx, units_.viewerOwner());
 }
 std::optional<size_t> MissionRunner::captureVehicle(std::span<const size_t> soldierIds, size_t vehicleIdx) {
     return submit(cmd::CaptureVehicle{ids(soldierIds), vehicleIdx});
@@ -717,7 +758,7 @@ std::vector<MineEvent> MissionRunner::pollMineEvents() {
 }
 std::vector<VisibleMine> MissionRunner::visibleMines() const {
     std::lock_guard lock(mutex_);
-    return units_.visibleMines(0);
+    return units_.visibleMines(units_.viewerOwner());
 }
 std::vector<IdleUnit> MissionRunner::idlePlayerUnits() const {
     std::lock_guard lock(mutex_);
@@ -725,7 +766,7 @@ std::vector<IdleUnit> MissionRunner::idlePlayerUnits() const {
 }
 bool MissionRunner::canTowVehicle(size_t tractorIdx, size_t gunIdx) {
     std::lock_guard lock(mutex_);
-    return !modal_ && units_.canTowVehicle(tractorIdx, gunIdx, 0);
+    return !modal_ && units_.canTowVehicle(tractorIdx, gunIdx, units_.viewerOwner());
 }
 std::optional<size_t> MissionRunner::towVehicle(size_t tractorIdx, size_t gunIdx) {
     return submit(cmd::TowVehicle{tractorIdx, gunIdx});
@@ -747,7 +788,7 @@ cmd::UnhitchVehicles::Result MissionRunner::applyLocked(const cmd::UnhitchVehicl
 }
 bool MissionRunner::canGarrisonBuilding(size_t buildingIdx) {
     std::lock_guard lock(mutex_);
-    return !modal_ && units_.canGarrisonBuilding(buildingIdx, 0);
+    return !modal_ && units_.canGarrisonBuilding(buildingIdx, units_.viewerOwner());
 }
 std::optional<size_t> MissionRunner::garrisonBuilding(std::span<const size_t> soldierIds, size_t buildingIdx) {
     return submit(cmd::GarrisonBuilding{ids(soldierIds), buildingIdx});
@@ -831,7 +872,7 @@ bool MissionRunner::callAirSupport(assets::AirMissionKind kind, int targetX, int
 }
 cmd::CallAirSupport::Result MissionRunner::applyLocked(const cmd::CallAirSupport& c) {
     if (modal_) return false;
-    const bool ok = units_.callAirSupport(c.kind, c.x, c.y, 0);
+    const bool ok = units_.callAirSupport(c.kind, c.x, c.y, units_.actorOwner());
     if (ok) collectAirSorties();
     return ok;
 }
@@ -909,6 +950,9 @@ cmd::AbandonVehicles::Result MissionRunner::applyLocked(const cmd::AbandonVehicl
     if (modal_ || c.vehicles.empty()) return {};
     std::vector<SoldierPose> changed;
     auto spawns = units_.abandonVehicles(c.vehicles, &changed);
+    if (units_.multiplayerSymmetry() && !spawns.empty()) {
+        pendingCrewSpawns_.insert(pendingCrewSpawns_.end(), spawns.begin(), spawns.end());
+    }
     mergeSoldierPoses(changed);
     collectVehiclePoses();
     if (auto snap = units_.takeFogSnapshot()) fog_ = std::move(snap);
@@ -942,6 +986,35 @@ bool MissionRunner::togglePause() {
 cmd::TogglePause::Result MissionRunner::applyLocked(const cmd::TogglePause&) {
     paused_ = !paused_;
     return paused_;
+}
+bool MissionRunner::isPaused() const {
+    std::lock_guard lock(mutex_);
+    return paused_;
+}
+void MissionRunner::setViewerOwner(int owner) {
+    std::lock_guard lock(mutex_);
+    units_.setViewerOwner(owner);
+    if (auto snap = units_.takeFogSnapshot()) fog_ = std::move(snap);
+}
+int MissionRunner::viewerOwner() const {
+    std::lock_guard lock(mutex_);
+    return units_.viewerOwner();
+}
+void MissionRunner::setMultiplayerSymmetry(bool enabled) {
+    std::lock_guard lock(mutex_);
+    units_.setMultiplayerSymmetry(enabled);
+}
+bool MissionRunner::multiplayerSymmetry() const {
+    std::lock_guard lock(mutex_);
+    return units_.multiplayerSymmetry();
+}
+void MissionRunner::setCommandSink(std::function<void(cmd::Command)> sink) {
+    std::lock_guard lock(mutex_);
+    commandSink_ = std::move(sink);
+}
+std::vector<assets::Placement> MissionRunner::pollCrewSpawns() {
+    std::lock_guard lock(mutex_);
+    return std::exchange(pendingCrewSpawns_, {});
 }
 std::optional<std::pair<std::uint32_t, std::uint32_t>> MissionRunner::nextMissionSignal() const {
     std::lock_guard lock(mutex_);

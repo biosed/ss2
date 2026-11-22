@@ -15,8 +15,9 @@ namespace ss2::assets {
 /// Decode raw mission text (preserving valid UTF-8, falling back per-byte to Windows-1252).
 std::string decodeMissionText(std::string_view raw);
 
-/// Loaded mission container supporting both single-file `.ssm` (MS2S) and
-/// paired campaign `.ssc` (`NNN.ssc` P2SS + `NNNMMM.ssc` I2SS with `I-CINFO` crop).
+/// Loaded mission container supporting single-file `.ssm` (MS2S),
+/// multiplayer `.smm`/`.ssm` (MM2S), and paired campaign `.ssc`
+/// (`NNN.ssc` P2SS + `NNNMMM.ssc` I2SS with `I-CINFO` crop).
 struct MissionArchive {
     std::vector<std::uint8_t> mapBytes;
     std::vector<std::uint8_t> missionBytes;
@@ -25,6 +26,7 @@ struct MissionArchive {
     unsigned offsetX{0}, offsetY{0};
     unsigned width{128}, height{128};
     bool isCampaign{false};
+    bool isMultiplayer{false};
 
     std::optional<std::span<const std::uint8_t>> findMapRecord(std::string_view wanted) const;
     std::optional<std::span<const std::uint8_t>> findMissionRecord(std::string_view wanted) const;
@@ -135,6 +137,8 @@ MapImage decodeJpeg(std::span<const std::uint8_t> data);
 MapImage readMissionOverview(const std::filesystem::path& mission);
 std::vector<MissionSummary> listSinglePlayerMissions(const std::filesystem::path& gameDir);
 std::optional<MissionSummary> findSinglePlayerMission(const std::filesystem::path& gameDir, std::string_view query);
+std::vector<MissionSummary> listMultiplayerMissions(const std::filesystem::path& gameDir);
+std::optional<MissionSummary> findMultiplayerMission(const std::filesystem::path& gameDir, std::string_view query);
 std::vector<CampaignSummary> listCampaigns(const std::filesystem::path& gameDir);
 std::optional<CampaignMissionSummary> findCampaignMission(const std::filesystem::path& gameDir,
                                                           std::string_view query,

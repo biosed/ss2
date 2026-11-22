@@ -9,9 +9,11 @@
 #include "assets/unit_catalog.hpp"
 #include "assets/vehicles.hpp"
 #include "audio/sound_player.hpp"
+#include "net/tcp_transport.hpp"
 #include "render/plane_atlas.hpp"
 #include "render/window.hpp"
 #include "sim/command.hpp"
+#include "sim/lockstep.hpp"
 #include "sim/mission_runner.hpp"
 #include "sim/tutorial_coordinates.hpp"
 #include "ui/briefing.hpp"
@@ -41,6 +43,17 @@
 
 namespace ss2 {
 
+struct MultiplayerSessionConfig {
+    bool enabled{false};
+    bool isHost{false};
+    int localSeat{0};
+    int playerCount{2};
+    std::uint32_t turnTicks{kDefaultTurnTicks};
+    std::uint32_t inputDelayTurns{kDefaultInputDelayTurns};
+    std::uint32_t hashIntervalTurns{kDefaultHashIntervalTurns};
+    std::shared_ptr<TcpConnection> peer;
+};
+
 int runGameSession(SDL_Window* window, ValidationReport* report, int limit, bool timing,
                    const std::filesystem::path& gameDir, const std::filesystem::path& mission,
                    const std::filesystem::path& hdPack, bool originalInfantry, bool autoEngage,
@@ -49,7 +62,8 @@ int runGameSession(SDL_Window* window, ValidationReport* report, int limit, bool
                    const std::filesystem::path& recordPath = {},
                    const cmd::ReplayFile* replayFile = nullptr,
                    bool manualClock = false,
-                   const std::filesystem::path& loadSavePath = {});
+                   const std::filesystem::path& loadSavePath = {},
+                   MultiplayerSessionConfig multiplayer = {});
 
 class FrameSample {
     using Clock = std::chrono::steady_clock;
@@ -147,6 +161,13 @@ struct GameSession {
     const cmd::ReplayFile* replayFile;
     bool manualClock = false;
     std::filesystem::path loadSavePath;
+    MultiplayerSessionConfig multiplayer;
+    std::optional<LockstepCoordinator> lockstep;
+    std::chrono::steady_clock::time_point nextLockstepTickAt{};
+    std::vector<MissionEvent> deferredLockstepEvents;
+    bool lockstepWaitingPeer = false;
+    bool lockstepDesyncReported = false;
+    bool lockstepPeerDisconnected = false;
 
     float refreshRate = 0.0f;
     VulkanWindow renderer;
@@ -288,9 +309,13 @@ struct GameSession {
                 UserSettings& settings, bool persistSettings,
                 bool overviewOnly, std::optional<std::filesystem::path>* nextMissionOut,
                 const std::filesystem::path& recordPath, const cmd::ReplayFile* replayFile,
-                bool manualClock = false, const std::filesystem::path& loadSavePath = {});
+                bool manualClock = false, const std::filesystem::path& loadSavePath = {},
+                MultiplayerSessionConfig multiplayer = {});
 
     int run();
+    int localOwner() const noexcept { return multiplayer.enabled ? multiplayer.localSeat : 0; }
+    void processLockstepPostTickSpawns();
+    void spawnAbandonedCrew(const std::vector<assets::Placement>& spawns);
 
     // Setup, sprites, terrain decals, and reinforcement spawns (session_setup.cpp).
     void initializeMission();

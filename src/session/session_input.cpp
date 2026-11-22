@@ -572,7 +572,7 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
             const auto& units = scene->units();
             for (size_t idx = 0; idx < units.size(); ++idx) {
                 const auto& u = units[idx];
-                if (u.owner != 0 || u.hp <= 0 || !u.visible) continue;
+                if (u.owner != localOwner() || u.hp <= 0 || !u.visible) continue;
                 const int maxHp = (idx < initialUnitHp.size() && initialUnitHp[idx] > 0) ? initialUnitHp[idx] : 100;
                 const bool dry = (u.ammo <= 0) && isCombatAmmoSoldierId(u.id);
                 if (u.hp < maxHp || dry) needy.push_back({false, idx});
@@ -581,7 +581,7 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
                 const auto& vehs = vehicleScene->vehicles();
                 for (size_t idx = 0; idx < vehs.size(); ++idx) {
                     const auto& v = vehs[idx];
-                    if (!v.alive || v.hp <= 0 || v.owner != 0 || !v.visible) continue;
+                    if (!v.alive || v.hp <= 0 || v.owner != localOwner() || !v.visible) continue;
                     const int maxHp = (idx < initialVehicleHp.size() && initialVehicleHp[idx] > 0) ? initialVehicleHp[idx] : 100;
                     const bool dry = (v.ammo <= 0) && isArmedVehicleId(v.id);
                     if (v.hp < maxHp || dry) needy.push_back({true, idx});
@@ -852,7 +852,7 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
         const auto targetVeh = selection->vehicleAt(int(std::floor(x)), int(std::floor(y)));
         if (ids.empty() && vids.empty() && selectedBuilding && *selectedBuilding < liveBuildings.size()) {
             const auto& sb = liveBuildings[*selectedBuilding];
-            if (!sb.destroyed && sb.owner == 0 && sb.occupantCount > 0) {
+            if (!sb.destroyed && sb.owner == localOwner() && sb.occupantCount > 0) {
                 std::optional<size_t> bOrder;
                 int mLeft = 0, mTop = 0, mW = 16, mH = 16;
                 if (targetVeh && vehicleScene &&
@@ -935,7 +935,7 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
             }
         }
         if (!vids.empty() && targetVeh && vehicleScene &&
-            vehicleScene->vehicles().at(*targetVeh).owner == 0 &&
+            vehicleScene->vehicles().at(*targetVeh).owner == localOwner() &&
             simulation->canSupportVehicle(vids, *targetVeh)) {
             if (const auto res = simulation->orderSupportVehicle(vids, *targetVeh); res && *res > 0) {
                 const auto& tv = vehicleScene->vehicles().at(*targetVeh);
@@ -959,7 +959,7 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
             }
         }
         if ((!ids.empty() || !vids.empty()) && targetInf &&
-            scene->units().at(*targetInf).owner == 0 &&
+            scene->units().at(*targetInf).owner == localOwner() &&
             simulation->canHealSoldier(ids, vids, *targetInf)) {
             if (const auto res = simulation->orderHealSoldier(ids, vids, *targetInf); res && *res > 0) {
                 const auto& tu = scene->units().at(*targetInf);
@@ -1002,7 +1002,7 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
             }
         }
         if (!ids.empty() && targetVeh && vehicleScene &&
-            vehicleScene->vehicles().at(*targetVeh).owner == 0 &&
+            vehicleScene->vehicles().at(*targetVeh).owner == localOwner() &&
             simulation->canBoardVehicle(*targetVeh)) {
             if (const auto res = simulation->boardVehicle(ids, *targetVeh); res && *res > 0) {
                 const auto& tv = vehicleScene->vehicles().at(*targetVeh);
@@ -1026,7 +1026,7 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
             }
         }
         if ((!ids.empty() || !vids.empty()) && targetVeh && vehicleScene &&
-            vehicleScene->vehicles().at(*targetVeh).owner == 0 &&
+            vehicleScene->vehicles().at(*targetVeh).owner == localOwner() &&
             simulation->canEscortVehicle(ids, vids, *targetVeh)) {
             if (const auto res = simulation->orderEscortVehicle(ids, vids, *targetVeh); res && *res > 0) {
                 const auto& tv = vehicleScene->vehicles().at(*targetVeh);
@@ -1051,7 +1051,7 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
             }
         }
         if ((!ids.empty() || !vids.empty()) && targetInf &&
-            scene->units().at(*targetInf).owner == 0 &&
+            scene->units().at(*targetInf).owner == localOwner() &&
             simulation->canEscortSoldier(ids, vids, *targetInf)) {
             if (const auto res = simulation->orderEscortSoldier(ids, vids, *targetInf); res && *res > 0) {
                 const auto& tu = scene->units().at(*targetInf);
@@ -1256,7 +1256,7 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
         const bool hasGarrisonCmd = !hasAny && selectedBuilding &&
                                     *selectedBuilding < liveBuildings.size() &&
                                     !liveBuildings[*selectedBuilding].destroyed &&
-                                    liveBuildings[*selectedBuilding].owner == 0 &&
+                                    liveBuildings[*selectedBuilding].owner == localOwner() &&
                                     liveBuildings[*selectedBuilding].occupantCount > 0;
         const bool hasCmd = hasAny || hasGarrisonCmd;
         const bool validInfTarget = hasCmd && targetInf && isHostileOwner(scene->units().at(*targetInf).owner) &&
@@ -1280,14 +1280,14 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
         const bool canGarrisonHover = !ids.empty() && hoverBld && simulation->canGarrisonBuilding(*hoverBld);
         const bool canSupportHover =
             (!pvids.empty() && targetVeh && vehicleScene &&
-             vehicleScene->vehicles().at(*targetVeh).owner == 0 &&
+             vehicleScene->vehicles().at(*targetVeh).owner == localOwner() &&
              simulation->canSupportVehicle(pvids, *targetVeh)) ||
             (!pvids.empty() && hoverBld && simulation->canSupportBuilding(pvids, *hoverBld)) ||
             (hasAny && targetInf && scene->units().at(*targetInf).owner == 0 &&
              simulation->canHealSoldier(ids, pvids, *targetInf));
         const bool canEscortHover =
             (hasAny && targetVeh && vehicleScene &&
-             vehicleScene->vehicles().at(*targetVeh).owner == 0 &&
+             vehicleScene->vehicles().at(*targetVeh).owner == localOwner() &&
              simulation->canEscortVehicle(ids, pvids, *targetVeh)) ||
             (hasAny && targetInf && scene->units().at(*targetInf).owner == 0 &&
              simulation->canEscortSoldier(ids, pvids, *targetInf));
@@ -1304,7 +1304,7 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
             SDL_SetCursor(moveCursor ? moveCursor.get() : SDL_GetDefaultCursor());
         } else if (canTowHover || canGarrisonHover ||
                    (!ids.empty() && targetVeh && vehicleScene &&
-                    ((vehicleScene->vehicles().at(*targetVeh).owner == 0 && simulation->canBoardVehicle(*targetVeh)) ||
+                    ((vehicleScene->vehicles().at(*targetVeh).owner == localOwner() && simulation->canBoardVehicle(*targetVeh)) ||
                      (vehicleScene->vehicles().at(*targetVeh).owner == 3 && simulation->canCaptureVehicle(*targetVeh))))) {
             SDL_SetCursor(moveCursor ? moveCursor.get() : SDL_GetDefaultCursor());
         } else if ((!ids.empty() && simulation->canMove(ids, simX, simY)) || !pickedVeh.empty()) {
@@ -1327,7 +1327,7 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
                    !liveBuildings.empty()) {
             const auto [bx, by] = renderer.mapPosition(event.button.x, event.button.y);
             const auto clickedBld = buildingAtMap(int(std::floor(bx / mapScale)), int(std::floor(by / mapScale)));
-            if (clickedBld && liveBuildings[*clickedBld].owner == 0 && liveBuildings[*clickedBld].occupantCount > 0) {
+            if (clickedBld && liveBuildings[*clickedBld].owner == localOwner() && liveBuildings[*clickedBld].occupantCount > 0) {
                 selectedBuilding = *clickedBld;
                 const auto& lb = liveBuildings[*clickedBld];
                 showNotice(ss2::trf("Garrisoned building ({0}/{1}) — press U to evacuate.",

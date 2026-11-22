@@ -1,8 +1,10 @@
 #include "assets/mission.hpp"
+#include "net/tcp_transport.hpp"
 #include "render/window.hpp"
 #include "session/game_session.hpp"
 #include "session/save_file.hpp"
 #include "sim/command.hpp"
+#include "sim/lockstep.hpp"
 #include "ui/frontend.hpp"
 #include "ui/gold_frontend.hpp"
 #include "ui/settings.hpp"
@@ -198,11 +200,83 @@ std::vector<ss2::FrontEnd::SaveEntry> scanSavedGames(
     return out;
 }
 
+std::optional<std::uint16_t> parsePortArg(std::string_view text) {
+    if (text.empty()) return std::nullopt;
+    unsigned v = 0;
+    const auto [end, ec] = std::from_chars(text.data(), text.data() + text.size(), v);
+    if (ec != std::errc{} || end != text.data() + text.size() || v == 0 || v > 65535u) {
+        return std::nullopt;
+    }
+    return static_cast<std::uint16_t>(v);
+}
+
+std::optional<std::pair<std::string, std::uint16_t>> parseJoinEndpoint(std::string_view spec) {
+    const auto colon = spec.rfind(':');
+    if (colon == std::string_view::npos || colon == 0) return std::nullopt;
+    std::string_view host = spec.substr(0, colon);
+    if (host.size() >= 2 && host.front() == '[' && host.back() == ']') {
+        host = host.substr(1, host.size() - 2);
+    }
+    const auto port = parsePortArg(spec.substr(colon + 1));
+    if (host.empty() || !port) return std::nullopt;
+    return std::pair<std::string, std::uint16_t>{std::string(host), *port};
+}
+
+std::filesystem::path resolveMultiplayerMissionFromSetup(const std::filesystem::path& gameDir,
+                                                         const ss2::MatchSetupPacket& setup,
+                                                         const std::filesystem::path& explicitMission) {
+    if (!explicitMission.empty()) {
+        const auto md = ss2::assets::readMissionData(explicitMission);
+        if (ss2::computeMissionMapHash(md) != setup.mapHash) {
+            throw std::runtime_error("Multiplayer map hash mismatch between host and joiner");
+        }
+        return explicitMission;
+    }
+    if (gameDir.empty()) {
+        throw std::runtime_error("Cannot resolve multiplayer map '" + setup.missionSpec + "' without --game-dir");
+    }
+    const auto maps = ss2::assets::listMultiplayerMissions(gameDir);
+    std::optional<std::filesystem::path> hashOnlyMatch;
+    bool sawStemMismatch = false;
+    for (const auto& m : maps) {
+        try {
+            const auto md = ss2::assets::readMissionData(m.path);
+            const bool hashOk = (ss2::computeMissionMapHash(md) == setup.mapHash);
+            const bool stemOk = !setup.missionSpec.empty() &&
+                                ss2::assets::equalsIgnoreCaseAscii(m.path.stem().string(), setup.missionSpec);
+            if (hashOk && stemOk) return m.path;
+            if (hashOk && !hashOnlyMatch) hashOnlyMatch = m.path;
+            if (stemOk && !hashOk) sawStemMismatch = true;
+        } catch (...) {
+        }
+    }
+    if (hashOnlyMatch) return *hashOnlyMatch;
+    if (sawStemMismatch) {
+        throw std::runtime_error("Multiplayer map hash mismatch for '" + setup.missionSpec + "'");
+    }
+    throw std::runtime_error("Host selected unknown multiplayer map: " + setup.missionSpec);
+}
+
+ss2::MultiplayerSessionConfig makeMultiplayerConfig(const ss2::MultiplayerHandshake& hs,
+                                                    std::shared_ptr<ss2::TcpConnection> peer) {
+    ss2::MultiplayerSessionConfig cfg;
+    cfg.enabled = true;
+    cfg.isHost = hs.isHost();
+    cfg.localSeat = hs.isHost() ? 0 : hs.matchSetup().assignedSeat;
+    cfg.playerCount = hs.matchSetup().playerCount;
+    cfg.turnTicks = hs.matchSetup().turnTicks;
+    cfg.inputDelayTurns = hs.matchSetup().inputDelayTurns;
+    cfg.hashIntervalTurns = hs.matchSetup().hashIntervalTurns;
+    cfg.peer = std::move(peer);
+    return cfg;
+}
+
 struct FrontEndResult {
     std::filesystem::path missionPath;
     std::optional<ss2::cmd::ReplayFile> replayFile;
     std::filesystem::path savePath;
     std::optional<int> saveDifficulty;
+    std::optional<ss2::MultiplayerSessionConfig> multiplayerConfig;
 };
 
 // The Gold frontend shown on ordinary launch, before any mission loads. Reuses the mission
@@ -266,6 +340,17 @@ std::optional<FrontEndResult> runFrontEnd(SDL_Window* window, ss2::ValidationRep
     goldFe.setReplays(scanSavedReplays());
     goldFe.setSaves(scanSavedGames(gameDir, installedMissions, installedCampaigns));
 
+    const auto installedMp = ss2::assets::listMultiplayerMissions(gameDir);
+    std::vector<ss2::GoldMissionEntry> mpEntries;
+    mpEntries.reserve(installedMp.size());
+    for (const auto& m : installedMp) {
+        std::string tag = std::to_string(m.width) + "x" + std::to_string(m.height) +
+                          (m.scheme == 2 ? " Beach" : " Summer");
+        mpEntries.push_back({m.name, m.path.string(), m.description, std::move(tag),
+                             m.width, m.height, m.scheme, false, 0});
+    }
+    goldFe.setMultiplayerMissions(std::move(mpEntries));
+
     const ss2::Snapshot empty{};
     std::uint64_t lastTick = SDL_GetTicksNS();
     for (;;) {
@@ -308,11 +393,11 @@ std::optional<FrontEndResult> runFrontEnd(SDL_Window* window, ss2::ValidationRep
                     (void)ss2::saveUserSettings(ss2::defaultSettingsPath(), settings);
                 }
             }
-            return FrontEndResult{std::filesystem::path(goldFe.state().launchPath()), std::nullopt, {}, std::nullopt};
+            return FrontEndResult{std::filesystem::path(goldFe.state().launchPath()), std::nullopt, {}, std::nullopt, std::nullopt};
         }
         if (screen == ss2::FrontEnd::Screen::LaunchReplay) {
             if (auto loaded = loadReplayFileFromDisk(goldFe.state().launchReplayPath())) {
-                return FrontEndResult{resolveReplayMissionPath(gameDir, loaded->mission), std::move(*loaded), {}, std::nullopt};
+                return FrontEndResult{resolveReplayMissionPath(gameDir, loaded->mission), std::move(*loaded), {}, std::nullopt, std::nullopt};
             }
             goldFe.state().back();
         }
@@ -326,12 +411,89 @@ std::optional<FrontEndResult> runFrontEnd(SDL_Window* window, ss2::ValidationRep
                         resolved,
                         std::nullopt,
                         savePath,
-                        decoded->meta.hasMetadata ? std::optional<int>(decoded->meta.difficulty) : std::nullopt
+                        decoded->meta.hasMetadata ? std::optional<int>(decoded->meta.difficulty) : std::nullopt,
+                        std::nullopt
                     };
                 }
             }
             goldFe.handleKey(SDLK_ESCAPE);
             goldFe.showNotice(ss2::tr("Failed to load saved game."));
+        }
+        if (screen == ss2::FrontEnd::Screen::LaunchMultiplayer) {
+            ss2::MultiplayerHandshake hs;
+            std::filesystem::path mpMissionPath;
+            bool started = false;
+            try {
+                if (goldFe.state().mpIsHost()) {
+                    mpMissionPath = goldFe.state().launchMultiplayerPath();
+                    if (mpMissionPath.empty() || !std::filesystem::is_regular_file(mpMissionPath)) {
+                        throw std::runtime_error(ss2::tr("No multiplayer maps installed."));
+                    }
+                    const auto md = ss2::assets::readMissionData(mpMissionPath);
+                    ss2::MatchSetupPacket setup;
+                    setup.assignedSeat = 1;
+                    setup.playerCount = 2;
+                    setup.mapHash = ss2::computeMissionMapHash(md);
+                    setup.missionSpec = mpMissionPath.stem().string();
+                    setup.autoEngage = true;
+                    started = hs.startHost(goldFe.state().mpPort(), std::move(setup));
+                } else {
+                    started = hs.startJoin(goldFe.state().mpHostAddress(), goldFe.state().mpPort());
+                }
+            } catch (const std::exception& e) {
+                goldFe.handleKey(SDLK_ESCAPE);
+                goldFe.showNotice(e.what());
+                started = false;
+            }
+            if (started) {
+                std::string prevStatus;
+                bool cancelled = false;
+                while (hs.state() != ss2::MultiplayerHandshake::State::Ready &&
+                       hs.state() != ss2::MultiplayerHandshake::State::Failed) {
+                    SDL_Event ev;
+                    while (SDL_PollEvent(&ev)) {
+                        if (ev.type == SDL_EVENT_QUIT) {
+                            hs.cancel();
+                            return std::nullopt;
+                        }
+                        renderer.handleEvent(ev);
+                        if (ev.type == SDL_EVENT_KEY_DOWN && !ev.key.repeat && ev.key.key == SDLK_ESCAPE) {
+                            hs.cancel();
+                            cancelled = true;
+                            break;
+                        }
+                    }
+                    if (cancelled) break;
+                    hs.poll();
+                    if (hs.statusText() != prevStatus && !hs.statusText().empty()) {
+                        prevStatus = hs.statusText();
+                        goldFe.showNotice(ss2::tr(prevStatus));
+                    }
+                    goldFe.draw(renderer);
+                    if (!renderer.present(empty)) SDL_Delay(10);
+                    else SDL_Delay(5);
+                }
+                if (cancelled) {
+                    goldFe.handleKey(SDLK_ESCAPE);
+                } else if (hs.state() == ss2::MultiplayerHandshake::State::Ready) {
+                    try {
+                        if (!hs.isHost()) {
+                            mpMissionPath = resolveMultiplayerMissionFromSetup(gameDir, hs.matchSetup(), {});
+                        }
+                        auto mpCfg = makeMultiplayerConfig(hs, hs.takeConnection());
+                        return FrontEndResult{std::move(mpMissionPath), std::nullopt, {}, std::nullopt, std::move(mpCfg)};
+                    } catch (const std::exception& e) {
+                        goldFe.handleKey(SDLK_ESCAPE);
+                        goldFe.showNotice(e.what());
+                    }
+                } else {
+                    goldFe.handleKey(SDLK_ESCAPE);
+                    goldFe.showNotice(hs.errorText().empty() ? ss2::tr("Connection to peer lost.") : hs.errorText());
+                }
+            } else if (!hs.errorText().empty()) {
+                goldFe.handleKey(SDLK_ESCAPE);
+                goldFe.showNotice(hs.errorText());
+            }
         }
         if (screen == ss2::FrontEnd::Screen::Quit) return std::nullopt;
 
@@ -353,17 +515,23 @@ int main(int argc, char** argv) try {
     bool languageChosen = false;
     bool listMissions = false;
     bool listCampaigns = false;
+    bool listMultiplayer = false;
     bool overviewOnly = false;
     bool noMovies = false;
     std::optional<int> cliDifficulty;
+    std::optional<std::uint16_t> mpHostPort;
+    std::optional<std::pair<std::string, std::uint16_t>> mpJoinEndpoint;
     for (int i = 1; i < argc; ++i) {
         const std::string_view arg(argv[i]);
         if (arg == "--help") {
-            std::cout << "ss2 [--game-dir DIR] [--mission FILE.ssm|NAME|INDEX] [--campaign QUERY] [--overview] [--list-missions] [--list-campaigns] [--hd-pack DIR] [--original-infantry] [--no-auto-engage] [--difficulty easy|normal|hard] [--record FILE | --replay FILE | --load-save FILE] [--4k] [--fullscreen | --windowed] [--lang en|fr|es] [--frames N] [--no-movies] [--validate] [--timing]\n"
+            std::cout << "ss2 [--game-dir DIR] [--mission FILE.ssm|NAME|INDEX] [--campaign QUERY] [--overview] [--list-missions] [--list-campaigns] [--list-multiplayer] [--host PORT | --join HOST:PORT] [--hd-pack DIR] [--original-infantry] [--no-auto-engage] [--difficulty easy|normal|hard] [--record FILE | --replay FILE | --load-save FILE] [--4k] [--fullscreen | --windowed] [--lang en|fr|es] [--frames N] [--no-movies] [--validate] [--timing]\n"
                          "--game-dir opens Tutorial I (or --mission) from an extracted Gold 2.2 game directory.\n"
                          "--list-missions lists all installed single-player missions, their map sizes and descriptions.\n"
                          "--list-campaigns lists all installed campaigns and missions.\n"
-                         "--mission launches a playable single-player mission (file path, display name or 1-based index), or displays its overview if no game directory is given or --overview is set.\n"
+                         "--list-multiplayer lists all installed multiplayer missions (maps/mplay/*.smm).\n"
+                         "--host PORT hosts a 2-player lockstep TCP match on PORT with --mission.\n"
+                         "--join HOST:PORT joins a 2-player lockstep TCP match at HOST:PORT.\n"
+                         "--mission launches a playable mission (file path, display name or 1-based index), or displays its overview if no game directory is given or --overview is set.\n"
                          "--campaign launches a playable campaign mission (e.g. german:1, british:5, 031000, or unique title substring).\n"
                          "--overview displays only the mission's JPEG overview instead of launching playable.\n"
                          "--record writes a deterministic command log and final stateHash to FILE on exit.\n"
@@ -385,6 +553,14 @@ int main(int argc, char** argv) try {
         else if (arg == "--load-save" && i + 1 < argc) loadSavePath = argv[++i];
         else if (arg == "--list-missions") listMissions = true;
         else if (arg == "--list-campaigns") listCampaigns = true;
+        else if (arg == "--list-multiplayer") listMultiplayer = true;
+        else if (arg == "--host" && i + 1 < argc) {
+            mpHostPort = parsePortArg(argv[++i]);
+            if (!mpHostPort) throw std::invalid_argument("--host requires a TCP port (1..65535)");
+        } else if (arg == "--join" && i + 1 < argc) {
+            mpJoinEndpoint = parseJoinEndpoint(argv[++i]);
+            if (!mpJoinEndpoint) throw std::invalid_argument("--join requires HOST:PORT");
+        }
         else if (arg == "--overview") overviewOnly = true;
         else if (arg == "--no-movies") noMovies = true;
         else if (arg == "--original-infantry") originalInfantry = true;
@@ -425,6 +601,16 @@ int main(int argc, char** argv) try {
         throw std::invalid_argument("--timing cannot be combined with --replay");
     if (!loadSavePath.empty() && (!recordPath.empty() || !replayPath.empty() || overviewOnly || timing))
         throw std::invalid_argument("--load-save cannot be combined with --record, --replay, --overview or --timing");
+    if (mpHostPort && mpJoinEndpoint)
+        throw std::invalid_argument("Choose either --host or --join");
+    const bool mpRequested = mpHostPort.has_value() || mpJoinEndpoint.has_value();
+    if (mpRequested && (!recordPath.empty() || !replayPath.empty() || !loadSavePath.empty() ||
+                        overviewOnly || timing || !campaignQuery.empty())) {
+        throw std::invalid_argument("--host/--join cannot be combined with --record, --replay, --load-save, --overview, --timing or --campaign");
+    }
+    if (mpHostPort && mission.empty()) {
+        throw std::invalid_argument("--host requires --mission");
+    }
     std::optional<ss2::DecodedSaveFile> parsedSave;
     if (!loadSavePath.empty()) {
         parsedSave = ss2::readSaveFile(loadSavePath);
@@ -485,6 +671,26 @@ int main(int argc, char** argv) try {
         if (installed.empty()) std::cout << "  (none found)\n";
         return 0;
     }
+    if (listMultiplayer) {
+        const auto directory = resolveGameDir();
+        if (directory.empty())
+            throw std::runtime_error("--list-multiplayer needs a game directory: pass --game-dir or set SS2_GAME_DIR");
+        const auto installed = ss2::assets::listMultiplayerMissions(directory);
+        std::cout << "Multiplayer missions (" << installed.size() << "):\n";
+        for (std::size_t i = 0; i < installed.size(); ++i) {
+            const auto& m = installed[i];
+            const char* schemeName = m.scheme == 2 ? "Beach" : "Summer";
+            std::cout << ' ' << (i + 1) << "  " << m.name << " [" << m.width << 'x' << m.height
+                      << ", " << schemeName << "]\n";
+            if (!m.description.empty()) {
+                std::string desc = m.description;
+                if (desc.size() > 110) { desc.resize(107); desc += "..."; }
+                std::cout << "    " << desc << '\n';
+            }
+        }
+        if (installed.empty()) std::cout << "  (none found)\n";
+        return 0;
+    }
     if (parsedReplay && mission.empty() && campaignQuery.empty() && !parsedReplay->mission.empty()) {
         const auto directory = resolveGameDir();
         if (!directory.empty()) {
@@ -507,11 +713,25 @@ int main(int argc, char** argv) try {
         const auto directory = resolveGameDir();
         if (directory.empty())
             throw std::invalid_argument("--mission needs a file path, or a game directory to resolve a mission name");
-        const auto found = ss2::assets::findSinglePlayerMission(directory, mission.string());
-        if (!found) throw std::invalid_argument("Unknown single-player mission: " + mission.string());
-        std::cout << "Selected mission: " << found->name << " [" << found->width << 'x' << found->height << "] (" << found->path << ")\n";
-        mission = found->path;
+        if (mpRequested) {
+            const auto found = ss2::assets::findMultiplayerMission(directory, mission.string());
+            if (!found) throw std::invalid_argument("Unknown multiplayer mission: " + mission.string());
+            std::cout << "Selected multiplayer mission: " << found->name << " [" << found->width << 'x' << found->height
+                      << "] (" << found->path << ")\n";
+            mission = found->path;
+        } else {
+            const auto found = ss2::assets::findSinglePlayerMission(directory, mission.string());
+            if (!found) throw std::invalid_argument("Unknown single-player mission: " + mission.string());
+            std::cout << "Selected mission: " << found->name << " [" << found->width << 'x' << found->height << "] (" << found->path << ")\n";
+            mission = found->path;
+        }
         if (gameDir.empty() && !overviewOnly) gameDir = directory;
+    }
+    if (mpJoinEndpoint && gameDir.empty() && mission.empty()) {
+        gameDir = resolveGameDir();
+        if (gameDir.empty()) {
+            throw std::invalid_argument("--join requires --game-dir or --mission");
+        }
     }
     if (!hdPack.empty() && resolveGameDir().empty()) throw std::invalid_argument("--hd-pack requires --game-dir");
     if (mission.empty() && !limit && !timing) {
@@ -557,7 +777,8 @@ int main(int argc, char** argv) try {
         if (parsedReplay->autoEngage) autoEngage = *parsedReplay->autoEngage;
     }
     SDLSession sdl;
-    if (!noMovies && !settings.skipIntro && !gameDir.empty() && !limit && !timing && !overviewOnly && !parsedReplay && !parsedSave)
+    if (!noMovies && !settings.skipIntro && !gameDir.empty() && !limit && !timing && !overviewOnly &&
+        !parsedReplay && !parsedSave && !mpRequested)
         ss2::playOpeningMovies(gameDir, fullscreen.value_or(false), hdPack);
     auto flags = SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
     if (fullscreen.value_or(false)) flags |= SDL_WINDOW_FULLSCREEN;
@@ -574,7 +795,55 @@ int main(int argc, char** argv) try {
     if (!window) throw std::runtime_error(SDL_GetError());
     ss2::ValidationReport report;
     int result = 0;
-    if (mission.empty() && !gameDir.empty() && !overviewOnly && !limit && !timing && !parsedReplay && !parsedSave) {
+    ss2::MultiplayerSessionConfig mpConfig;
+    if (mpRequested) {
+        ss2::MultiplayerHandshake hs;
+        if (mpHostPort) {
+            const auto md = ss2::assets::readMissionData(mission);
+            ss2::MatchSetupPacket setup;
+            setup.assignedSeat = 1;
+            setup.playerCount = 2;
+            setup.mapHash = ss2::computeMissionMapHash(md);
+            setup.missionSpec = mission.stem().string();
+            setup.autoEngage = autoEngage;
+            if (!hs.startHost(*mpHostPort, std::move(setup))) {
+                throw std::runtime_error(hs.errorText());
+            }
+            std::cout << "Hosting lockstep multiplayer on port " << hs.listeningPort()
+                      << " (" << hs.matchSetup().missionSpec << ")\n";
+        } else {
+            std::uint64_t expectedHash = 0;
+            if (!mission.empty()) {
+                expectedHash = ss2::computeMissionMapHash(ss2::assets::readMissionData(mission));
+            }
+            if (!hs.startJoin(mpJoinEndpoint->first, mpJoinEndpoint->second, "Player 2", expectedHash)) {
+                throw std::runtime_error(hs.errorText());
+            }
+            std::cout << "Joining lockstep multiplayer at " << mpJoinEndpoint->first
+                      << ':' << mpJoinEndpoint->second << '\n';
+        }
+        while (hs.state() != ss2::MultiplayerHandshake::State::Ready &&
+               hs.state() != ss2::MultiplayerHandshake::State::Failed) {
+            SDL_Event ev;
+            while (SDL_PollEvent(&ev)) {
+                if (ev.type == SDL_EVENT_QUIT ||
+                    (ev.type == SDL_EVENT_KEY_DOWN && !ev.key.repeat && ev.key.key == SDLK_ESCAPE)) {
+                    hs.cancel();
+                    return 0;
+                }
+            }
+            hs.poll();
+            SDL_Delay(5);
+        }
+        if (hs.state() != ss2::MultiplayerHandshake::State::Ready) {
+            throw std::runtime_error(hs.errorText().empty() ? "Multiplayer handshake failed" : hs.errorText());
+        }
+        if (!hs.isHost()) {
+            mission = resolveMultiplayerMissionFromSetup(gameDir, hs.matchSetup(), mission);
+            autoEngage = hs.matchSetup().autoEngage;
+        }
+        mpConfig = makeMultiplayerConfig(hs, hs.takeConnection());
+    } else if (mission.empty() && !gameDir.empty() && !overviewOnly && !limit && !timing && !parsedReplay && !parsedSave) {
         auto chosen = runFrontEnd(window.get(), validate ? &report : nullptr, gameDir, settings, persistSettings);
         if (!chosen) return 0;
         mission = std::move(chosen->missionPath);
@@ -589,14 +858,18 @@ int main(int argc, char** argv) try {
                 settings.difficulty = std::clamp(*chosen->saveDifficulty, 1, 3);
             }
         }
+        if (chosen->multiplayerConfig) {
+            mpConfig = std::move(*chosen->multiplayerConfig);
+            autoEngage = true;
+        }
     }
     for (;;) {
         std::optional<std::filesystem::path> nextMission;
         result = ss2::runGameSession(window.get(), validate ? &report : nullptr, limit, timing, gameDir, mission, hdPack,
                            originalInfantry, autoEngage, settings, persistSettings, overviewOnly, &nextMission,
-                           recordPath, parsedReplay ? &*parsedReplay : nullptr, false, loadSavePath);
+                           recordPath, parsedReplay ? &*parsedReplay : nullptr, false, loadSavePath, mpConfig);
         loadSavePath.clear();
-        if (!nextMission || result != 0 || !recordPath.empty() || parsedReplay) break;
+        if (!nextMission || result != 0 || !recordPath.empty() || parsedReplay || mpConfig.enabled) break;
         mission = std::move(*nextMission);
         overviewOnly = false;
     }

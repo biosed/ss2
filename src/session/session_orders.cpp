@@ -12,7 +12,7 @@ namespace ss2 {
 
 void GameSession::armAirSupportKind(assets::AirMissionKind kind) {
     if (!simulation) return;
-    const auto slots = simulation->playerAirSupport();
+    const auto slots = simulation->airSupportFor(localOwner());
     const std::size_t idx = static_cast<std::size_t>(kind);
     if (idx >= slots.size() || slots[idx].ready <= 0) {
         orderNotice.show(ss2::trf("No {0} sorties available.", {ss2::tr(airKindLabel(kind))}),
@@ -77,7 +77,7 @@ void GameSession::doToggleHoldFire() {
     if (sel.empty() && vsel.empty()) {
         if (selectedBuilding && *selectedBuilding < liveBuildings.size()) {
             const auto& sb = liveBuildings[*selectedBuilding];
-            if (!sb.destroyed && sb.owner == 0 && sb.occupantCount > 0) {
+            if (!sb.destroyed && sb.owner == localOwner() && sb.occupantCount > 0) {
                 if (const auto hold = simulation->toggleBuildingHoldFire(*selectedBuilding)) {
                     for (const size_t sid : sb.occupantIds) {
                         if (*hold) holdFireUnits.insert(sid);
@@ -143,7 +143,7 @@ void GameSession::doToggleBinoculars() {
     if (selection->selected().empty()) {
         if (selectedBuilding && *selectedBuilding < liveBuildings.size()) {
             const auto& sb = liveBuildings[*selectedBuilding];
-            if (!sb.destroyed && sb.owner == 0 && sb.occupantCount > 0) {
+            if (!sb.destroyed && sb.owner == localOwner() && sb.occupantCount > 0) {
                 if (const auto active = simulation->toggleBuildingBinoculars(*selectedBuilding)) {
                     for (const size_t sid : sb.occupantIds) {
                         const bool hasBino = scene && sid < scene->units().size() &&
@@ -252,7 +252,7 @@ void GameSession::doUnloadOrUnhitch() {
     bool handledU = false;
     if (selectedBuilding && *selectedBuilding < liveBuildings.size()) {
         const auto& lb = liveBuildings[*selectedBuilding];
-        if (!lb.destroyed && lb.owner == 0 && lb.occupantCount > 0) {
+        if (!lb.destroyed && lb.owner == localOwner() && lb.occupantCount > 0) {
             const size_t evac = simulation->evacuateBuilding(*selectedBuilding);
             if (evac > 0) {
                 selectedBuilding.reset();
@@ -286,7 +286,7 @@ void GameSession::doUnloadOrUnhitch() {
         SDL_GetMouseState(&mx, &my);
         const auto [mapX, mapY] = renderer.mapPosition(mx, my);
         const auto hoveredBld = buildingAtMap(int(std::floor(mapX / mapScale)), int(std::floor(mapY / mapScale)));
-        if (hoveredBld && liveBuildings[*hoveredBld].owner == 0 && liveBuildings[*hoveredBld].occupantCount > 0) {
+        if (hoveredBld && liveBuildings[*hoveredBld].owner == localOwner() && liveBuildings[*hoveredBld].occupantCount > 0) {
             const size_t evac = simulation->evacuateBuilding(*hoveredBld);
             if (evac > 0) {
                 if (selectedBuilding && *selectedBuilding == *hoveredBld) selectedBuilding.reset();
@@ -340,6 +340,11 @@ void GameSession::doAbandonVehicles() {
     const auto& vsel = selection->selectedVehicles();
     if (vsel.empty()) return;
     const std::vector<size_t> vids(vsel.begin(), vsel.end());
+    if (multiplayer.enabled) {
+        (void)simulation->abandonVehicles(vids);
+        showNotice(ss2::tr("Abandon order queued."), ss2::NoticeKind::accepted);
+        return;
+    }
     const auto spawns = simulation->abandonVehicles(vids);
     if (spawns.empty()) {
         orderNotice.show(ss2::tr("Selected vehicles have no crew to abandon."), ss2::NoticeKind::unsupported);
@@ -351,44 +356,7 @@ void GameSession::doAbandonVehicles() {
             selection->updateVehicle(vid, scaleVehicle(vehicleScene->vehicles().at(vid), mapScale));
         }
     }
-    std::size_t crewCount = 0;
-    for (const auto& rawCp : spawns) {
-        auto cp = rawCp;
-        (void)ensureGpuInfantrySlot(cp.id);
-        auto spawned = scene->spawn(cp);
-        if (!spawned) {
-            for (const auto& existing : scene->units()) {
-                if (existing.owner == 0) {
-                    cp.id = existing.id;
-                    (void)ensureGpuInfantrySlot(cp.id);
-                    spawned = scene->spawn(cp);
-                    if (spawned) break;
-                }
-            }
-        }
-        if (spawned) {
-            const auto& [newIdx, patch] = *spawned;
-            const auto& unit = scene->units().at(newIdx);
-            ensureUnitPortrait(unit.id, false);
-            (void)simulation->spawnInfantry(unit, 0);
-            const int realAmmo = scaledSoldierAmmo(unit.id, unit.ammo);
-            (void)scene->update(newIdx, unit.x, unit.y, unit.direction, unit.progress, unit.walking, unit.hp,
-                                -1, realAmmo);
-            selection->addUnit(scaleInfantry(scene->units().at(newIdx), mapScale));
-            initialUnitHp.push_back(std::max(1, unit.hp));
-            unitExpa.push_back(0);
-            unitKills.push_back(0);
-            unitGrenades.push_back(initialGrenadesForId(unit.id));
-            unitMineAmmo.push_back(initialMinesForId(unit.id));
-            if (patch.pixels.width && patch.pixels.height) {
-                renderer.updateMapRegion(patch.x, patch.y, patch.pixels);
-            }
-            ++crewCount;
-        }
-    }
-    syncGpuSprites();
-    playSelectionVoice("move");
-    showNotice(ss2::trf("Crew abandoned {0} vehicle(s).", {std::to_string(crewCount)}), ss2::NoticeKind::accepted);
+    spawnAbandonedCrew(spawns);
 }
 
 bool GameSession::issueGroundOrder(int simX, int simY, bool isAttackMove, bool append) {
@@ -459,7 +427,7 @@ bool GameSession::issueGroundOrder(int simX, int simY, bool isAttackMove, bool a
 
 void GameSession::dispatchAirSupportAt(assets::AirMissionKind kind, int simX, int simY) {
     if (!simulation) return;
-    const auto slots = simulation->playerAirSupport();
+    const auto slots = simulation->airSupportFor(localOwner());
     const std::string planeId = slots[static_cast<std::size_t>(kind)].planeId;
     if (simulation->callAirSupport(kind, simX, simY)) {
         ++airSortiesFlown;

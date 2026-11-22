@@ -21,7 +21,8 @@ static_assert(sizeof(Tutorial) - sizeof(assets::TutorialData) == 6872,
               "update Tutorial::stateHash for the new member");
 static_assert(sizeof(MissionRunner) - sizeof(TutorialUnits) - sizeof(Tutorial) - sizeof(std::mutex) -
                   sizeof(std::condition_variable_any) ==
-                  632,
+                  632 + sizeof(std::function<void(cmd::Command)>) + sizeof(std::vector<assets::Placement>) +
+                      sizeof(void*),
               "update MissionRunner::stateHash for the new member");
 #endif
 
@@ -58,7 +59,7 @@ std::uint64_t MissionRunner::stateHash() const {
     // Excluded: simTick_ mirrors units_.tick_, which is hashed.
     h.each(scheduledReinforcements_, [&h](const ScheduledReinforcement& r) { h.all(r.event, r.dueTick); });
     h.add(nextMissionSignal_);
-    // Excluded: recording_ is the command log, not simulation state.
+    // Excluded: recording_, commandSink_, pendingCrewSpawns_, and inLockstepApply_ are transport/presentation helpers.
     return h.value();
 }
 } // namespace ss2

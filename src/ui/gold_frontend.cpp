@@ -166,6 +166,24 @@ constexpr std::array<ButtonSpec, 3> kLoadGameButtons{{
     {"cancel", "Cancel", '\0', {542, 512, 118, 35}, true},
 }};
 
+constexpr std::array<ButtonSpec, 2> kMultiplayerButtons{{
+    {"mp_start", "Start", 'S', {135, 512, 106, 35}, true},
+    {"cancel", "Cancel", '\0', {542, 512, 118, 35}, true},
+}};
+constexpr RectD kMpModeRect{438, 136, 330, 34};
+constexpr RectD kMpHostFieldRect{438, 204, 330, 32};
+constexpr RectD kMpPortFieldRect{438, 268, 160, 32};
+
+std::optional<std::uint16_t> parsePortText(std::string_view s) {
+    if (s.empty()) return std::nullopt;
+    unsigned v = 0;
+    const auto res = std::from_chars(s.data(), s.data() + s.size(), v);
+    if (res.ec != std::errc{} || res.ptr != s.data() + s.size() || v == 0 || v > 65535u) {
+        return std::nullopt;
+    }
+    return static_cast<std::uint16_t>(v);
+}
+
 constexpr std::array<ButtonSpec, 4> kBriefingButtons{{
     {"brief_restart", "Restart", 'R', {577, 211, 186, 33}, false},
     {"brief_pause", "Pause", 'P', {627, 253, 136, 33}, false},
@@ -837,6 +855,23 @@ void GoldFrontEnd::setSaves(std::vector<FrontEnd::SaveEntry> saves) {
     dirty_ = true;
 }
 
+void GoldFrontEnd::setMultiplayerMissions(std::vector<GoldMissionEntry> missions) {
+    mpMissions_ = std::move(missions);
+    std::vector<FrontEnd::Entry> base;
+    base.reserve(mpMissions_.size());
+    for (const auto& m : mpMissions_) {
+        base.push_back(FrontEnd::Entry{m.name, m.path, m.description, m.tag});
+    }
+    fe_.setMultiplayerMissions(std::move(base));
+    assets_->overviews.clear();
+    if (fe_.screen() == FrontEnd::Screen::Multiplayer) {
+        scrollOffset_ = 0;
+        ensureSelectionVisible();
+        ensureFocusedValid();
+    }
+    dirty_ = true;
+}
+
 std::optional<std::string> GoldFrontEnd::takeDeleteSaveRequest() {
     auto req = std::move(pendingDeleteSave_);
     pendingDeleteSave_.reset();
@@ -947,6 +982,9 @@ std::size_t GoldFrontEnd::activeListCount() const {
     if (fe_.screen() == FrontEnd::Screen::LoadGame) {
         return saves_.size();
     }
+    if (fe_.screen() == FrontEnd::Screen::Multiplayer) {
+        return mpMissions_.size();
+    }
     return missions_.size();
 }
 
@@ -960,6 +998,9 @@ std::size_t GoldFrontEnd::activeListSelected() const {
     if (fe_.screen() == FrontEnd::Screen::LoadGame) {
         return fe_.selectedSave();
     }
+    if (fe_.screen() == FrontEnd::Screen::Multiplayer) {
+        return fe_.selectedMultiplayerMission();
+    }
     return fe_.selected();
 }
 
@@ -970,6 +1011,8 @@ void GoldFrontEnd::selectActiveRow(std::size_t index) {
         fe_.selectReplay(index);
     } else if (fe_.screen() == FrontEnd::Screen::LoadGame) {
         fe_.selectSave(index);
+    } else if (fe_.screen() == FrontEnd::Screen::Multiplayer) {
+        fe_.selectMultiplayerMission(index);
     } else {
         fe_.select(index);
     }
@@ -979,6 +1022,7 @@ const char* GoldFrontEnd::activeRowPrefix() const {
     if (fe_.screen() == FrontEnd::Screen::CampaignMissions) return "cmission:";
     if (fe_.screen() == FrontEnd::Screen::Replays) return "replay:";
     if (fe_.screen() == FrontEnd::Screen::LoadGame) return "save:";
+    if (fe_.screen() == FrontEnd::Screen::Multiplayer) return "mpmap:";
     return "mission:";
 }
 
@@ -1050,6 +1094,9 @@ void GoldFrontEnd::ensureFocusedValid() {
         case FrontEnd::Screen::LoadGame:
             focusedId_ = saves_.empty() ? "cancel" : "load_start";
             break;
+        case FrontEnd::Screen::Multiplayer:
+            focusedId_ = (!fe_.mpIsHost() || !mpMissions_.empty()) ? "mp_start" : "cancel";
+            break;
         case FrontEnd::Screen::Ratings:
         case FrontEnd::Screen::Credits:
             focusedId_ = "cancel";
@@ -1057,6 +1104,7 @@ void GoldFrontEnd::ensureFocusedValid() {
         case FrontEnd::Screen::Launch:
         case FrontEnd::Screen::LaunchReplay:
         case FrontEnd::Screen::LaunchSave:
+        case FrontEnd::Screen::LaunchMultiplayer:
         case FrontEnd::Screen::Quit:
             focusedId_.clear();
             break;
@@ -1086,6 +1134,10 @@ void GoldFrontEnd::onScreenChanged(FrontEnd::Screen previous) {
         creditsPaused_ = false;
         noticeText_.clear();
         noticeRemaining_ = {};
+        if (mpEditField_ != MpEditField::None) {
+            mpEditField_ = MpEditField::None;
+            if (window_) SDL_StopTextInput(window_);
+        }
         ensureFocusedValid();
         if (fe_.screen() == FrontEnd::Screen::SingleMissions) {
             ensureSelectionVisible();
@@ -1116,6 +1168,13 @@ void GoldFrontEnd::onScreenChanged(FrontEnd::Screen previous) {
                    fe_.screen() == FrontEnd::Screen::LoadGame) {
             scrollOffset_ = 0;
             ensureSelectionVisible();
+        } else if (fe_.screen() == FrontEnd::Screen::Multiplayer) {
+            mpPortDraft_ = std::to_string(fe_.mpPort());
+            scrollOffset_ = 0;
+            ensureSelectionVisible();
+            if (const auto sel = fe_.selectedMultiplayerMission(); sel < mpMissions_.size()) {
+                ensureOverviewLoaded(mpMissions_[sel].path);
+            }
         } else if (fe_.screen() == FrontEnd::Screen::Options) {
             beginOptionsEdit();
         } else if (fe_.screen() == FrontEnd::Screen::Briefing) {
@@ -1130,6 +1189,8 @@ void GoldFrontEnd::onScreenChanged(FrontEnd::Screen previous) {
         dirty_ = true;
     } else if (fe_.screen() == FrontEnd::Screen::Ratings) {
         ratingsScroll_ = 0;
+        dirty_ = true;
+    } else if (fe_.screen() == FrontEnd::Screen::Multiplayer) {
         dirty_ = true;
     }
     syncNoticeFromState();
@@ -1204,7 +1265,8 @@ std::string GoldFrontEnd::hitTestStage(double sx, double sy) const {
         case FrontEnd::Screen::SingleMissions:
         case FrontEnd::Screen::CampaignMissions:
         case FrontEnd::Screen::Replays:
-        case FrontEnd::Screen::LoadGame: {
+        case FrontEnd::Screen::LoadGame:
+        case FrontEnd::Screen::Multiplayer: {
             if (fe_.screen() == FrontEnd::Screen::CampaignMissions &&
                 kDifficultyButtonRect.contains(sx, sy)) {
                 return "difficulty";
@@ -1213,6 +1275,11 @@ std::string GoldFrontEnd::hitTestStage(double sx, double sy) const {
                 if (const auto id = checkButtons(kReplayButtons); !id.empty()) return id;
             } else if (fe_.screen() == FrontEnd::Screen::LoadGame) {
                 if (const auto id = checkButtons(kLoadGameButtons); !id.empty()) return id;
+            } else if (fe_.screen() == FrontEnd::Screen::Multiplayer) {
+                if (kMpModeRect.contains(sx, sy)) return "mp_mode";
+                if (kMpHostFieldRect.contains(sx, sy)) return "mp_host_field";
+                if (kMpPortFieldRect.contains(sx, sy)) return "mp_port_field";
+                if (const auto id = checkButtons(kMultiplayerButtons); !id.empty()) return id;
             } else {
                 if (const auto id = checkButtons(kSingleMissionButtons); !id.empty()) return id;
             }
@@ -1284,6 +1351,7 @@ std::string GoldFrontEnd::hitTestStage(double sx, double sy) const {
         case FrontEnd::Screen::Launch:
         case FrontEnd::Screen::LaunchReplay:
         case FrontEnd::Screen::LaunchSave:
+        case FrontEnd::Screen::LaunchMultiplayer:
         case FrontEnd::Screen::Quit:
             return {};
     }
@@ -1365,6 +1433,30 @@ void GoldFrontEnd::activateId(const std::string& id) {
         return;
     }
 
+    if (prev == FrontEnd::Screen::Multiplayer) {
+        if (const auto p = parsePortText(mpPortDraft_)) fe_.setMpPort(*p);
+        mpPortDraft_ = std::to_string(fe_.mpPort());
+        if (id == "mp_host_field") {
+            mpEditField_ = MpEditField::HostAddress;
+            focusedId_ = "mp_host_field";
+            if (window_) SDL_StartTextInput(window_);
+            dirty_ = true;
+            return;
+        }
+        if (id == "mp_port_field") {
+            mpEditField_ = MpEditField::Port;
+            focusedId_ = "mp_port_field";
+            if (window_) SDL_StartTextInput(window_);
+            dirty_ = true;
+            return;
+        }
+        if (mpEditField_ != MpEditField::None) {
+            mpEditField_ = MpEditField::None;
+            if (window_) SDL_StopTextInput(window_);
+            dirty_ = true;
+        }
+    }
+
     fe_.activate(id);
     onScreenChanged(prev);
 }
@@ -1374,9 +1466,58 @@ void GoldFrontEnd::handleKey(SDL_Keycode key) {
 
     if (key == SDLK_ESCAPE) {
         if (prev == FrontEnd::Screen::Options) cancelOptionsEdit();
+        if (prev == FrontEnd::Screen::Multiplayer) {
+            if (const auto p = parsePortText(mpPortDraft_)) fe_.setMpPort(*p);
+            mpPortDraft_ = std::to_string(fe_.mpPort());
+            if (mpEditField_ != MpEditField::None) {
+                mpEditField_ = MpEditField::None;
+                if (window_) SDL_StopTextInput(window_);
+            }
+        }
         fe_.back();
         onScreenChanged(prev);
         return;
+    }
+
+    if (prev == FrontEnd::Screen::Multiplayer && mpEditField_ != MpEditField::None) {
+        if (key == SDLK_BACKSPACE) {
+            if (mpEditField_ == MpEditField::HostAddress) {
+                std::string addr = fe_.mpHostAddress();
+                if (!addr.empty()) addr.pop_back();
+                fe_.setMpHostAddress(std::move(addr));
+            } else if (mpEditField_ == MpEditField::Port) {
+                if (!mpPortDraft_.empty()) mpPortDraft_.pop_back();
+                if (const auto p = parsePortText(mpPortDraft_)) fe_.setMpPort(*p);
+            }
+            dirty_ = true;
+            return;
+        }
+        if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
+            if (const auto p = parsePortText(mpPortDraft_)) fe_.setMpPort(*p);
+            mpPortDraft_ = std::to_string(fe_.mpPort());
+            mpEditField_ = MpEditField::None;
+            if (window_) SDL_StopTextInput(window_);
+            focusedId_ = "mp_start";
+            dirty_ = true;
+            return;
+        }
+        if (key == SDLK_TAB) {
+            if (const auto p = parsePortText(mpPortDraft_)) fe_.setMpPort(*p);
+            mpPortDraft_ = std::to_string(fe_.mpPort());
+            if (mpEditField_ == MpEditField::HostAddress) {
+                mpEditField_ = MpEditField::Port;
+                focusedId_ = "mp_port_field";
+            } else {
+                mpEditField_ = MpEditField::None;
+                focusedId_ = "mp_start";
+                if (window_) SDL_StopTextInput(window_);
+            }
+            dirty_ = true;
+            return;
+        }
+        if ((key >= SDLK_A && key <= SDLK_Z) || (key >= SDLK_0 && key <= SDLK_9)) {
+            return;
+        }
     }
 
     if (key >= SDLK_A && key <= SDLK_Z) {
@@ -1434,7 +1575,8 @@ void GoldFrontEnd::handleKey(SDL_Keycode key) {
         case FrontEnd::Screen::SingleMissions:
         case FrontEnd::Screen::CampaignMissions:
         case FrontEnd::Screen::Replays:
-        case FrontEnd::Screen::LoadGame: {
+        case FrontEnd::Screen::LoadGame:
+        case FrontEnd::Screen::Multiplayer: {
             if (fe_.screen() == FrontEnd::Screen::LoadGame && key == SDLK_DELETE) {
                 activateId("load_delete");
                 break;
@@ -1450,6 +1592,10 @@ void GoldFrontEnd::handleKey(SDL_Keycode key) {
                 } else if (fe_.screen() == FrontEnd::Screen::SingleMissions) {
                     if (const auto mi = fe_.selected(); mi < missions_.size()) {
                         ensureOverviewLoaded(missions_[mi].path);
+                    }
+                } else if (fe_.screen() == FrontEnd::Screen::Multiplayer) {
+                    if (const auto mi = fe_.selectedMultiplayerMission(); mi < mpMissions_.size()) {
+                        ensureOverviewLoaded(mpMissions_[mi].path);
                     }
                 }
             };
@@ -1498,6 +1644,8 @@ void GoldFrontEnd::handleKey(SDL_Keycode key) {
                     cycleFocus({"replay_start", "cancel"}, step);
                 } else if (fe_.screen() == FrontEnd::Screen::LoadGame) {
                     cycleFocus({"load_start", "load_delete", "cancel"}, step);
+                } else if (fe_.screen() == FrontEnd::Screen::Multiplayer) {
+                    cycleFocus({"mp_mode", "mp_host_field", "mp_port_field", "mp_start", "cancel"}, step);
                 } else {
                     cycleFocus({"start", "cancel"}, step);
                 }
@@ -1507,6 +1655,13 @@ void GoldFrontEnd::handleKey(SDL_Keycode key) {
                 } else if (fe_.screen() == FrontEnd::Screen::LoadGame) {
                     if (focusedId_ == "cancel" || focusedId_ == "load_delete") activateId(focusedId_);
                     else activateId("load_start");
+                } else if (fe_.screen() == FrontEnd::Screen::Multiplayer) {
+                    if (focusedId_ == "cancel" || focusedId_ == "mp_mode" ||
+                        focusedId_ == "mp_host_field" || focusedId_ == "mp_port_field") {
+                        activateId(focusedId_);
+                    } else {
+                        activateId("mp_start");
+                    }
                 } else if (focusedId_ == "cancel" || (fe_.screen() == FrontEnd::Screen::CampaignMissions && focusedId_ == "difficulty")) {
                     activateId(focusedId_);
                 } else {
@@ -1595,6 +1750,7 @@ void GoldFrontEnd::handleKey(SDL_Keycode key) {
         case FrontEnd::Screen::Launch:
         case FrontEnd::Screen::LaunchReplay:
         case FrontEnd::Screen::LaunchSave:
+        case FrontEnd::Screen::LaunchMultiplayer:
         case FrontEnd::Screen::Quit:
             break;
     }
@@ -1605,7 +1761,8 @@ void GoldFrontEnd::handleMouseMove(double stageX, double stageY) {
         if ((fe_.screen() == FrontEnd::Screen::SingleMissions ||
              fe_.screen() == FrontEnd::Screen::CampaignMissions ||
              fe_.screen() == FrontEnd::Screen::Replays ||
-             fe_.screen() == FrontEnd::Screen::LoadGame)) {
+             fe_.screen() == FrontEnd::Screen::LoadGame ||
+             fe_.screen() == FrontEnd::Screen::Multiplayer)) {
             const std::size_t count = activeListCount();
             if (int(count) > kVisibleMissionRows) {
                 const double travel = std::max(1.0, kTrackH - kThumbH);
@@ -1643,7 +1800,16 @@ void GoldFrontEnd::handleMouseMove(double stageX, double stageY) {
 
 void GoldFrontEnd::handleMouseDown(double stageX, double stageY, std::uint8_t clicks) {
     const std::string hit = hitTestStage(stageX, stageY);
-    if (hit.empty()) return;
+    if (hit.empty()) {
+        if (fe_.screen() == FrontEnd::Screen::Multiplayer && mpEditField_ != MpEditField::None) {
+            if (const auto p = parsePortText(mpPortDraft_)) fe_.setMpPort(*p);
+            mpPortDraft_ = std::to_string(fe_.mpPort());
+            mpEditField_ = MpEditField::None;
+            if (window_) SDL_StopTextInput(window_);
+            dirty_ = true;
+        }
+        return;
+    }
 
     if (hit == "scroll_thumb" || hit == "ratings_scroll_thumb") {
         draggingThumb_ = true;
@@ -1655,7 +1821,8 @@ void GoldFrontEnd::handleMouseDown(double stageX, double stageY, std::uint8_t cl
     if (fe_.screen() == FrontEnd::Screen::SingleMissions ||
         fe_.screen() == FrontEnd::Screen::CampaignMissions ||
         fe_.screen() == FrontEnd::Screen::Replays ||
-        fe_.screen() == FrontEnd::Screen::LoadGame) {
+        fe_.screen() == FrontEnd::Screen::LoadGame ||
+        fe_.screen() == FrontEnd::Screen::Multiplayer) {
         std::size_t idx = 0;
         if (parseIndexAfter(hit, activeRowPrefix(), idx) && idx < activeListCount()) {
             const bool alreadySelected = (idx == activeListSelected());
@@ -1667,11 +1834,20 @@ void GoldFrontEnd::handleMouseDown(double stageX, double stageY, std::uint8_t cl
                 }
             } else if (fe_.screen() == FrontEnd::Screen::SingleMissions && idx < missions_.size()) {
                 ensureOverviewLoaded(missions_[idx].path);
+            } else if (fe_.screen() == FrontEnd::Screen::Multiplayer && idx < mpMissions_.size()) {
+                ensureOverviewLoaded(mpMissions_[idx].path);
+            }
+            if (mpEditField_ != MpEditField::None) {
+                mpEditField_ = MpEditField::None;
+                if (window_) SDL_StopTextInput(window_);
             }
             focusedId_ = (fe_.screen() == FrontEnd::Screen::Replays) ? "replay_start"
-                       : (fe_.screen() == FrontEnd::Screen::LoadGame) ? "load_start" : "start";
+                       : (fe_.screen() == FrontEnd::Screen::LoadGame) ? "load_start"
+                       : (fe_.screen() == FrontEnd::Screen::Multiplayer) ? "mp_start" : "start";
             dirty_ = true;
-            if (clicks >= 2 || (clicks == 0 && alreadySelected)) {
+            if (fe_.screen() == FrontEnd::Screen::Multiplayer) {
+                if (clicks >= 2 && fe_.mpIsHost()) activateId("mp_start");
+            } else if (clicks >= 2 || (clicks == 0 && alreadySelected)) {
                 activateId(hit);
             }
             return;
@@ -1690,7 +1866,8 @@ void GoldFrontEnd::handleMouseWheel(float dy) {
     if ((fe_.screen() == FrontEnd::Screen::SingleMissions ||
          fe_.screen() == FrontEnd::Screen::CampaignMissions ||
          fe_.screen() == FrontEnd::Screen::Replays ||
-         fe_.screen() == FrontEnd::Screen::LoadGame) &&
+         fe_.screen() == FrontEnd::Screen::LoadGame ||
+         fe_.screen() == FrontEnd::Screen::Multiplayer) &&
         dy != 0.0f) {
         scrollBy(dy > 0 ? -3 : 3);
     } else if (fe_.screen() == FrontEnd::Screen::Briefing && dy != 0.0f) {
@@ -1715,6 +1892,32 @@ void GoldFrontEnd::handleEvent(const SDL_Event& event) {
 
     if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat) {
         handleKey(event.key.key);
+        return;
+    }
+
+    if (event.type == SDL_EVENT_TEXT_INPUT &&
+        fe_.screen() == FrontEnd::Screen::Multiplayer &&
+        mpEditField_ != MpEditField::None && event.text.text) {
+        const std::string_view txt(event.text.text);
+        if (mpEditField_ == MpEditField::HostAddress) {
+            std::string addr = fe_.mpHostAddress();
+            for (unsigned char uc : txt) {
+                if ((uc >= 'a' && uc <= 'z') || (uc >= 'A' && uc <= 'Z') ||
+                    (uc >= '0' && uc <= '9') || uc == '.' || uc == '-' || uc == ':' || uc == '_') {
+                    if (addr.size() < 64) addr.push_back(char(uc));
+                }
+            }
+            fe_.setMpHostAddress(std::move(addr));
+            dirty_ = true;
+        } else if (mpEditField_ == MpEditField::Port) {
+            for (unsigned char uc : txt) {
+                if (uc >= '0' && uc <= '9' && mpPortDraft_.size() < 5) {
+                    mpPortDraft_.push_back(char(uc));
+                }
+            }
+            if (const auto p = parsePortText(mpPortDraft_)) fe_.setMpPort(*p);
+            dirty_ = true;
+        }
         return;
     }
 
@@ -2605,6 +2808,130 @@ void GoldFrontEnd::renderToBuffer(int pixelW, int pixelH, std::vector<std::uint8
                     [rowCount](std::string_view id, bool def) {
                         return (id == "load_start" || id == "load_delete") ? (rowCount > 0) : def;
                     });
+            }
+        } else if (screen == FrontEnd::Screen::Multiplayer) {
+            drawHeading(cr, pangoCtx, tr("Multiplayer"), {200, 38, 400, 28}, 17.0);
+            drawHeading(cr, pangoCtx, tr("Missions:"), {130, 110, 150, 20}, 15.0);
+            drawHeading(cr, pangoCtx, tr(fe_.mpIsHost() ? "Host Match" : "Join Match"), {492, 110, 220, 20}, 15.0);
+
+            drawBronzeBox(cr, kListX, kListY, kListW, kListH, 0.88);
+            cairo_save(cr);
+            cairo_rectangle(cr, kListX + 4, kListY + 4, kListW - 8, kListH - 8);
+            cairo_clip(cr);
+
+            const std::size_t rowCount = mpMissions_.size();
+            const std::size_t selectedRow = fe_.selectedMultiplayerMission();
+            if (rowCount == 0) {
+                auto emptyLbl = makeTextLayout(pangoCtx, tr("No multiplayer maps installed."), 14.0, false);
+                cairo_move_to(cr, kListX + 16, kListY + 18);
+                cairo_set_source_rgb(cr, 180.0 / 255.0, 180.0 / 255.0, 165.0 / 255.0);
+                pango_cairo_show_layout(cr, emptyLbl.get());
+            } else {
+                const int endIdx = std::min(int(rowCount), scrollOffset_ + kVisibleMissionRows);
+                for (int idx = scrollOffset_; idx < endIdx; ++idx) {
+                    const int row = idx - scrollOffset_;
+                    const double ry = kListY + 6.0 + row * kRowH;
+                    const bool isSelected = (std::size_t(idx) == selectedRow);
+                    const bool isHovered = (hoveredId_ == "mpmap:" + std::to_string(idx));
+                    if (isSelected) {
+                        cairo_set_source_rgba(cr, 98.0 / 255.0, 114.0 / 255.0, 72.0 / 255.0, 0.38);
+                        cairo_rectangle(cr, kListX + 5, ry, kListW - 10, kRowH - 1.0);
+                        cairo_fill(cr);
+                    } else if (isHovered) {
+                        cairo_set_source_rgba(cr, 72.0 / 255.0, 96.0 / 255.0, 56.0 / 255.0, 0.22);
+                        cairo_rectangle(cr, kListX + 5, ry, kListW - 10, kRowH - 1.0);
+                        cairo_fill(cr);
+                    }
+                    auto rowLayout = makeTextLayout(pangoCtx, mpMissions_[std::size_t(idx)].name, 13.0, isSelected);
+                    pango_layout_set_width(rowLayout.get(), int((kListW - 22.0) * PANGO_SCALE));
+                    pango_layout_set_ellipsize(rowLayout.get(), PANGO_ELLIPSIZE_END);
+                    cairo_move_to(cr, kListX + 12, ry + 2.0);
+                    if (isSelected) cairo_set_source_rgb(cr, 245.0 / 255.0, 245.0 / 255.0, 245.0 / 255.0);
+                    else if (isHovered) cairo_set_source_rgb(cr, 128.0 / 255.0, 224.0 / 255.0, 138.0 / 255.0);
+                    else cairo_set_source_rgb(cr, 49.0 / 255.0, 174.0 / 255.0, 74.0 / 255.0);
+                    pango_cairo_show_layout(cr, rowLayout.get());
+                }
+            }
+            cairo_restore(cr);
+
+            drawGoldScrollbar(kScrollX, kScrollY, kScrollW, kScrollH, kVisibleMissionRows,
+                              true, rowCount, scrollOffset_,
+                              hoveredId_ == "scroll_up", hoveredId_ == "scroll_down",
+                              hoveredId_ == "scroll_thumb" || draggingThumb_);
+
+            const bool modeHov = (hoveredId_ == "mp_mode");
+            const bool modeFoc = (focusedId_ == "mp_mode");
+            drawBronzeBox(cr, kMpModeRect.x, kMpModeRect.y, kMpModeRect.w, kMpModeRect.h, (modeHov || modeFoc) ? 0.94 : 0.85);
+            drawGoldStencilButton(cr, pangoCtx, kMpModeRect,
+                                  tr(fe_.mpIsHost() ? "Host Match" : "Join Match"), 'M',
+                                  modeHov, modeFoc, true, 16.5, true);
+
+            auto drawFieldLabel = [&](const std::string& label, double y) {
+                auto lbl = makeTextLayout(pangoCtx, label, 13.5, true);
+                cairo_move_to(cr, 438.0, y);
+                cairo_set_source_rgb(cr, 232.0 / 255.0, 224.0 / 255.0, 188.0 / 255.0);
+                pango_cairo_show_layout(cr, lbl.get());
+            };
+            auto drawInputField = [&](const RectD& r, const std::string& val, const std::string& placeholder,
+                                      bool editing, bool hovered, bool focused) {
+                drawBronzeBox(cr, r.x, r.y, r.w, r.h, editing ? 0.96 : (hovered || focused) ? 0.90 : 0.82);
+                if (editing) {
+                    cairo_set_source_rgba(cr, 212.0 / 255.0, 198.0 / 255.0, 118.0 / 255.0, 0.90);
+                    cairo_set_line_width(cr, 1.5);
+                    cairo_rectangle(cr, r.x + 1.0, r.y + 1.0, r.w - 2.0, r.h - 2.0);
+                    cairo_stroke(cr);
+                }
+                const bool empty = val.empty();
+                std::string shown = empty ? (editing ? "_" : placeholder) : (editing ? (val + "_") : val);
+                auto tl = makeTextLayout(pangoCtx, shown, 14.0, !empty);
+                int tw = 0, th = 0;
+                pango_layout_get_pixel_size(tl.get(), &tw, &th);
+                pango_layout_set_width(tl.get(), int((r.w - 16.0) * PANGO_SCALE));
+                pango_layout_set_ellipsize(tl.get(), PANGO_ELLIPSIZE_START);
+                cairo_move_to(cr, r.x + 8.0, r.y + (r.h - th) * 0.5);
+                if (empty && !editing) cairo_set_source_rgb(cr, 165.0 / 255.0, 165.0 / 255.0, 148.0 / 255.0);
+                else if (editing) cairo_set_source_rgb(cr, 252.0 / 255.0, 240.0 / 255.0, 182.0 / 255.0);
+                else cairo_set_source_rgb(cr, 238.0 / 255.0, 242.0 / 255.0, 224.0 / 255.0);
+                pango_cairo_show_layout(cr, tl.get());
+            };
+
+            drawFieldLabel(tr("Host Address") + ":", 182.0);
+            drawInputField(kMpHostFieldRect, fe_.mpHostAddress(), tr("Enter address"),
+                           mpEditField_ == MpEditField::HostAddress,
+                           hoveredId_ == "mp_host_field", focusedId_ == "mp_host_field");
+
+            drawFieldLabel(tr("Port") + ":", 246.0);
+            drawInputField(kMpPortFieldRect, mpPortDraft_, "27015",
+                           mpEditField_ == MpEditField::Port,
+                           hoveredId_ == "mp_port_field", focusedId_ == "mp_port_field");
+
+            if (selectedRow < rowCount) {
+                const auto& m = mpMissions_[selectedRow];
+                ensureOverviewLoaded(m.path);
+                cairo_surface_t* overview = nullptr;
+                if (const auto it = assets_->overviews.find(m.path); it != assets_->overviews.end()) {
+                    overview = it->second.get();
+                }
+                drawDiamondOverview(cr, overview, 492.0, 316.0, 224.0, 117.0, true);
+                std::string sizeStr = tr("Size:") + "  " + std::to_string(m.width) + "x" + std::to_string(m.height);
+                if (m.scheme == 2) sizeStr += "  (Beach)";
+                else if (m.width > 0) sizeStr += "  (Summer)";
+                drawHeading(cr, pangoCtx, sizeStr, {464, 442, 280, 20}, 14.0);
+                if (!m.description.empty()) {
+                    auto desc = makeTextLayout(pangoCtx, m.description, 12.5, false, 324.0, PANGO_ALIGN_CENTER);
+                    pango_layout_set_height(desc.get(), int(22.0 * PANGO_SCALE));
+                    pango_layout_set_ellipsize(desc.get(), PANGO_ELLIPSIZE_END);
+                    cairo_move_to(cr, 442.0, 466.0);
+                    cairo_set_source_rgb(cr, 220.0 / 255.0, 224.0 / 255.0, 206.0 / 255.0);
+                    pango_cairo_show_layout(cr, desc.get());
+                }
+            }
+
+            for (const auto& b : kMultiplayerButtons) {
+                const bool enabled = std::string_view(b.id) == "mp_start"
+                    ? (!fe_.mpIsHost() || rowCount > 0) : b.enabled;
+                drawGoldStencilButton(cr, pangoCtx, b.rect, tr(b.enLabel), b.shortcut,
+                                      hoveredId_ == b.id, focusedId_ == b.id, enabled, 24.0);
             }
         }
     }

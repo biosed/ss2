@@ -91,22 +91,22 @@ On the original ARM64 development host the Fedora layer was staged privately. To
 
 ### What the suite contains
 
-Forty-eight tests are registered. Which of them run depends on the configuration:
+Fifty-eight tests are registered. Which of them run depends on the configuration:
 
 | Configuration | Tests | Notes |
 | --- | --- | --- |
-| Default (`--preset release`) | 24 | Asset fixtures, movement, combat, `combat_parity`, `command_replay` (`stateHash()`), HiDPI/frontend/movie/mission/string fixtures, clock and CLI checks |
-| `-DSS2_PRIVATE_GAME=DIR` | 35 | Adds the eleven private-gated retail tests that need the Gold installation |
-| `-DSS2_TEST_WINDOW=ON` | 35 | Adds the eleven window and WSI tests |
-| `-DSS2_TEST_WINDOW=ON -DSS2_TEST_VALIDATION=ON` (`--preset validation`) | 36 | Adds `missing_validation_layer` as the 12th validation/window check (requires the Khronos layer) |
-| `-DSS2_PRIVATE_GAME=DIR -DSS2_TEST_WINDOW=ON` | 47 | Both sets above plus `gold_cli_record_replay` (`--record` / `--replay` end-to-end check) |
-| All three | 48 | Everything, on a host with the validation layer |
+| Default (`--preset release`) | 32 | Asset fixtures, movement, combat, `combat_parity`, `sim_determinism`, `visibility_parity`, `command_replay` (`stateHash()`), `lockstep`, HiDPI/frontend/`save_file`/movie/mission/string fixtures, clock and CLI checks |
+| `-DSS2_PRIVATE_GAME=DIR` | 44 | Adds the twelve private-gated retail tests that need the Gold installation |
+| `-DSS2_TEST_WINDOW=ON` | 43 | Adds the eleven window and WSI tests |
+| `-DSS2_TEST_WINDOW=ON -DSS2_TEST_VALIDATION=ON` (`--preset validation`) | 44 | Adds `missing_validation_layer` as the 12th validation/window check (requires the Khronos layer) |
+| `-DSS2_PRIVATE_GAME=DIR -DSS2_TEST_WINDOW=ON` | 57 | Both sets above plus `gold_cli_record_replay` (`--record` / `--replay` end-to-end check) and `gold_session_input` |
+| All three | 58 | Everything, on a host with the validation layer |
 
-The ten private-gated retail tests are skipped without `-DSS2_PRIVATE_GAME` because they need the purchased installation, which is never committed. The ten window/WSI tests need a Vulkan WSI surface, and the 11th check (`missing_validation_layer`) needs the Khronos validation layer to be installed.
+The twelve private-gated retail tests are skipped without `-DSS2_PRIVATE_GAME` because they need the purchased installation, which is never committed. The eleven window/WSI tests need a Vulkan WSI surface, the 12th validation check (`missing_validation_layer`) needs the Khronos validation layer to be installed, and the two combined session tests (`gold_cli_record_replay`, `gold_session_input`) require both `-DSS2_PRIVATE_GAME` and `-DSS2_TEST_WINDOW`.
 
 ### Hosted CI
 
-`.github/workflows/linux.yml` defines matrix legs across `ubuntu-24.04` (x86-64) and `ubuntu-24.04-arm` (ARM64) for `g++` Release and `clang++` Debug with AddressSanitizer and UndefinedBehaviorSanitizer inside `fedora:44`. It configures `-DSS2_TEST_WINDOW=ON -DSS2_TEST_VALIDATION=ON` with `SDL_VIDEO_DRIVER=offscreen`, covering all 29 tests that need no private game data. The workflow has never been dispatched: no Git remote is configured for this repository. [Validation record](docs/validation.md)
+`.github/workflows/linux.yml` defines matrix legs across `ubuntu-24.04` (x86-64) and `ubuntu-24.04-arm` (ARM64) for `g++` Release and `clang++` Debug with AddressSanitizer and UndefinedBehaviorSanitizer inside `fedora:44`. It configures `-DSS2_TEST_WINDOW=ON -DSS2_TEST_VALIDATION=ON` with `SDL_VIDEO_DRIVER=offscreen`, covering all 44 tests that need no private game data. The workflow has never been dispatched: no Git remote is configured for this repository. [Validation record](docs/validation.md)
 
 ### Coverage of the combat path
 
@@ -125,7 +125,9 @@ The acceptance target is a BC-250 running Bazzite with RADV at 3840×2160 and 12
 | src/main.cpp | SDL application lifetime, input, presentation loop and optional frame statistics |
 | src/assets/ | Read SUE, PCK, mission and tutorial scene assets, the optional HD pack, painted infantry atlases and the sound bank |
 | src/audio/ | SDL3 audio stream playback for the decoded sound bank |
-| src/sim/ | Platform-independent mission clock, movement, vehicles, unit orders, fog of war and combat |
+| src/sim/ | Platform-independent mission clock, movement, vehicles, unit orders, fog of war, lockstep coordinator and combat |
+| src/net/ | Non-blocking POSIX TCP transport and lockstep multiplayer handshake |
+| src/session/ | Playable mission session orchestrator, `SS2SAVE1` save files and lockstep pumping |
 | src/render/ | Vulkan device selection, presentation, swapchain lifecycle and validation callbacks |
 | src/ui/ | Briefing panel, HUD, pause menu, tooltips, localization strings and unit/vehicle selection |
 | src/video/ | FFmpeg Bink movie decoder and SDL3 opening cinematic player |

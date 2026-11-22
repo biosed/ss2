@@ -5,7 +5,8 @@ Audited on 22 November 2026 ahead of native-to-native lockstep work. All finding
 ## Static audit of non-determinism vectors
 
 1. **Containers, iteration order, and addresses**:
-   - Zero `std::unordered_map`, `std::unordered_set`, `std::hash`, wall clocks (`std::chrono::steady_clock` / `system_clock`), `std::random_device`, or pointer-ordered iteration exist inside `src/sim/`. All entity tables use dense index-addressed vectors/deques (`soldiers_`, `vehicles_`, `buildings_`, `sorties_`), and `TutorialUnits::stateHash()` hashes canonical little-endian serialized state without pointers (`src/sim/state_hash.hpp`).
+   - Zero `std::unordered_map`, `std::unordered_set`, `std::hash`, or `std::random_device` containers/calls exist inside `src/sim/`. All entity tables use dense index-addressed vectors/deques (`soldiers_`, `vehicles_`, `buildings_`, `sorties_`), `lockstep.{hpp,cpp}` uses ordered `std::map`/`std::vector` state without pointers or wall clocks, and `TutorialUnits::stateHash()` hashes canonical little-endian serialized state (`src/sim/state_hash.hpp`).
+   - `MissionRunner::run` uses `std::chrono::steady_clock` strictly for real-time 25 Hz pacing when running its background worker thread in non-manual, non-lockstep single-player mode; `ManualClock`, replay, and lockstep stepping never consult wall clocks inside simulation state or `stateHash()`.
    - All PRNG state (`MissionRunner::random_`, `TutorialUnits::randomState_`, `TutorialUnits::combatRandomState_`, `CombatWorld::rngState_`) is deterministically seeded and explicitly included in `stateHash()`.
 2. **Compiler FMA contraction (`SS2_STRICT_FP`)**:
    - `CMakeLists.txt` adds `SS2_STRICT_FP` (`-ffp-contract=off` on GCC/Clang, `/fp:precise` on MSVC) to `ss2_sim` and `sim_determinism_test`, preventing ARM64/x86-64 AVX2/FMA instruction fusion (`fmadd`) from silently changing intermediate `double` rounding versus non-FMA targets.
@@ -22,12 +23,15 @@ Audited on 22 November 2026 ahead of native-to-native lockstep work. All finding
 
 ## Cross-ISA verification (`tools/check-cross-isa-sim.sh`)
 
-Tested after hardening across three compiler/libc/ISA triples (`-ffp-contract=off`):
-- **ARM64 GCC 16** (`g++ -O3`, glibc aarch64)
+Tested after hardening and lockstep integration across four compiler/libc/ISA targets (`-ffp-contract=off`), plus an active x86-64-v3 FMA negative-control probe (`-ffp-contract=off` vs `-ffp-contract=fast`):
+- **ARM64 GCC** (`g++ -O3`, glibc aarch64)
 - **ARM64 Clang 22.1.8** (`clang++ -O2`, glibc aarch64)
 - **x86-64 Zig / Clang** (`zig c++ -target x86_64-linux-musl -O2`, musl libc, executed under `qemu-x86_64-static`)
+- **x86-64-v3 Zig / Clang** (`zig c++ -target x86_64-linux-musl -mcpu=x86_64_v3 -O2`, FMA-capable musl libc, executed under `qemu-x86_64-static`)
 
-Observed bit-identical outputs on all three (after `gold-visibility-parity` `movingSightPenalty` hashing):
+Observed bit-identical outputs on all four targets (and active FMA probe separation):
 - `combat_parity_test`: `combat_parity: PASS (120 ticks x 13 fields, 21 events, final_rng=0xe06870c1, 550 regression rows)`
 - `sim_determinism_test`: `SIM_DETERMINISM_HASHES t0=0x30877be0aac2d46d t125=0x68bbbf2d7f830c31 t250=0x890bb188bb2b3a64`
+- `lockstep_test` (250-tick twin-runner multi-seat determinism + live loopback TCP): `LOCKSTEP_DETERMINISM_HASH 0x1fe7fdf2e5192380 verifiedTick=246`
+- x86-64-v3 FMA negative-control probe: `0x6610475e5345ba17` strict (`-ffp-contract=off` on ARM64 GCC and x86-64-v3) vs `0x5c3022d25bc09199` contracted (`-ffp-contract=fast` on x86-64-v3)
 - Full Tutorial I P[7] route replay (`gold_tutorial_replay`): `10 dialogs, 12 commands, 3862 ticks, stateHash 0x1627b0e8d45be6ea PASSED`

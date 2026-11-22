@@ -53,6 +53,7 @@ public:
     std::optional<std::pair<size_t, MapPatch>> spawn(const Placement& p);
     MapPatch update(size_t index, int x, int y, unsigned direction, unsigned progress, bool walking,
                     int hp = -1, int visible = -1, int ammo = -1);
+    void setFogViewerOwner(int owner);
     MapPatch updateFog(std::span<const std::uint8_t> fog);
     std::optional<MapImage> renderUnitPortrait(const std::string& id, unsigned size = 48) const;
 private:
@@ -72,6 +73,7 @@ private:
     MapImage ground_;
     SceneryDepth depth_;
     unsigned fogW_{128}, fogH_{128};
+    int fogViewerOwner_{0};
     std::vector<std::uint8_t> fog_;
     const std::map<std::string, unsigned>* gpuSlots_{nullptr};
     bool gpuDrawn(const std::string& id) const { return gpuSlots_ && gpuSlots_->contains(id); }
