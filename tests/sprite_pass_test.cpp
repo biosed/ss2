@@ -1,9 +1,11 @@
 // Checks the sprite pass by reading rendered frames back and comparing pixel colours.
 #include "render/window.hpp"
+#include "ui/combat_vfx.hpp"
 #include <SDL3/SDL.h>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <filesystem>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -455,6 +457,191 @@ int main(int argc, char** argv) {
             renderer.clearOverlay(ss2::OverlaySlot::tooltip);
             frame = capture();
             expect(frame, 155, 115, ground, 0, "tooltip removed");
+        }
+
+        // CombatVfxSystem: asset-free fallback, synthetic 0xCA000002 .ANI packing,
+        // directional muzzle flashes, parachute/crate emission, decal expiry, fog culling,
+        // and optional retail Gold 2.2 game_common.sue verification.
+        {
+            ss2::CombatVfxSystem vfx;
+            if (!vfx.hasAtlas() || vfx.hasRetailAssets()) {
+                throw std::runtime_error("Default CombatVfxSystem should start with procedural fallback atlas");
+            }
+            if (vfx.bank().clipFrameCount(ss2::CombatVfxClip::ExplosionLarge) == 0u ||
+                vfx.bank().clipFrameCount(ss2::CombatVfxClip::ParachuteCanopy) < 9u ||
+                vfx.bank().clipFrameCount(ss2::CombatVfxClip::AmmoCrate) == 0u) {
+                throw std::runtime_error("Procedural CombatVfxBank missing core fallback frames");
+            }
+
+            // Build a synthetic 2-frame 0xCA000002 + 0xA9 .ANI with 1024-byte alpha palette:
+            // Frame 0: 6x6 bright orange-red square at (-3,-3); Frame 1: 6x6 bright cyan square at (-3,-3).
+            std::vector<std::uint8_t> synCol(1024u, 0u);
+            synCol[2] = 0xFEu; // index 0 transparent (bgWeight5 == 31)
+            // Index 1: opaque bright red (RGB565 = 0xF800, bgWeight = 0)
+            synCol[4] = 0x00u; synCol[5] = 0xF8u; synCol[6] = 0x00u; synCol[7] = 0x00u;
+            // Index 2: opaque bright green (RGB565 = 0x07E0, bgWeight = 0)
+            synCol[8] = 0xE0u; synCol[9] = 0x07u; synCol[10] = 0x00u; synCol[11] = 0x00u;
+
+            const auto makeA9Frame = [](std::uint8_t palIdx) {
+                std::vector<std::uint8_t> fr;
+                const auto push16 = [&](int v) {
+                    const auto u = static_cast<std::uint16_t>(v);
+                    fr.push_back(static_cast<std::uint8_t>(u & 0xFFu));
+                    fr.push_back(static_cast<std::uint8_t>((u >> 8u) & 0xFFu));
+                };
+                push16(-3); push16(-3); push16(6); push16(6);
+                fr.push_back(0xA9u);
+                for (int row = 0; row < 6; ++row) {
+                    push16(2); // 2-byte repeat run: (128 | 6), palIdx
+                    fr.push_back(static_cast<std::uint8_t>(0x80u | 6u));
+                    fr.push_back(palIdx);
+                }
+                return fr;
+            };
+            const auto fr0 = makeA9Frame(1u);
+            const auto fr1 = makeA9Frame(2u);
+            std::vector<std::uint8_t> synAni;
+            const auto push32 = [&](std::uint32_t v) {
+                synAni.push_back(static_cast<std::uint8_t>(v & 0xFFu));
+                synAni.push_back(static_cast<std::uint8_t>((v >> 8u) & 0xFFu));
+                synAni.push_back(static_cast<std::uint8_t>((v >> 16u) & 0xFFu));
+                synAni.push_back(static_cast<std::uint8_t>((v >> 24u) & 0xFFu));
+            };
+            push32(0xCA000002u);
+            push32(2u);
+            const std::uint32_t off0 = 8u + 3u * 4u;
+            const std::uint32_t off1 = off0 + static_cast<std::uint32_t>(fr0.size());
+            const std::uint32_t off2 = off1 + static_cast<std::uint32_t>(fr1.size());
+            push32(off0); push32(off1); push32(off2);
+            synAni.insert(synAni.end(), fr0.begin(), fr0.end());
+            synAni.insert(synAni.end(), fr1.begin(), fr1.end());
+
+            if (!vfx.packSyntheticAni(ss2::CombatVfxClip::Custom, synAni, synCol, 1u) ||
+                vfx.bank().clipFrameCount(ss2::CombatVfxClip::Custom) != 2u) {
+                throw std::runtime_error("Failed to pack synthetic 0xCA000002 .ANI into CombatVfxSystem");
+            }
+            renderer.setMap(solid(64, 48, ground));
+            renderer.setSpriteAtlas(14u, vfx.atlas());
+            vfx.bindAtlasSlot(14u);
+            vfx.spawnClip(ss2::CombatVfxClip::Custom, 32.0f, 24.0f, 0u, 1.0f, 2.0f, 1.0f);
+
+            // Unexplored fog (< 0.55) culls hidden VFX; visible fog (1.0) emits frame 0 (red), then frame 1 (green).
+            std::vector<ss2::CombatVfxSystem::RankedSprite> ranked;
+            vfx.appendSprites(1, [](int, int) { return 0.44f; }, ranked);
+            if (!ranked.empty()) throw std::runtime_error("CombatVfxSystem leaked sprite through unexplored fog");
+
+            vfx.appendSprites(1, [](int, int) { return 1.0f; }, ranked);
+            if (ranked.size() != 1u) throw std::runtime_error("Expected 1 visible synthetic VFX sprite");
+            renderer.setSprites({ranked[0].sprite});
+            frame = capture();
+            expect(frame, 128 + 32, 96 + 24, red, 3, "synthetic ANI frame 0 red");
+
+            (void)vfx.step(0.60f);
+            ranked.clear();
+            vfx.appendSprites(1, [](int, int) { return 1.0f; }, ranked);
+            if (ranked.size() != 1u) throw std::runtime_error("Expected synthetic VFX frame 1 still active");
+            renderer.setSprites({ranked[0].sprite});
+            frame = capture();
+            expect(frame, 128 + 32, 96 + 24, green, 8, "synthetic ANI frame 1 green");
+
+            (void)vfx.step(0.50f);
+            if (vfx.activeAnimCount() != 0u) throw std::runtime_error("Expired CombatVfx animation was not removed");
+
+            // Parachute canopy + crate immediate-mode helpers and vehicle decal stepping/expiry.
+            std::vector<Sprite> imm;
+            vfx.appendParachuteSprites(24.0f, 36.0f, 12.0f, 0.5f, 1, 1.0f, imm);
+            vfx.appendCrateSprite(24.0f, 24.0f, 0u, false, 1, 1.0f, 1.0f, imm);
+            if (imm.size() < 3u) throw std::runtime_error("Expected shadow + canopy + crate immediate sprites");
+            renderer.setSprites(imm);
+            frame = capture();
+
+            vfx.recordVehicleMotion(0u, 10, 20, true, true, false, false, true, false, false);
+            vfx.recordVehicleMotion(0u, 30, 20, true, true, false, false, true, false, false);
+            if (vfx.activeDecalCount() != 0u) {
+                throw std::runtime_error("Hidden enemy vehicle motion leaked track decal");
+            }
+            vfx.recordVehicleMotion(1u, 10, 20, true, true, true, false, true, false, false);
+            vfx.recordVehicleMotion(1u, 30, 20, true, true, true, false, true, false, false);
+            if (vfx.activeDecalCount() != 1u) {
+                throw std::runtime_error("Visible moving tank did not emit tread decal");
+            }
+            (void)vfx.step(6.0f);
+            if (vfx.activeDecalCount() != 0u) {
+                throw std::runtime_error("Vehicle tread decal did not expire");
+            }
+
+            // Optional retail Gold 2.2 game_common.sue verification.
+            std::filesystem::path gameDir;
+            if (const char* env = std::getenv("SS2_PRIVATE_GAME"); env && *env) {
+                gameDir = env;
+            } else if (const char* home = std::getenv("HOME"); home && *home) {
+                const auto cand = std::filesystem::path(home) / "ss2-private" / "game" / "app";
+                std::error_code ec;
+                if (std::filesystem::is_directory(cand, ec)) gameDir = cand;
+            }
+            if (!gameDir.empty()) {
+                std::error_code ec;
+                const auto sueCheck = ss2::combat_vfx_detail::resolveCaseInsensitive(gameDir, "game_common.sue");
+                if (std::filesystem::is_regular_file(sueCheck, ec)) {
+                    ss2::CombatVfxSystem retailVfx;
+                    if (!retailVfx.load(gameDir) || !retailVfx.hasRetailAssets()) {
+                        throw std::runtime_error("Failed to decode retail Gold 2.2 VFX from " + gameDir.string());
+                    }
+                    const auto& ratlas = retailVfx.atlas();
+                    if (ratlas.width == 0u || ratlas.height == 0u ||
+                        ratlas.width > ss2::CombatVfxBank::kMaxAtlasDim ||
+                        ratlas.height > ss2::CombatVfxBank::kMaxAtlasDim) {
+                        throw std::runtime_error("Retail VFX atlas out of bounds");
+                    }
+                    const auto& b = retailVfx.bank();
+                    if (b.clipFrameCount(ss2::CombatVfxClip::ExplosionHuge) < 10u ||
+                        b.clipFrameCount(ss2::CombatVfxClip::CrateBlast1) < 10u ||
+                        b.clipFrameCount(ss2::CombatVfxClip::BoxDust) < 10u ||
+                        b.clipDirectionCount(ss2::CombatVfxClip::MuzzleCannon) != 32u ||
+                        b.clipDirectionCount(ss2::CombatVfxClip::MuzzleHowitzer) != 32u ||
+                        b.clipDirectionCount(ss2::CombatVfxClip::MuzzleKatyusha) != 16u ||
+                        b.clipFrameCount(ss2::CombatVfxClip::MuzzleMortar) < 10u ||
+                        b.clipFrameCount(ss2::CombatVfxClip::FlamePlume) < 15u ||
+                        b.clipFrameCount(ss2::CombatVfxClip::WaterSplash3) < 10u ||
+                        b.clipFrameCount(ss2::CombatVfxClip::TrackTank) < 10u ||
+                        b.clipFrameCount(ss2::CombatVfxClip::WakeBoat) < 10u ||
+                        b.clipFrameCount(ss2::CombatVfxClip::ParachuteCanopy) != 21u ||
+                        b.clipDirectionCount(ss2::CombatVfxClip::AmmoCrate) != 8u) {
+                        throw std::runtime_error("Retail CombatVfxBank missing expected .ANI / .PCK / .RS2 sequences");
+                    }
+                    renderer.setSpriteAtlas(14u, ratlas);
+                    retailVfx.bindAtlasSlot(14u);
+                    retailVfx.spawnExplosion(32.0f, 28.0f, 3, false);
+                    retailVfx.spawnMuzzleFlash(ss2::CombatVfxClip::MuzzleHowitzer, 20.0f, 24.0f, 0u, 4.0f);
+                    retailVfx.spawnWaterSplash(44.0f, 28.0f, 3);
+                    retailVfx.spawnParachuteDrop(32.0f, 36.0f, true, false, 16.0f, 0.8f);
+                    (void)retailVfx.step(0.18f);
+
+                    std::vector<ss2::CombatVfxSystem::RankedSprite> rItems;
+                    retailVfx.appendSprites(1, [](int, int) { return 1.0f; }, rItems);
+                    if (rItems.size() < 5u) {
+                        throw std::runtime_error("Retail CombatVfxSystem emitted too few sprites");
+                    }
+                    std::vector<Sprite> rSprites;
+                    rSprites.reserve(rItems.size());
+                    for (const auto& it : rItems) rSprites.push_back(it.sprite);
+                    renderer.setMap(solid(64, 48, ground));
+                    renderer.setSprites(rSprites);
+                    frame = capture();
+                    int changedPixels = 0;
+                    for (int py = 96; py < 96 + 48; ++py) {
+                        for (int px = 128; px < 128 + 64; ++px) {
+                            const auto c = frame.at(px, py);
+                            if (c.r != ground.r || c.g != ground.g || c.b != ground.b) ++changedPixels;
+                        }
+                    }
+                    if (changedPixels < 24) {
+                        throw std::runtime_error("Retail CombatVfxSystem rendered no visible pixels on VulkanWindow");
+                    }
+                }
+            }
+            renderer.setSprites({});
+            renderer.setMap(solid(64, 48, ground));
         }
 
         // Ordinary presentation still works with sprites set.

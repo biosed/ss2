@@ -17,6 +17,7 @@
 #include "sim/mission_runner.hpp"
 #include "sim/tutorial_coordinates.hpp"
 #include "ui/briefing.hpp"
+#include "ui/combat_vfx.hpp"
 #include "ui/gold_frontend.hpp"
 #include "ui/hidpi.hpp"
 #include "ui/hud.hpp"
@@ -237,6 +238,9 @@ struct GameSession {
     Tooltip tooltip;
     std::vector<ActiveVfx> activeVfx;
     std::vector<BurningWreck> burningWrecks;
+    CombatVfxSystem combatVfx;
+    std::vector<std::uint16_t> terrainObstacles;
+    unsigned lastCombatVfxSimTick = 0;
     std::vector<MinimapPing> minimapPings;
     bool vfxWasNonEmpty = false;
     bool attackMoveArmed = false;
@@ -405,6 +409,8 @@ struct GameSession {
     std::optional<std::pair<size_t, size_t>> spawnAndRegisterVehicle(const assets::Placement& p);
     void spawnReinforcementWave(const MissionEvent& ev);
     bool isBuildingPointVisible(int simX, int simY) const;
+    bool isWaterPoint(int simX, int simY) const;
+    bool isShallowsPoint(int simX, int simY) const;
 
     // Audio & voices (session_audio.cpp).
     std::string inferNation(const std::string& id) const;

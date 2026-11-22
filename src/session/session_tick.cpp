@@ -162,6 +162,15 @@ void GameSession::stepSimulationEvents() {
         }
         bool markersDirty = false;
         bool spritesDirty = false;
+        {
+            const unsigned curSimTick = simulation->simTick();
+            if (curSimTick < lastCombatVfxSimTick ||
+                (activeVfx.empty() && burningWrecks.empty() && curSimTick > lastCombatVfxSimTick + 250u)) {
+                combatVfx.clearActive();
+                spritesDirty = true;
+            }
+            lastCombatVfxSimTick = curSimTick;
+        }
         if (auto fogSnap = simulation->pollFog()) {
             latestFog = *fogSnap;
             const auto fogPatch = scene->updateFog(*fogSnap);
@@ -260,23 +269,58 @@ void GameSession::stepSimulationEvents() {
                         }
                     }
                 }
-                if (combatEffects && (pose.visible || (pose.garrisoned && (isAllyOwner(pose.owner) || isBuildingPointVisible(pose.x, pose.y)))) && activeVfx.size() < 64) {
+                const bool shotVisible = pose.visible ||
+                    (pose.garrisoned && (isAllyOwner(pose.owner) || isBuildingPointVisible(pose.x, pose.y)));
+                if (combatEffects && shotVisible) {
                     const float sx = static_cast<float>(pose.x * mapScale);
                     const float sy = static_cast<float>(pose.y * mapScale) - 18.0f * static_cast<float>(mapScale);
                     const float tx = static_cast<float>(pose.targetX * mapScale);
                     const float ty = static_cast<float>(pose.targetY * mapScale) - 14.0f * static_cast<float>(mapScale);
-                    const bool flamer = pose.firedFlamer ||
-                                        (scene->units().at(pose.index).id.find("flam") != std::string::npos);
-                    activeVfx.push_back({
-                        flamer ? ActiveVfx::Kind::Flamer : ActiveVfx::Kind::Tracer,
-                        sx, sy, tx, ty, now,
-                        std::chrono::milliseconds(flamer ? 220 : 95)
-                    });
-                    if ((pose.threwGrenade || pose.firedExplosive) && activeVfx.size() < 64) {
+                    const auto& uid = scene->units().at(pose.index).id;
+                    const auto* uSpec = unitCatalog ? unitCatalog->find(uid) : nullptr;
+                    const bool flamer = pose.firedFlamer || (uid.find("flam") != std::string::npos);
+                    if (activeVfx.size() < 64 && (!flamer || !combatVfx.hasRetailAssets())) {
+                        activeVfx.push_back({
+                            flamer ? ActiveVfx::Kind::Flamer : ActiveVfx::Kind::Tracer,
+                            sx, sy, tx, ty, now,
+                            std::chrono::milliseconds(flamer ? 220 : 95)
+                        });
+                    }
+                    if ((pose.threwGrenade || pose.firedExplosive) && activeVfx.size() < 64 && !combatVfx.hasRetailAssets()) {
                         activeVfx.push_back({
                             ActiveVfx::Kind::Explosion, tx, ty, tx, ty, now, std::chrono::milliseconds(360)
                         });
                     }
+                    const unsigned shotDir32 = CombatVfxSystem::dir32FromMapDelta(
+                        static_cast<double>(pose.targetX - pose.x),
+                        static_cast<double>(pose.targetY - pose.y));
+                    if (flamer) {
+                        combatVfx.spawnFlameJet(static_cast<float>(pose.x), static_cast<float>(pose.y - 10),
+                                                static_cast<float>(pose.targetX), static_cast<float>(pose.targetY - 6));
+                    } else if (uSpec && uSpec->isMortarInfantry()) {
+                        combatVfx.spawnMuzzleFlash(CombatVfxClip::MuzzleMortar,
+                                                   static_cast<float>(pose.x), static_cast<float>(pose.y - 10),
+                                                   shotDir32, 4.0f);
+                    } else if (!pose.threwGrenade) {
+                        combatVfx.spawnMuzzleFlash(CombatVfxClip::MuzzleRifle,
+                                                   static_cast<float>(pose.x), static_cast<float>(pose.y - 12),
+                                                   shotDir32, 6.0f);
+                    }
+                    if (isBuildingPointVisible(pose.targetX, pose.targetY)) {
+                        const bool waterHit = isWaterPoint(pose.targetX, pose.targetY);
+                        if (pose.threwGrenade || pose.firedExplosive) {
+                            combatVfx.spawnExplosion(static_cast<float>(pose.targetX),
+                                                     static_cast<float>(pose.targetY),
+                                                     pose.firedExplosive ? 1 : 0, waterHit);
+                        } else if (!flamer && waterHit) {
+                            combatVfx.spawnWaterSplash(static_cast<float>(pose.targetX),
+                                                       static_cast<float>(pose.targetY), 1);
+                        } else if (!flamer && ((pose.index + simulation->simTick()) & 3u) == 0u) {
+                            combatVfx.spawnDust(static_cast<float>(pose.targetX),
+                                                static_cast<float>(pose.targetY), false);
+                        }
+                    }
+                    spritesDirty = true;
                 }
             }
             if (!pose.alive && prevHp > 0) {
@@ -336,12 +380,23 @@ void GameSession::stepSimulationEvents() {
                 vehicleMoveImpaired[vp.index] = vp.moveImpaired;
                 vehicleSuppressed[vp.index] = vp.suppressed;
                 vehicleHatchOpen[vp.index] = vp.hatchOpen;
+                const auto* smSpec = unitCatalog ? unitCatalog->find(vehicleScene->vehicles().at(vp.index).id) : nullptr;
                 if (vp.alive && vp.moving && vp.visible) {
-                    const auto* smSpec = unitCatalog ? unitCatalog->find(vehicleScene->vehicles().at(vp.index).id) : nullptr;
                     if (smSpec && smSpec->hasMoveSmoke) movingSmokeVehicles.insert(vp.index);
                     else movingSmokeVehicles.erase(vp.index);
                 } else {
                     movingSmokeVehicles.erase(vp.index);
+                }
+                if (combatEffects && (!smSpec || (!smSpec->isTrain() && !smSpec->isSupplyCrate()))) {
+                    const std::size_t prevDecals = combatVfx.activeDecalCount();
+                    combatVfx.recordVehicleMotion(
+                        vp.index, vp.x, vp.y,
+                        vp.alive && vp.hp > 0, vp.moving, vp.visible,
+                        smSpec && smSpec->isNavalCraft(),
+                        !smSpec || smSpec->isTracked(),
+                        isWaterPoint(vp.x, vp.y),
+                        isShallowsPoint(vp.x, vp.y));
+                    if (combatVfx.activeDecalCount() != prevDecals) spritesDirty = true;
                 }
                 const auto dirty = vehicleScene->update(vp.index, vp.x, vp.y, vp.hullDir, vp.turretDir,
                                                         vp.hp, vp.visible ? 1 : 0, vp.ammo);
@@ -478,26 +533,82 @@ void GameSession::stepSimulationEvents() {
                             }
                         }
                     }
-                    if (combatEffects && vp.visible && activeVfx.size() < 64) {
+                    const bool waterImpact = isWaterPoint(vp.targetX, vp.targetY);
+                    if (combatEffects && vp.visible) {
                         const float sx = static_cast<float>(vp.x * mapScale);
                         const float sy = static_cast<float>(vp.y * mapScale) - 12.0f * static_cast<float>(mapScale);
                         const float tx = static_cast<float>(vp.targetX * mapScale);
                         const float ty = static_cast<float>(vp.targetY * mapScale) - 10.0f * static_cast<float>(mapScale);
-                        activeVfx.push_back({
-                            vp.firedFlamer ? ActiveVfx::Kind::Flamer
-                                           : (vp.firedRocket ? ActiveVfx::Kind::Rocket
-                                                             : (vp.heavyImpact ? ActiveVfx::Kind::CannonShell
-                                                                               : ActiveVfx::Kind::Tracer)),
-                            sx, sy, tx, ty, now,
-                            std::chrono::milliseconds(vp.firedFlamer ? 260 : (vp.firedRocket ? 420 : (vp.firedSecondary ? 105 : 155)))
-                        });
-                        if (vp.heavyImpact && !vp.firedRocket && !vp.firedFlamer) {
+                        if (activeVfx.size() < 64 && (!vp.firedFlamer || !combatVfx.hasRetailAssets())) {
+                            activeVfx.push_back({
+                                vp.firedFlamer ? ActiveVfx::Kind::Flamer
+                                               : (vp.firedRocket ? ActiveVfx::Kind::Rocket
+                                                                 : (vp.heavyImpact ? ActiveVfx::Kind::CannonShell
+                                                                                   : ActiveVfx::Kind::Tracer)),
+                                sx, sy, tx, ty, now,
+                                std::chrono::milliseconds(vp.firedFlamer ? 260 : (vp.firedRocket ? 420 : (vp.firedSecondary ? 105 : 155)))
+                            });
+                        }
+                        if (vp.heavyImpact && !vp.firedRocket && !vp.firedFlamer &&
+                            activeVfx.size() < 64 && !combatVfx.hasRetailAssets()) {
                             activeVfx.push_back({
                                 ActiveVfx::Kind::Explosion, tx, ty, tx, ty, now, std::chrono::milliseconds(420)
                             });
                         }
+                        const unsigned shotDir32 = CombatVfxSystem::dir32FromMapDelta(
+                            static_cast<double>(vp.targetX - vp.x),
+                            static_cast<double>(vp.targetY - vp.y));
+                        if (vp.firedFlamer) {
+                            combatVfx.spawnFlameJet(static_cast<float>(vp.x), static_cast<float>(vp.y - 8),
+                                                    static_cast<float>(vp.targetX), static_cast<float>(vp.targetY - 6));
+                        } else if (vp.firedRocket) {
+                            combatVfx.spawnMuzzleFlash(CombatVfxClip::MuzzleKatyusha,
+                                                       static_cast<float>(vp.x), static_cast<float>(vp.y - 6),
+                                                       vp.hullDir & 31u, 0.0f);
+                            combatVfx.spawnRocketPlume(static_cast<float>(vp.x), static_cast<float>(vp.y - 10));
+                        } else if (!vp.firedSecondary && smSpec &&
+                                   (smSpec->selType == "howitzer" || smSpec->turretType == "gaub" ||
+                                    smSpec->turretType == "atg_gaub" || smSpec->shot1.indirectArc)) {
+                            combatVfx.spawnMuzzleFlash(CombatVfxClip::MuzzleHowitzer,
+                                                       static_cast<float>(vp.x), static_cast<float>(vp.y - 10),
+                                                       shotDir32, 14.0f);
+                        } else if (!vp.firedSecondary && smSpec && smSpec->selType == "mortar") {
+                            combatVfx.spawnMuzzleFlash(CombatVfxClip::MuzzleMortar,
+                                                       static_cast<float>(vp.x), static_cast<float>(vp.y - 10),
+                                                       shotDir32, 6.0f);
+                        } else if (vp.firedSecondary) {
+                            combatVfx.spawnMuzzleFlash(CombatVfxClip::MuzzleRifle,
+                                                       static_cast<float>(vp.x), static_cast<float>(vp.y - 10),
+                                                       shotDir32, 10.0f);
+                        } else {
+                            combatVfx.spawnMuzzleFlash(CombatVfxClip::MuzzleCannon,
+                                                       static_cast<float>(vp.x), static_cast<float>(vp.y - 10),
+                                                       shotDir32, 14.0f);
+                        }
+                        spritesDirty = true;
                     }
-                    if (vp.heavyImpact) {
+                    if (combatEffects && isBuildingPointVisible(vp.targetX, vp.targetY)) {
+                        if (vp.heavyImpact || vp.firedRocket) {
+                            const int cScale = vp.craterScale > 0
+                                ? int(vp.craterScale)
+                                : (smSpec ? smSpec->shot1.craterScale : 1);
+                            const int tier = cScale >= 4 ? 3 : (cScale >= 2 ? 2 : 1);
+                            combatVfx.spawnExplosion(static_cast<float>(vp.targetX),
+                                                     static_cast<float>(vp.targetY),
+                                                     tier, waterImpact);
+                            spritesDirty = true;
+                        } else if (!vp.firedFlamer) {
+                            if (waterImpact) {
+                                combatVfx.spawnWaterSplash(static_cast<float>(vp.targetX),
+                                                           static_cast<float>(vp.targetY), 1);
+                            } else {
+                                combatVfx.spawnDust(static_cast<float>(vp.targetX),
+                                                    static_cast<float>(vp.targetY), false);
+                            }
+                            spritesDirty = true;
+                        }
+                    }
+                    if (vp.heavyImpact && !waterImpact) {
                         const auto* cSpec = unitCatalog
                             ? unitCatalog->find(vehicleScene->vehicles().at(vp.index).id) : nullptr;
                         if (!cSpec || vp.craterScale > 0 || cSpec->shot1.craterScale > 0) {
@@ -510,15 +621,19 @@ void GameSession::stepSimulationEvents() {
                 }
                 if (!vp.alive && prevVehHp > 0) {
                     vehicleHoldFireUnits.erase(vp.index);
-                    stampBattleCrater(vp.x, vp.y, true);
+                    const bool deadOnWater = isWaterPoint(vp.x, vp.y);
+                    if (!deadOnWater) {
+                        stampBattleCrater(vp.x, vp.y, true);
+                    }
                     const auto& deadVeh = vehicleScene->vehicles().at(vp.index);
+                    const auto* deadSpec = unitCatalog ? unitCatalog->find(deadVeh.id) : nullptr;
                     const int sval = scoreValueForId(deadVeh.id, true);
                     if (isHostileOwner(vp.owner)) {
                         ++enemyVehDestroyed;
                         enemyScoreEarned += sval;
-                        if (const auto* spec = unitCatalog ? unitCatalog->find(deadVeh.id) : nullptr) {
-                            if (spec->scoreType == "tank") ++enemyTanksDestroyed;
-                            else if (spec->scoreType == "gun" || spec->scoreType == "aa") ++enemyGunsDestroyed;
+                        if (deadSpec) {
+                            if (deadSpec->scoreType == "tank") ++enemyTanksDestroyed;
+                            else if (deadSpec->scoreType == "gun" || deadSpec->scoreType == "aa") ++enemyGunsDestroyed;
                         }
                     } else if (vp.owner == localOwner()) {
                         friendlyScoreLost += sval;
@@ -530,12 +645,23 @@ void GameSession::stepSimulationEvents() {
                     if (combatEffects && vp.visible) {
                         const float wx = static_cast<float>(vp.x * mapScale);
                         const float wy = static_cast<float>(vp.y * mapScale);
-                        if (activeVfx.size() < 64) {
+                        if (activeVfx.size() < 64 && !combatVfx.hasRetailAssets()) {
                             activeVfx.push_back({ActiveVfx::Kind::VehicleExplosion, wx, wy, wx, wy, now,
                                                  std::chrono::milliseconds(650)});
                         }
-                        if (burningWrecks.size() >= 8) burningWrecks.erase(burningWrecks.begin());
-                        burningWrecks.push_back({wx, wy, now + std::chrono::seconds(18)});
+                        if (deadSpec && deadSpec->isSupplyCrate()) {
+                            combatVfx.spawnCrateBlast(static_cast<float>(vp.x), static_cast<float>(vp.y));
+                        } else if (deadOnWater) {
+                            combatVfx.spawnExplosion(static_cast<float>(vp.x), static_cast<float>(vp.y), 3, true);
+                        } else {
+                            combatVfx.spawnExplosion(static_cast<float>(vp.x), static_cast<float>(vp.y), 3, false);
+                            combatVfx.spawnCrateBlast(static_cast<float>(vp.x), static_cast<float>(vp.y));
+                        }
+                        spritesDirty = true;
+                        if (!deadOnWater && (!deadSpec || !deadSpec->isSupplyCrate())) {
+                            if (burningWrecks.size() >= 8) burningWrecks.erase(burningWrecks.begin());
+                            burningWrecks.push_back({wx, wy, now + std::chrono::seconds(18)});
+                        }
                     }
                     (void)playWorldSound("defaultexplosion", 0.62f, vp.x, vp.y, ss2::VoicePriority::High);
                     std::cout << "Vehicle " << vp.index << " (owner=" << vp.owner << " group=" << vp.group
@@ -551,10 +677,20 @@ void GameSession::stepSimulationEvents() {
             if (me.kind == ss2::MineEvent::Detonated) {
                 recordEventPos(static_cast<double>(mx), static_cast<double>(my));
                 pushMinimapPing(me.x, me.y, true);
-                stampBattleCrater(me.x, me.y, me.antiTank);
-                if (combatEffects && activeVfx.size() < 64) {
-                    activeVfx.push_back({ActiveVfx::Kind::Explosion, mx, my, mx, my, now,
-                                         std::chrono::milliseconds(me.antiTank ? 520 : 380)});
+                const bool mineWater = isWaterPoint(me.x, me.y);
+                if (!mineWater) {
+                    stampBattleCrater(me.x, me.y, me.antiTank);
+                }
+                if (combatEffects) {
+                    if (activeVfx.size() < 64 && !combatVfx.hasRetailAssets()) {
+                        activeVfx.push_back({ActiveVfx::Kind::Explosion, mx, my, mx, my, now,
+                                             std::chrono::milliseconds(me.antiTank ? 520 : 380)});
+                    }
+                    if (isBuildingPointVisible(me.x, me.y)) {
+                        combatVfx.spawnExplosion(static_cast<float>(me.x), static_cast<float>(me.y),
+                                                 me.antiTank ? 3 : 1, mineWater);
+                        spritesDirty = true;
+                    }
                 }
                 if (audio) {
                     const std::string mineSnd = unitCatalog
@@ -616,9 +752,13 @@ void GameSession::stepSimulationEvents() {
                     recordEventPos(static_cast<double>(bx), static_cast<double>(by));
                     pushMinimapPing(bu.x, bu.y, true);
                     if (combatEffects) {
-                        if (activeVfx.size() < 64) {
+                        if (activeVfx.size() < 64 && !combatVfx.hasRetailAssets()) {
                             activeVfx.push_back({ActiveVfx::Kind::VehicleExplosion, bx, by, bx, by, now,
                                                  std::chrono::milliseconds(650)});
+                        }
+                        if (bu.owner == localOwner() || isBuildingPointVisible(bu.x, bu.y)) {
+                            combatVfx.spawnExplosion(static_cast<float>(bu.x), static_cast<float>(bu.y), 4, false);
+                            spritesDirty = true;
                         }
                         if (burningWrecks.size() >= 8) burningWrecks.erase(burningWrecks.begin());
                         burningWrecks.push_back({bx, by, now + std::chrono::seconds(20)});
@@ -627,9 +767,13 @@ void GameSession::stepSimulationEvents() {
                     showNotice(ss2::tr("Building destroyed!"), ss2::NoticeKind::blocked);
                 } else if (newStage > prevStage && newStage < 3) {
                     if (bu.owner == localOwner() || isBuildingPointVisible(bu.x, bu.y)) {
-                        if (combatEffects && activeVfx.size() < 64) {
-                            activeVfx.push_back({ActiveVfx::Kind::Explosion, bx, by, bx, by, now,
-                                                 std::chrono::milliseconds(440)});
+                        if (combatEffects) {
+                            if (activeVfx.size() < 64 && !combatVfx.hasRetailAssets()) {
+                                activeVfx.push_back({ActiveVfx::Kind::Explosion, bx, by, bx, by, now,
+                                                     std::chrono::milliseconds(440)});
+                            }
+                            combatVfx.spawnExplosion(static_cast<float>(bu.x), static_cast<float>(bu.y), 2, false);
+                            spritesDirty = true;
                         }
                         if (newStage == 2 && combatEffects) {
                             if (burningWrecks.size() >= 8) burningWrecks.erase(burningWrecks.begin());
@@ -637,10 +781,14 @@ void GameSession::stepSimulationEvents() {
                         }
                     }
                     (void)playWorldSound("smallexplosion", 0.50f, bu.x, bu.y);
-                } else if (bu.damagedThisTick && combatEffects && activeVfx.size() < 64 &&
+                } else if (bu.damagedThisTick && combatEffects &&
                            (bu.owner == localOwner() || isBuildingPointVisible(bu.x, bu.y))) {
-                    activeVfx.push_back({ActiveVfx::Kind::Explosion, bx, by, bx, by, now,
-                                         std::chrono::milliseconds(320)});
+                    if (activeVfx.size() < 64 && !combatVfx.hasRetailAssets()) {
+                        activeVfx.push_back({ActiveVfx::Kind::Explosion, bx, by, bx, by, now,
+                                             std::chrono::milliseconds(320)});
+                    }
+                    combatVfx.spawnExplosion(static_cast<float>(bu.x), static_cast<float>(bu.y), 1, false);
+                    spritesDirty = true;
                 }
             }
         }
@@ -660,19 +808,28 @@ void GameSession::stepSimulationEvents() {
                 recordEventPos(static_cast<double>(bx), static_cast<double>(by));
                 pushMinimapPing(bru.x, bru.y, true);
                 if (combatEffects) {
-                    if (activeVfx.size() < 64) {
+                    if (activeVfx.size() < 64 && !combatVfx.hasRetailAssets()) {
                         activeVfx.push_back({ActiveVfx::Kind::VehicleExplosion, bx, by, bx, by, now,
                                              std::chrono::milliseconds(700)});
+                    }
+                    if (isBuildingPointVisible(bru.x, bru.y)) {
+                        combatVfx.spawnExplosion(static_cast<float>(bru.x), static_cast<float>(bru.y), 4, false);
+                        combatVfx.spawnWaterSplash(static_cast<float>(bru.x), static_cast<float>(bru.y), 3);
+                        spritesDirty = true;
                     }
                     if (burningWrecks.size() >= 8) burningWrecks.erase(burningWrecks.begin());
                     burningWrecks.push_back({bx, by, now + std::chrono::seconds(20)});
                 }
                 (void)playWorldSound("defaultexplosion", 0.72f, bru.x, bru.y, ss2::VoicePriority::High);
                 showNotice(ss2::tr("Bridge destroyed!"), ss2::NoticeKind::blocked);
-            } else if (bru.damagedThisTick && combatEffects && activeVfx.size() < 64 &&
+            } else if (bru.damagedThisTick && combatEffects &&
                        isBuildingPointVisible(bru.x, bru.y)) {
-                activeVfx.push_back({ActiveVfx::Kind::Explosion, bx, by, bx, by, now,
-                                     std::chrono::milliseconds(340)});
+                if (activeVfx.size() < 64 && !combatVfx.hasRetailAssets()) {
+                    activeVfx.push_back({ActiveVfx::Kind::Explosion, bx, by, bx, by, now,
+                                         std::chrono::milliseconds(340)});
+                }
+                combatVfx.spawnExplosion(static_cast<float>(bru.x), static_cast<float>(bru.y), 1, false);
+                spritesDirty = true;
             } else if (bru.repairedThisTick) {
                 if (wasDestroyed && !bru.destroyed) {
                     showNotice(ss2::tr("Bridge repaired and passable!"), ss2::NoticeKind::accepted);
@@ -753,16 +910,27 @@ void GameSession::stepSimulationEvents() {
                         if (played) lastAa = now;
                     }
                 }
-                if (combatEffects && activeVfx.size() < 64) {
-                    activeVfx.push_back({
-                        ActiveVfx::Kind::Tracer,
-                        static_cast<float>(ap.aaOriginX * mapScale),
-                        static_cast<float>(ap.aaOriginY * mapScale) - 12.0f * static_cast<float>(mapScale),
-                        static_cast<float>(ap.x * mapScale),
-                        static_cast<float>(ap.y * mapScale),
-                        now,
-                        std::chrono::milliseconds(140)
-                    });
+                if (combatEffects) {
+                    if (activeVfx.size() < 64) {
+                        activeVfx.push_back({
+                            ActiveVfx::Kind::Tracer,
+                            static_cast<float>(ap.aaOriginX * mapScale),
+                            static_cast<float>(ap.aaOriginY * mapScale) - 12.0f * static_cast<float>(mapScale),
+                            static_cast<float>(ap.x * mapScale),
+                            static_cast<float>(ap.y * mapScale),
+                            now,
+                            std::chrono::milliseconds(140)
+                        });
+                    }
+                    if (isBuildingPointVisible(ap.aaOriginX, ap.aaOriginY)) {
+                        const unsigned aaDir = CombatVfxSystem::dir32FromMapDelta(
+                            static_cast<double>(ap.x - ap.aaOriginX),
+                            static_cast<double>(ap.y - ap.aaOriginY));
+                        combatVfx.spawnMuzzleFlash(CombatVfxClip::MuzzleCannon,
+                                                   static_cast<float>(ap.aaOriginX),
+                                                   static_cast<float>(ap.aaOriginY - 10),
+                                                   aaDir, 10.0f);
+                    }
                 }
             }
             if (ap.active) {
@@ -813,11 +981,21 @@ void GameSession::stepSimulationEvents() {
                                    ss2::NoticeKind::accepted);
                     }
                 } else {
-                    stampBattleCrater(ae.x, ae.y, true);
+                    const bool bombOnWater = isWaterPoint(ae.x, ae.y);
+                    if (!bombOnWater) {
+                        stampBattleCrater(ae.x, ae.y, true);
+                    }
                     pushMinimapPing(ae.x, ae.y, true);
-                    if (combatEffects && activeVfx.size() < 64) {
-                        activeVfx.push_back({ActiveVfx::Kind::VehicleExplosion, ax, ay, ax, ay, now,
-                                             std::chrono::milliseconds(620)});
+                    if (combatEffects) {
+                        if (activeVfx.size() < 64 && !combatVfx.hasRetailAssets()) {
+                            activeVfx.push_back({ActiveVfx::Kind::VehicleExplosion, ax, ay, ax, ay, now,
+                                                 std::chrono::milliseconds(620)});
+                        }
+                        if (isBuildingPointVisible(ae.x, ae.y)) {
+                            combatVfx.spawnExplosion(static_cast<float>(ae.x), static_cast<float>(ae.y),
+                                                     4, bombOnWater);
+                            spritesDirty = true;
+                        }
                     }
                     if (audio) {
                         const auto* pSpec = unitCatalog ? unitCatalog->findPlane(ae.planeId) : nullptr;
@@ -835,18 +1013,32 @@ void GameSession::stepSimulationEvents() {
                 const auto* pSpec = unitCatalog ? unitCatalog->findPlane(ae.planeId) : nullptr;
                 const bool rocketStrafe =
                     pSpec && pSpec->effectiveGroundHitType() == ss2::assets::HitType::Explosive;
-                if (rocketStrafe) {
+                const bool strafeWater = isWaterPoint(ae.x, ae.y);
+                if (rocketStrafe && !strafeWater) {
                     stampBattleCrater(ae.x, ae.y, false);
                 }
-                if (combatEffects && activeVfx.size() < 64) {
-                    if (rocketStrafe) {
-                        activeVfx.push_back({ActiveVfx::Kind::Explosion, ax, ay, ax, ay, now,
-                                             std::chrono::milliseconds(360)});
-                    } else {
-                        activeVfx.push_back({ActiveVfx::Kind::Tracer,
-                                             ax - 20.0f * static_cast<float>(mapScale),
-                                             ay - 28.0f * static_cast<float>(mapScale),
-                                             ax, ay, now, std::chrono::milliseconds(240)});
+                if (combatEffects) {
+                    if (activeVfx.size() < 64) {
+                        if (rocketStrafe && !combatVfx.hasRetailAssets()) {
+                            activeVfx.push_back({ActiveVfx::Kind::Explosion, ax, ay, ax, ay, now,
+                                                 std::chrono::milliseconds(360)});
+                        } else if (!rocketStrafe) {
+                            activeVfx.push_back({ActiveVfx::Kind::Tracer,
+                                                 ax - 20.0f * static_cast<float>(mapScale),
+                                                 ay - 28.0f * static_cast<float>(mapScale),
+                                                 ax, ay, now, std::chrono::milliseconds(240)});
+                        }
+                    }
+                    if (isBuildingPointVisible(ae.x, ae.y)) {
+                        if (rocketStrafe) {
+                            combatVfx.spawnExplosion(static_cast<float>(ae.x), static_cast<float>(ae.y),
+                                                     1, strafeWater);
+                        } else if (strafeWater) {
+                            combatVfx.spawnWaterSplash(static_cast<float>(ae.x), static_cast<float>(ae.y), 1);
+                        } else {
+                            combatVfx.spawnDust(static_cast<float>(ae.x), static_cast<float>(ae.y), false);
+                        }
+                        spritesDirty = true;
                     }
                 }
                 if (audio) {
@@ -889,25 +1081,35 @@ void GameSession::stepSimulationEvents() {
                             unitMineAmmo.push_back(initialMinesForId(unit.id));
                             if (patch.pixels.width && patch.pixels.height)
                                 renderer.updateMapRegion(patch.x, patch.y, patch.pixels);
-                            if (combatEffects && activeVfx.size() < 64) {
-                                const float cx = static_cast<float>(unit.x * mapScale);
-                                const float cy = static_cast<float>(unit.y * mapScale);
-                                activeVfx.push_back({
-                                    ActiveVfx::Kind::Parachute, cx, cy - 68.0f * static_cast<float>(mapScale),
-                                    cx, cy, now, std::chrono::milliseconds(1100)
-                                });
+                            if (combatEffects) {
+                                if (activeVfx.size() < 64 && !combatVfx.hasRetailAssets()) {
+                                    const float cx = static_cast<float>(unit.x * mapScale);
+                                    const float cy = static_cast<float>(unit.y * mapScale);
+                                    activeVfx.push_back({
+                                        ActiveVfx::Kind::Parachute, cx, cy - 68.0f * static_cast<float>(mapScale),
+                                        cx, cy, now, std::chrono::milliseconds(1100)
+                                    });
+                                }
+                                combatVfx.spawnParachuteDrop(static_cast<float>(unit.x),
+                                                             static_cast<float>(unit.y),
+                                                             false, false, 68.0f, 1.10f);
                             }
                             spritesDirty = true;
                             ++droppedInf;
                         } else if (auto spawnedVeh = spawnAndRegisterVehicle(p)) {
                             const auto& v = vehicleScene->vehicles().at(spawnedVeh->first);
-                            if (combatEffects && activeVfx.size() < 64) {
-                                const float vx = static_cast<float>(v.x * mapScale);
-                                const float vy = static_cast<float>(v.y * mapScale);
-                                activeVfx.push_back({
-                                    ActiveVfx::Kind::Parachute, vx, vy - 74.0f * static_cast<float>(mapScale),
-                                    vx, vy, now, std::chrono::milliseconds(1250)
-                                });
+                            if (combatEffects) {
+                                if (activeVfx.size() < 64 && !combatVfx.hasRetailAssets()) {
+                                    const float vx = static_cast<float>(v.x * mapScale);
+                                    const float vy = static_cast<float>(v.y * mapScale);
+                                    activeVfx.push_back({
+                                        ActiveVfx::Kind::Parachute, vx, vy - 74.0f * static_cast<float>(mapScale),
+                                        vx, vy, now, std::chrono::milliseconds(1250)
+                                    });
+                                }
+                                combatVfx.spawnParachuteDrop(static_cast<float>(v.x),
+                                                             static_cast<float>(v.y),
+                                                             false, false, 74.0f, 1.25f);
                             }
                             spritesDirty = true;
                             ++droppedVeh;
@@ -933,13 +1135,18 @@ void GameSession::stepSimulationEvents() {
                     }
                 }
             } else if (ae.kind == ss2::AirStrikeEvent::SupplyDrop) {
-                if (combatEffects && activeVfx.size() < 64) {
-                    activeVfx.push_back({ActiveVfx::Kind::Parachute, ax, ay - 68.0f * static_cast<float>(mapScale),
-                                         ax, ay, now, std::chrono::milliseconds(1050)});
+                if (combatEffects) {
+                    if (activeVfx.size() < 64 && !combatVfx.hasRetailAssets()) {
+                        activeVfx.push_back({ActiveVfx::Kind::Parachute, ax, ay - 68.0f * static_cast<float>(mapScale),
+                                             ax, ay, now, std::chrono::milliseconds(1050)});
+                    }
                     if (activeVfx.size() < 64) {
                         activeVfx.push_back({ActiveVfx::Kind::RepairPulse, ax, ay, ax, ay, now,
                                              std::chrono::milliseconds(650)});
                     }
+                    combatVfx.spawnParachuteDrop(static_cast<float>(ae.x), static_cast<float>(ae.y),
+                                                 true, false, 70.0f, 1.05f);
+                    spritesDirty = true;
                 }
                 (void)playWorldSound("construct", 0.50f, ae.x, ae.y);
                 if (ae.owner == localOwner()) {
@@ -953,19 +1160,32 @@ void GameSession::stepSimulationEvents() {
                 } else if (ae.owner == localOwner()) {
                     friendlyScoreLost += pScore;
                 }
-                stampBattleCrater(ae.x, ae.y, true);
+                const bool crashWater = isWaterPoint(ae.x, ae.y);
+                if (!crashWater) {
+                    stampBattleCrater(ae.x, ae.y, true);
+                }
                 pushMinimapPing(ae.x, ae.y, true);
                 if (combatEffects) {
                     if (hud) {
                         hud->recordAirCrashTrail(ae.x, ae.y);
                         spritesDirty = true;
                     }
-                    if (activeVfx.size() < 64) {
+                    if (activeVfx.size() < 64 && !combatVfx.hasRetailAssets()) {
                         activeVfx.push_back({ActiveVfx::Kind::VehicleExplosion, ax, ay, ax, ay, now,
                                              std::chrono::milliseconds(700)});
                     }
-                    if (burningWrecks.size() >= 8) burningWrecks.erase(burningWrecks.begin());
-                    burningWrecks.push_back({ax, ay, now + std::chrono::seconds(14)});
+                    if (isBuildingPointVisible(ae.x, ae.y)) {
+                        combatVfx.spawnExplosion(static_cast<float>(ae.x), static_cast<float>(ae.y),
+                                                 4, crashWater);
+                        if (!crashWater) {
+                            combatVfx.spawnCrateBlast(static_cast<float>(ae.x), static_cast<float>(ae.y));
+                        }
+                        spritesDirty = true;
+                    }
+                    if (!crashWater) {
+                        if (burningWrecks.size() >= 8) burningWrecks.erase(burningWrecks.begin());
+                        burningWrecks.push_back({ax, ay, now + std::chrono::seconds(14)});
+                    }
                 }
                 const auto* pSpec = unitCatalog ? unitCatalog->findPlane(ae.planeId) : nullptr;
                 const std::string fallSnd = (pSpec && !pSpec->fallSound.empty())

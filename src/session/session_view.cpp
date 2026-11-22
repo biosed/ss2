@@ -13,10 +13,34 @@ namespace ss2 {
 bool GameSession::updateViewTooltipAndPresent() {
     const auto noticeFrame = std::chrono::steady_clock::now();
     const double frameDt = std::clamp(std::chrono::duration<double>(noticeFrame - lastNoticeFrame).count(), 0.0, 0.1);
-    if (hud && !paused && hud->hasActiveAirTrails() && frameDt > 0.0) {
-        if (hud->stepAirTrails(static_cast<float>(frameDt))) {
-            syncGpuSprites();
+    bool needVfxSync = false;
+    if (!combatEffects && combatVfx.hasActiveSprites()) {
+        combatVfx.clearActive();
+        needVfxSync = true;
+    }
+    if (!paused && frameDt > 0.0) {
+        if (hud && hud->hasActiveAirTrails() && hud->stepAirTrails(static_cast<float>(frameDt))) {
+            needVfxSync = true;
         }
+        if (combatEffects && combatVfx.atlasSlot().has_value()) {
+            std::vector<std::pair<float, float>> visWrecks;
+            const float invScale = 1.0f / static_cast<float>(std::max(1, mapScale));
+            for (const auto& bw : burningWrecks) {
+                const float sx = bw.x * invScale;
+                const float sy = bw.y * invScale;
+                if (isBuildingPointVisible(static_cast<int>(std::lround(sx)),
+                                           static_cast<int>(std::lround(sy)))) {
+                    visWrecks.emplace_back(sx, sy);
+                }
+            }
+            if ((combatVfx.hasActiveSprites() || !visWrecks.empty()) &&
+                combatVfx.step(static_cast<float>(frameDt), visWrecks)) {
+                needVfxSync = true;
+            }
+        }
+    }
+    if (needVfxSync) {
+        syncGpuSprites();
     }
     if ((SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS) && !briefing.active() && !menu.active()) {
         const bool* kb = SDL_GetKeyboardState(nullptr);

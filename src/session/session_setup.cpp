@@ -272,7 +272,7 @@ void GameSession::initializeMission() {
                     int sy = 0;
                     if (!(iss >> name >> dx >> dy >> dw >> dh >> u0 >> v0 >> u1 >> v1 >> sy)) continue;
                     if (!worldSlots.contains(name)) {
-                        if (gpuNextSlot >= planeAtlasBase) continue;
+                        if (gpuNextSlot + 1u >= planeAtlasBase) continue;
                         const auto ap = worldDir / (name + ".png");
                         if (!std::filesystem::is_regular_file(ap)) continue;
                         auto atlas = ss2::assets::loadPngRgba(ap);
@@ -442,10 +442,16 @@ void GameSession::initializeMission() {
         for (const auto& u : infantry) ensureUnitPortrait(u.id, false);
         for (const auto& v : vehicleUnits) ensureUnitPortrait(v.id, true);
         renderer.setMap(composedMap);
-        if (hud && hud->hasAirVfxAtlas() && gpuNextSlot < planeAtlasBase) {
+        if (hud && hud->hasAirVfxAtlas() && gpuNextSlot + 1u < planeAtlasBase) {
             const unsigned airVfxSlot = gpuNextSlot++;
             renderer.setSpriteAtlas(airVfxSlot, hud->airVfxAtlas());
             hud->bindAirVfxAtlasSlot(airVfxSlot);
+        }
+        (void)combatVfx.load(gameDir);
+        if (combatVfx.hasAtlas() && gpuNextSlot < planeAtlasBase) {
+            const unsigned vfxSlot = gpuNextSlot++;
+            renderer.setSpriteAtlas(vfxSlot, combatVfx.atlas());
+            combatVfx.bindAtlasSlot(vfxSlot);
         }
         if (isTutorial1 && mapScale == 2 && !smoothTerrain) {
             smoothTerrain = true;
@@ -484,6 +490,7 @@ void GameSession::initializeMission() {
             std::cerr << "Warning: failed to load CIRC64 visibility table from "
                       << gameDir << "; falling back to approximate fog sight rings.\n";
         }
+        terrainObstacles = data.obstacles;
         auto navigation = ss2::InfantryPathGrid::fromSubCellMasks(data.width, data.height, std::move(data.flags), std::move(data.obstacles));
         missionPlayerTeams = multiplayer.enabled ? multiplayer.playerTeams : data.playerTeams;
         const auto initMines = data.mines;
@@ -791,7 +798,8 @@ bool GameSession::ensureGpuInfantrySlot(const std::string& id) {
         if (!gpuArtDir.empty() && gpuFallbackIds.insert(id).second)
             std::cout << "GPU 4x HD infantry fallback Gold: " << id << " (" << reason << ")\n";
     };
-    if (gpuArtDir.empty() || gpuNextSlot >= planeAtlasBase) {
+    const unsigned maxInfSlot = combatVfx.atlasSlot().has_value() ? planeAtlasBase : (planeAtlasBase - 1u);
+    if (gpuArtDir.empty() || gpuNextSlot >= maxInfSlot) {
         logFallback("slot budget full");
         return false;
     }
@@ -815,14 +823,26 @@ bool GameSession::ensureGpuInfantrySlot(const std::string& id) {
 void GameSession::syncGpuSprites() {
     if (!scene) return;
     const bool hasAirTrails = hud && hud->hasActiveAirTrails() && hud->airVfxAtlasSlot().has_value();
-    if (gpuAtlasSlots.empty() && worldGpuSprites.empty() && livePlanes.empty() && !hasAirTrails) {
+    bool hasLiveCrates = false;
+    if (vehicleScene && unitCatalog && combatVfx.atlasSlot().has_value()) {
+        for (const auto& v : vehicleScene->vehicles()) {
+            if (!v.alive || v.hp <= 0 || !v.visible) continue;
+            if (const auto* sp = unitCatalog->find(v.id); sp && sp->isSupplyCrate()) {
+                hasLiveCrates = true;
+                break;
+            }
+        }
+    }
+    const bool hasCombatVfx = combatVfx.atlasSlot().has_value() &&
+                              ((combatEffects && combatVfx.hasActiveSprites()) || hasLiveCrates);
+    if (gpuAtlasSlots.empty() && worldGpuSprites.empty() && livePlanes.empty() && !hasAirTrails && !hasCombatVfx) {
         if (planesClearedNeeded) {
             renderer.setSprites({});
             planesClearedNeeded = false;
         }
         return;
     }
-    planesClearedNeeded = !livePlanes.empty() || hasAirTrails;
+    planesClearedNeeded = !livePlanes.empty() || hasAirTrails || hasCombatVfx;
     struct DrawItem {
         ss2::Sprite sprite;
         int sortY;
@@ -939,6 +959,29 @@ void GameSession::syncGpuSprites() {
         hud->appendAirTrailSprites(mapScale, trailSprites);
         for (const auto& ts : trailSprites) {
             items.push_back({ts, 999999});
+        }
+    }
+    if (hasCombatVfx) {
+        std::vector<CombatVfxSystem::RankedSprite> vfxItems;
+        if (hasLiveCrates && vehicleScene && unitCatalog) {
+            for (const auto& v : vehicleScene->vehicles()) {
+                if (!v.alive || v.hp <= 0 || !v.visible) continue;
+                const auto* sp = unitCatalog->find(v.id);
+                if (!sp || !sp->isSupplyCrate()) continue;
+                const float bright = fogBrightnessAt(v.x, v.y);
+                if (bright < 0.55f) continue;
+                const bool parts = (sp->ammo1 <= 0 && sp->ammo2 > 0);
+                combatVfx.appendCrateSprite(static_cast<float>(v.x), static_cast<float>(v.y),
+                                            (v.hullDir >> 2u) & 7u, parts, mapScale, bright, 1.0f, vfxItems);
+            }
+        }
+        if (combatEffects && combatVfx.hasActiveSprites()) {
+            combatVfx.appendSprites(mapScale,
+                                    [this](int sx, int sy) { return fogBrightnessAt(sx, sy); },
+                                    vfxItems);
+        }
+        for (const auto& vi : vfxItems) {
+            items.push_back({vi.sprite, vi.sortY});
         }
     }
     std::stable_sort(items.begin(), items.end(),
@@ -1660,6 +1703,42 @@ bool GameSession::isBuildingPointVisible(int simX, int simY) const {
     const int ty = std::clamp(v >> 5, 0, static_cast<int>(fogGridH) - 1);
     const std::size_t idx = static_cast<std::size_t>(ty) * fogGridW + static_cast<std::size_t>(tx);
     return idx < latestFog.size() && (latestFog[idx] & static_cast<std::uint8_t>(1u << localOwner())) != 0;
+}
+
+bool GameSession::isWaterPoint(int simX, int simY) const {
+    if (terrainObstacles.empty() || fogGridW == 0 || fogGridH == 0) return false;
+    if (const auto bi = bridgeAtMap(simX, simY); bi && *bi < liveBridges.size() && !liveBridges[*bi].destroyed) {
+        return false;
+    }
+    const int originX = static_cast<int>(fogGridH) * 32;
+    const auto [u, v] = ss2::tutorialFootWorld(simX, simY, originX);
+    const int subX = u >> 4;
+    const int subY = v >> 4;
+    const int tx = subX >> 1;
+    const int ty = subY >> 1;
+    if (tx < 0 || ty < 0 || tx >= static_cast<int>(fogGridW) || ty >= static_cast<int>(fogGridH)) return false;
+    const std::size_t idx = static_cast<std::size_t>(ty) * fogGridW + static_cast<std::size_t>(tx);
+    if (idx >= terrainObstacles.size()) return false;
+    const unsigned slotBit = 1u << static_cast<unsigned>((subX & 1) | ((subY & 1) << 1));
+    return (terrainObstacles[idx] & (slotBit << 4u)) != 0u;
+}
+
+bool GameSession::isShallowsPoint(int simX, int simY) const {
+    if (terrainObstacles.empty() || fogGridW == 0 || fogGridH == 0) return false;
+    if (const auto bi = bridgeAtMap(simX, simY); bi && *bi < liveBridges.size() && !liveBridges[*bi].destroyed) {
+        return false;
+    }
+    const int originX = static_cast<int>(fogGridH) * 32;
+    const auto [u, v] = ss2::tutorialFootWorld(simX, simY, originX);
+    const int subX = u >> 4;
+    const int subY = v >> 4;
+    const int tx = subX >> 1;
+    const int ty = subY >> 1;
+    if (tx < 0 || ty < 0 || tx >= static_cast<int>(fogGridW) || ty >= static_cast<int>(fogGridH)) return false;
+    const std::size_t idx = static_cast<std::size_t>(ty) * fogGridW + static_cast<std::size_t>(tx);
+    if (idx >= terrainObstacles.size()) return false;
+    const unsigned slotBit = 1u << static_cast<unsigned>((subX & 1) | ((subY & 1) << 1));
+    return (terrainObstacles[idx] & (slotBit << 8u)) != 0u;
 }
 
 } // namespace ss2
