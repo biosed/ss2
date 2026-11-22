@@ -914,6 +914,14 @@ constexpr Entry table[] = {
     {"Beacon from {0}!", "Balise de {0} !", "¡Baliza de {0}!"},
     {"{0} disconnected.", "{0} s'est déconnecté.", "{0} se desconectó."},
     {"Beacon placed.", "Balise placée.", "Baliza colocada."},
+    {"Game Statistics", "Statistiques de bataille", "Estadísticas de batalla"},
+    {"Infantry", "Infanterie", "Infantería"},
+    {"Tanks", "Chars", "Tanques"},
+    {"Vehicles", "Véhicules", "Vehículos"},
+    {"Artillery", "Artillerie", "Artillería"},
+    {"Aircraft", "Aviation", "Aviación"},
+    {"Buildings", "Bâtiments", "Edificios"},
+    {"Medals", "Médailles", "Medallas"},
 };
 
 std::atomic<Language> current{Language::english};

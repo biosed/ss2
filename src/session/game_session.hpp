@@ -17,6 +17,7 @@
 #include "sim/mission_runner.hpp"
 #include "sim/tutorial_coordinates.hpp"
 #include "ui/briefing.hpp"
+#include "ui/gold_frontend.hpp"
 #include "ui/hidpi.hpp"
 #include "ui/hud.hpp"
 #include "ui/menu.hpp"
@@ -227,6 +228,7 @@ struct GameSession {
     std::optional<SoundPlayer> audio;
     std::optional<Hud> hud;
     Menu menu;
+    std::unique_ptr<GoldPostMissionScreen> postMissionScreen;
     Tooltip tooltip;
     std::vector<ActiveVfx> activeVfx;
     std::vector<BurningWreck> burningWrecks;
@@ -420,6 +422,8 @@ struct GameSession {
     void openCampaignMissionsMenu(std::size_t campaignIdx);
     void openControlsMenu();
     void openDebriefMenu(bool victory);
+    void dismissPostMissionScreen();
+    void syncPostMissionMenuOverlay();
     void openLogMenu();
     void openForceOverviewMenu(bool fromPauseMenu);
     void openMissionBriefing();

@@ -897,7 +897,275 @@ void testVulkanWindowOverlay(bool validate, const std::filesystem::path& gameDir
     loading.clear(renderer);
     renderer.present(empty);
 
-    check(report.errors.load() == 0, "Zero Vulkan validation errors on GoldFrontEnd and GoldLoadingScreen overlays");
+    ss2::GoldPostMissionScreen postStats(win, gameDir, 0);
+    ss2::GoldPostMissionStats winStats{};
+    winStats.victory = true;
+    winStats.missionTitle = "1. Operation Overlord";
+    winStats.commanderName = "BritCmdr";
+    winStats.faction = ss2::GoldMedalFaction::Allied;
+    winStats.elapsedSeconds = 742u;
+    winStats.enemyInfantryKilled = 48u;
+    winStats.enemyTanksDestroyed = 7u;
+    winStats.enemyVehiclesDestroyed = 11u;
+    winStats.enemyGunsDestroyed = 5u;
+    winStats.enemyPlanesShotDown = 2u;
+    winStats.buildingsDemolished = 3u;
+    winStats.airSortiesFlown = 2u;
+    winStats.friendlyCasualties = 9u;
+    winStats.battleScore = 6840;
+    winStats.bestScore = 6840;
+    winStats.isNewBest = true;
+    winStats.starRating = 8;
+    winStats.hasNextCampaign = true;
+    winStats.nextCampaignTitle = "2. Breakout";
+    postStats.open(winStats, false);
+    postStats.draw(renderer);
+    renderer.present(empty);
+
+    postStats.handleKey(SDLK_DOWN);
+    postStats.draw(renderer);
+    renderer.present(empty);
+
+    winStats.victory = false;
+    winStats.isNewBest = false;
+    winStats.starRating = 0;
+    winStats.hasNextCampaign = false;
+    postStats.open(winStats, false);
+    postStats.draw(renderer);
+    renderer.present(empty);
+
+    postStats.clear(renderer);
+    renderer.present(empty);
+
+    check(report.errors.load() == 0,
+          "Zero Vulkan validation errors on GoldFrontEnd, GoldLoadingScreen, and GoldPostMissionScreen overlays");
+}
+
+std::uint64_t sumRegionRgb(const std::vector<std::uint8_t>& rgba, int width,
+                           int x0, int y0, int x1, int y1) {
+    std::uint64_t sum = 0;
+    for (int y = y0; y < y1; ++y) {
+        for (int x = x0; x < x1; ++x) {
+            const std::size_t p = (std::size_t(y) * std::size_t(width) + std::size_t(x)) * 4u;
+            sum += std::uint64_t(rgba[p]) + rgba[p + 1] + rgba[p + 2];
+        }
+    }
+    return sum;
+}
+
+std::size_t countDiffPixels(const std::vector<std::uint8_t>& a, const std::vector<std::uint8_t>& b,
+                            int width, int x0, int y0, int x1, int y1) {
+    std::size_t diff = 0;
+    for (int y = y0; y < y1; ++y) {
+        for (int x = x0; x < x1; ++x) {
+            const std::size_t p = (std::size_t(y) * std::size_t(width) + std::size_t(x)) * 4u;
+            if (a[p] != b[p] || a[p + 1] != b[p + 1] || a[p + 2] != b[p + 2]) ++diff;
+        }
+    }
+    return diff;
+}
+
+void testPostMissionScreenFallback() {
+    ss2::GoldPostMissionScreen pm(nullptr, {});
+    check(!pm.hasRetailAssets(), "asset-free GoldPostMissionScreen hasRetailAssets=false");
+    check(!pm.hasFanfareAudio(), "asset-free GoldPostMissionScreen hasFanfareAudio=false");
+    check(!pm.active(), "GoldPostMissionScreen starts inactive");
+
+    ss2::GoldPostMissionStats st{};
+    st.victory = true;
+    st.missionTitle = "Tutorial I";
+    st.commanderName = "CmdrTest";
+    st.faction = ss2::GoldMedalFaction::Allied;
+    st.elapsedSeconds = 365u;
+    st.enemyInfantryKilled = 24u;
+    st.enemyTanksDestroyed = 3u;
+    st.enemyVehiclesDestroyed = 6u;
+    st.enemyGunsDestroyed = 2u;
+    st.enemyPlanesShotDown = 1u;
+    st.buildingsDemolished = 2u;
+    st.airSortiesFlown = 1u;
+    st.friendlyCasualties = 4u;
+    st.battleScore = 4200;
+    st.bestScore = 4200;
+    st.isNewBest = true;
+    st.starRating = 0;
+    st.hasNextCampaign = true;
+    st.nextCampaignTitle = "2. River Crossing";
+
+    pm.open(st, false);
+    check(pm.active(), "GoldPostMissionScreen active after open()");
+    check(pm.focusedId() == "next_campaign", "Victory with nextCampaign focuses next_campaign first");
+    const auto ids = pm.actionIds();
+    check(ids.size() == 6u && ids[0] == "next_campaign" && ids[1] == "replay" &&
+              ids[2] == "campaigns" && ids[3] == "missions" && ids[4] == "resume" && ids[5] == "quit",
+          "Victory actionIds match full debrief order");
+
+    std::vector<std::uint8_t> stars0, stars5, stars10;
+    pm.renderToBuffer(800, 600, stars0);
+    st.starRating = 5;
+    pm.open(st, false);
+    pm.renderToBuffer(800, 600, stars5);
+    st.starRating = 10;
+    pm.open(st, false);
+    pm.renderToBuffer(800, 600, stars10);
+
+    check(stars0.size() == 800u * 600u * 4u, "fallback 800x600 RGBA buffer size");
+    const auto lum0 = sumRegionRgb(stars0, 800, 484, 326, 738, 378);
+    const auto lum5 = sumRegionRgb(stars5, 800, 484, 326, 738, 378);
+    const auto lum10 = sumRegionRgb(stars10, 800, 484, 326, 738, 378);
+    check(lum0 > 0u && lum5 > lum0 && lum10 > lum5,
+          "fallback star medal rack luminance increases monotonically 0 -> 5 -> 10 stars");
+
+    // Keyboard navigation & hotkeys
+    bool closed = false;
+    check(pm.handleKey(SDLK_DOWN, &closed).empty() && !closed && pm.focusedId() == "replay",
+          "SDLK_DOWN advances focus to replay");
+    check(pm.handleKey(SDLK_RIGHT, &closed).empty() && pm.focusedId() == "campaigns",
+          "SDLK_RIGHT advances focus to campaigns");
+    check(pm.handleKey(SDLK_LEFT, &closed).empty() && pm.focusedId() == "replay",
+          "SDLK_LEFT moves focus back to replay");
+    check(pm.handleKey(SDLK_END, &closed).empty() && pm.focusedId() == "quit",
+          "SDLK_END jumps focus to quit");
+    check(pm.handleKey(SDLK_HOME, &closed).empty() && pm.focusedId() == "next_campaign",
+          "SDLK_HOME jumps focus to next_campaign");
+    check(pm.handleKey(SDLK_RETURN, &closed) == "next_campaign" && !closed,
+          "SDLK_RETURN activates focused button");
+    check(pm.handleKey(SDLK_R, &closed) == "replay", "hotkey R activates replay");
+    check(pm.handleKey(SDLK_Q, &closed) == "quit", "hotkey Q activates quit");
+
+    // Mouse hover + click hit-testing across every button
+    for (const auto& id : ids) {
+        const auto ctr = pm.actionStageCenter(id);
+        check(ctr.has_value(), "actionStageCenter returns valid coords for every button");
+        pm.handleMouseMove(ctr->first, ctr->second);
+        check(pm.hoveredId() == id && pm.focusedId() == id, "mouse hover updates hoveredId & focusedId");
+        check(pm.handleMouseDown(ctr->first, ctr->second) == id, "mouse click activates hovered button");
+        pm.handleMouseUp();
+    }
+
+    // Escape closes
+    check(pm.handleKey(SDLK_ESCAPE, &closed).empty() && closed && !pm.active(),
+          "SDLK_ESCAPE closes GoldPostMissionScreen");
+
+    // Defeat omits next_campaign and renders distinct pixels from Victory
+    st.victory = false;
+    st.isNewBest = false;
+    st.starRating = 0;
+    pm.open(st, false);
+    check(pm.focusedId() == "replay", "Defeat focuses replay first");
+    check(pm.actionIds().size() == 5u, "Defeat omits next_campaign");
+    std::vector<std::uint8_t> defeatBuf;
+    pm.renderToBuffer(800, 600, defeatBuf);
+    check(countDiffPixels(stars10, defeatBuf, 800, 0, 0, 800, 600) > 20000u,
+          "Fallback Victory vs Defeat renders substantially distinct frames");
+}
+
+void testRetailPostMissionScreen(const std::filesystem::path& gameDir) {
+    const auto menuSue = ss2::assets::resolveCaseInsensitivePath(gameDir, "menu_common.sue");
+    check(std::filesystem::exists(menuSue), "menu_common.sue exists for GoldPostMissionScreen");
+    check(ss2::assets::pckFrameCount(ss2::assets::readSueEntry(menuSue, "stat_pic.pck")) >= 9u,
+          "retail stat_pic.pck has 9 unit silhouette frames");
+    check(ss2::assets::pckFrameCount(ss2::assets::readSueEntry(menuSue, "mstat_bt.pck")) >= 6u,
+          "retail mstat_bt.pck has 6 button frames");
+    check(ss2::assets::pckFrameCount(ss2::assets::readSueEntry(menuSue, "ZVEZDY.PCK")) >= 3u,
+          "retail ZVEZDY.PCK has 3 faction star frames");
+    check(ss2::assets::pckFrameCount(ss2::assets::readSueEntry(menuSue, "ZV_GOLD.PCK")) >= 15u,
+          "retail ZV_GOLD.PCK has 15 gold star halo frames");
+    check(ss2::assets::pckFrameCount(ss2::assets::readSueEntry(menuSue, "ZV_M.PCK")) >= 3u,
+          "retail ZV_M.PCK has 3 compact star frames");
+    check(!ss2::assets::readSueEntry(menuSue, "win_rus.pck").empty(), "retail win_rus.pck present");
+    check(!ss2::assets::readSueEntry(menuSue, "win_jap.pck").empty(), "retail win_jap.pck present");
+    check(ss2::assets::readSueEntry(menuSue, "winwav").size() > 7000000u, "retail winwav PCM present (>7 MB)");
+    check(ss2::assets::readSueEntry(menuSue, "loosewav").size() > 16000000u, "retail loosewav PCM present (>16 MB)");
+
+    ss2::GoldPostMissionScreen pm(nullptr, gameDir, 0);
+    check(pm.hasRetailAssets(), "retail GoldPostMissionScreen loaded retail sprites");
+    check(pm.hasFanfareAudio(), "retail GoldPostMissionScreen decoded winwav & loosewav fanfare audio");
+
+    const char* capEnv = std::getenv("SS2_GOLD_FE_CAPTURE_DIR");
+    const std::filesystem::path capDir = capEnv ? std::filesystem::path(capEnv) : std::filesystem::path{};
+
+    ss2::GoldPostMissionStats alliedWin{};
+    alliedWin.victory = true;
+    alliedWin.missionTitle = "1. Operation Overlord";
+    alliedWin.commanderName = "Eisenhower";
+    alliedWin.faction = ss2::GoldMedalFaction::Allied;
+    alliedWin.elapsedSeconds = 874u;
+    alliedWin.enemyInfantryKilled = 63u;
+    alliedWin.enemyTanksDestroyed = 9u;
+    alliedWin.enemyVehiclesDestroyed = 14u;
+    alliedWin.enemyGunsDestroyed = 6u;
+    alliedWin.enemyPlanesShotDown = 3u;
+    alliedWin.buildingsDemolished = 4u;
+    alliedWin.airSortiesFlown = 3u;
+    alliedWin.friendlyCasualties = 12u;
+    alliedWin.battleScore = 7650;
+    alliedWin.bestScore = 7650;
+    alliedWin.isNewBest = true;
+    alliedWin.starRating = 8;
+    alliedWin.hasNextCampaign = true;
+    alliedWin.nextCampaignTitle = "2. Hedgerow Breakout";
+
+    std::vector<std::uint8_t> allied0, allied8, rusWin, japWin, axisDefeat;
+    alliedWin.starRating = 0;
+    pm.open(alliedWin, false);
+    pm.renderToBuffer(800, 600, allied0);
+
+    alliedWin.starRating = 8;
+    pm.open(alliedWin, false);
+    pm.renderToBuffer(800, 600, allied8);
+
+    check(countDiffPixels(allied0, allied8, 800, 484, 326, 738, 378) > 350u,
+          "retail ZV_GOLD.PCK / ZVEZDY.PCK star sprites change medal rack pixels for 8 stars vs 0");
+
+    auto rusStats = alliedWin;
+    rusStats.missionTitle = "5. Berlin Assault";
+    rusStats.commanderName = "Zhukov";
+    rusStats.faction = ss2::GoldMedalFaction::Soviet;
+    rusStats.isRussianCampaign = true;
+    rusStats.starRating = 10;
+    rusStats.hasNextCampaign = false;
+    pm.open(rusStats, false);
+    pm.renderToBuffer(800, 600, rusWin);
+
+    auto japStats = alliedWin;
+    japStats.missionTitle = "1. Omen of Victory";
+    japStats.commanderName = "Yamamoto";
+    japStats.faction = ss2::GoldMedalFaction::Axis;
+    japStats.isJapaneseCampaign = true;
+    japStats.starRating = 7;
+    pm.open(japStats, false);
+    pm.renderToBuffer(800, 600, japWin);
+
+    auto defStats = alliedWin;
+    defStats.victory = false;
+    defStats.faction = ss2::GoldMedalFaction::Axis;
+    defStats.isNewBest = false;
+    defStats.starRating = 0;
+    defStats.hasNextCampaign = false;
+    pm.open(defStats, false);
+    pm.renderToBuffer(800, 600, axisDefeat);
+
+    check(countDiffPixels(allied8, rusWin, 800, 0, 0, 800, 600) > 100000u,
+          "retail win_rus.pck backdrop renders distinct Russian campaign victory screen");
+    check(countDiffPixels(rusWin, japWin, 800, 0, 0, 800, 600) > 100000u,
+          "retail win_jap.pck backdrop renders distinct Japanese campaign victory screen");
+    check(countDiffPixels(allied8, axisDefeat, 800, 0, 0, 800, 600) > 30000u,
+          "retail Defeat screen renders distinct visuals from Victory screen");
+
+    if (!capDir.empty()) {
+        std::filesystem::create_directories(capDir);
+        std::vector<std::uint8_t> hdFrame;
+        pm.open(alliedWin, false);
+        pm.renderToBuffer(1280, 720, hdFrame);
+        writePng(capDir / "postmission_victory_allied.png", 1280, 720, hdFrame);
+        pm.open(rusStats, false);
+        pm.renderToBuffer(800, 600, hdFrame);
+        writePng(capDir / "postmission_victory_russian.png", 800, 600, hdFrame);
+        pm.open(defStats, false);
+        pm.renderToBuffer(1280, 720, hdFrame);
+        writePng(capDir / "postmission_defeat.png", 1280, 720, hdFrame);
+    }
 }
 
 }  // namespace
@@ -914,6 +1182,7 @@ int main(int argc, char** argv) try {
     testCoordinateMapping();
     testFallbackInteraction();
     testLoadingScreenFallback();
+    testPostMissionScreenFallback();
 
     std::filesystem::path gameDir;
     if (const char* env = std::getenv("SS2_PRIVATE_GAME"); env && *env) {
@@ -922,6 +1191,7 @@ int main(int argc, char** argv) try {
     if (!gameDir.empty() && std::filesystem::is_directory(gameDir)) {
         testRetailGoldAssets(gameDir);
         testRetailLoadingScreen(gameDir);
+        testRetailPostMissionScreen(gameDir);
     }
     if (useWindow) {
         testVulkanWindowOverlay(validate, gameDir);

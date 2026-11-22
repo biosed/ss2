@@ -128,7 +128,23 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
         hud->handle(event);
     }
     if (menu.active()) {
-        const auto mr = menu.handle(event);
+        MenuResult mr{};
+        if (postMissionScreen && postMissionScreen->active()) {
+            if (event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) {
+                (void)menu.handle(event);
+            }
+            const auto pmr = postMissionScreen->handleEvent(event);
+            mr.consumed = pmr.consumed;
+            mr.closed = pmr.closed;
+            mr.activated = pmr.activated;
+            if (!pmr.closed && postMissionScreen->active()) {
+                menu.highlight(postMissionScreen->focusedId());
+                syncPostMissionMenuOverlay();
+                postMissionScreen->draw(renderer);
+            }
+        } else {
+            mr = menu.handle(event);
+        }
         if (audio && (!mr.activated.empty() || mr.closed)) {
             audio->playGroup("accept", 0.42f);
         }
@@ -235,6 +251,7 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
                 *campaignUnitPools = simulation->savedUnitPools();
             }
             *nextMissionOut = *nextCampaignMissionPath;
+            dismissPostMissionScreen();
             menu.close();
             running = false;
         } else if (mr.activated == "replay" && !currentMissionPath.empty() && nextMissionOut) {
@@ -242,6 +259,7 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
                 *campaignUnitPools = initialSavedPools;
             }
             *nextMissionOut = currentMissionPath;
+            dismissPostMissionScreen();
             menu.close();
             running = false;
         } else if (mr.activated == "campaigns") {
@@ -340,12 +358,14 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
         } else if (mr.activated == "log") {
             openLogMenu();
         } else if (mr.activated == "back") {
+            dismissPostMissionScreen();
             menu.open(ss2::tr("Paused"), buildPauseItems());
         } else if (mr.activated == "resign" && simulation && multiplayer.enabled) {
             simulation->resign(static_cast<std::uint8_t>(localOwner()));
             closeMenu();
             showNotice(ss2::tr("You surrendered."), ss2::NoticeKind::blocked);
         } else if (mr.activated == "quit") {
+            dismissPostMissionScreen();
             running = false;
         }
         if (mr.consumed) return;

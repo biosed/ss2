@@ -89,8 +89,21 @@ std::vector<MenuItem> GameSession::buildPauseItems() {
     return items;
 }
 
+void GameSession::dismissPostMissionScreen() {
+    if (postMissionScreen && postMissionScreen->active()) {
+        postMissionScreen->clear(renderer);
+    }
+}
+
+void GameSession::syncPostMissionMenuOverlay() {
+    if (!postMissionScreen || !postMissionScreen->active()) return;
+    menu.draw(renderer);
+    renderer.clearOverlay(OverlaySlot::menu);
+}
+
 void GameSession::openAirSupportMenu() {
     if (!simulation) return;
+    dismissPostMissionScreen();
     const auto slots = simulation->playerAirSupport();
     std::vector<ss2::MenuItem> items;
     items.push_back({"back", ss2::tr("Back to pause menu"), "", true});
@@ -106,6 +119,7 @@ void GameSession::openAirSupportMenu() {
 
 void GameSession::openPauseMenu() {
     if (briefing.active()) return;
+    dismissPostMissionScreen();
     attackMoveArmed = false;
     attackGroundArmed = false;
     reverseMoveArmed = false;
@@ -123,6 +137,7 @@ void GameSession::openPauseMenu() {
 }
 
 void GameSession::closeMenu() {
+    dismissPostMissionScreen();
     menu.close();
     if (simulation && menuPausedClock && paused) {
         paused = simulation->togglePause();
@@ -132,6 +147,7 @@ void GameSession::closeMenu() {
 
 void GameSession::openMissionsMenu() {
     if (gameDir.empty()) return;
+    dismissPostMissionScreen();
     menuMissions = ss2::assets::listSinglePlayerMissions(gameDir);
     std::vector<ss2::MenuItem> items;
     items.push_back({"back", ss2::tr("Back to pause menu"), "", true});
@@ -154,6 +170,7 @@ void GameSession::openMissionsMenu() {
 
 void GameSession::openCampaignsMenu() {
     if (gameDir.empty()) return;
+    dismissPostMissionScreen();
     menuCampaigns = ss2::assets::listCampaigns(gameDir);
     std::vector<ss2::MenuItem> items;
     items.push_back({"back", ss2::tr("Back to pause menu"), "", true});
@@ -177,6 +194,7 @@ void GameSession::openCampaignsMenu() {
 
 void GameSession::openCampaignMissionsMenu(std::size_t campaignIdx) {
     if (campaignIdx >= menuCampaigns.size()) return;
+    dismissPostMissionScreen();
     const auto& c = menuCampaigns[campaignIdx];
     std::vector<ss2::MenuItem> items;
     items.push_back({"back_campaigns", ss2::tr("Back to campaigns"), "", true});
@@ -206,6 +224,7 @@ void GameSession::openCampaignMissionsMenu(std::size_t campaignIdx) {
 }
 
 void GameSession::openControlsMenu() {
+    dismissPostMissionScreen();
     menu.open(ss2::tr("Controls"), {
         {"back", ss2::tr("Back to pause menu"), "", true},
         {"", ss2::tr("Selection & Orders"), "", false},
@@ -361,10 +380,103 @@ void GameSession::openDebriefMenu(bool victory) {
     items.push_back({"resume", ss2::tr("Continue"), "", true});
     items.push_back({"quit", ss2::tr("Quit to desktop"), "", true});
     menu.open(ss2::tr(victory ? "Mission Accomplished!" : "Mission Failed."), std::move(items));
+
+    GoldMedalFaction medalFaction = GoldMedalFaction::Allied;
+    bool isRusCampaign = false;
+    bool isJapCampaign = false;
+    if (multiplayer.enabled) {
+        const std::uint8_t nat = multiplayer.playerNations[localOwner() & 3];
+        if (nat == 0u) medalFaction = GoldMedalFaction::Soviet;
+        else if (nat == 1u || nat == 4u) medalFaction = GoldMedalFaction::Axis;
+        else medalFaction = GoldMedalFaction::Allied;
+    } else {
+        unsigned sovietUnits = 0u;
+        unsigned axisUnits = 0u;
+        unsigned alliedUnits = 0u;
+        unsigned japUnits = 0u;
+        auto tallyUnitNation = [&](const std::string& unitId) {
+            const std::string nat = inferNation(unitId);
+            if (nat == "russian") {
+                ++sovietUnits;
+            } else if (nat == "japanese") {
+                ++axisUnits;
+                ++japUnits;
+            } else if (nat == "german") {
+                ++axisUnits;
+            } else {
+                ++alliedUnits;
+            }
+        };
+        if (scene) {
+            for (const auto& u : scene->units()) {
+                if (u.owner == localOwner()) tallyUnitNation(u.id);
+            }
+        }
+        if (vehicleScene) {
+            for (const auto& v : vehicleScene->vehicles()) {
+                if (v.owner == localOwner()) tallyUnitNation(v.id);
+            }
+        }
+        if (sovietUnits > axisUnits && sovietUnits >= alliedUnits) {
+            medalFaction = GoldMedalFaction::Soviet;
+        } else if (axisUnits >= sovietUnits && axisUnits > alliedUnits) {
+            medalFaction = GoldMedalFaction::Axis;
+        } else {
+            medalFaction = GoldMedalFaction::Allied;
+        }
+        const std::string ext = currentMissionPath.extension().string();
+        if (ext == ".ssc" || ext == ".SSC") {
+            if (medalFaction == GoldMedalFaction::Soviet && sovietUnits > 0u) {
+                isRusCampaign = true;
+            } else if (medalFaction == GoldMedalFaction::Axis && japUnits * 2u >= axisUnits && japUnits > 0u) {
+                isJapCampaign = true;
+            }
+        }
+    }
+
+    GoldPostMissionStats stats{};
+    stats.victory = victory;
+    stats.missionTitle = !currentMissionTitle.empty()
+        ? currentMissionTitle
+        : (currentMissionPath.empty() ? std::string("Tutorial I") : currentMissionPath.stem().string());
+    stats.commanderName = settings.activeProfile.empty() ? std::string("YourID") : settings.activeProfile;
+    stats.faction = medalFaction;
+    stats.isRussianCampaign = isRusCampaign;
+    stats.isJapaneseCampaign = isJapCampaign;
+    stats.elapsedSeconds = simulation ? (simulation->simTick() / 25u) : 0u;
+    stats.enemyInfantryKilled = enemyInfKilled;
+    stats.enemyVehiclesDestroyed = enemyVehDestroyed;
+    stats.enemyTanksDestroyed = enemyTanksDestroyed;
+    stats.enemyGunsDestroyed = enemyGunsDestroyed;
+    stats.enemyPlanesShotDown = enemyPlanesShotDown;
+    stats.buildingsDemolished = buildingsDemolished;
+    stats.airSortiesFlown = airSortiesFlown;
+    stats.friendlyCasualties = static_cast<unsigned>(selection ? selection->playerLosses() : 0u);
+    stats.battleScore = netBattleScore;
+    stats.bestScore = bestShown;
+    stats.isNewBest = victory && netBattleScore > prevBestScore;
+    stats.starRating = (victory && unitCatalog) ? unitCatalog->starRatingForScore(netBattleScore) : 0;
+    stats.hasNextCampaign = victory && nextCampaignMissionPath.has_value();
+    stats.nextCampaignTitle = nextCampaignMissionTitle;
+    stats.canReplay = !currentMissionPath.empty();
+    stats.canBrowseCampaigns = true;
+    stats.canBrowseMissions = true;
+    stats.sfxVolume = audio ? audio->sfxVolume() : settings.sfxVolume;
+
+    if (!postMissionScreen) {
+        const std::optional<int> fixedBg = manualClock ? std::optional<int>(0) : std::nullopt;
+        postMissionScreen = std::make_unique<GoldPostMissionScreen>(window, gameDir, fixedBg);
+    }
+    const bool playFanfare = audio && audio->available() && !manualClock && !limit && !timing && !replayFile;
+    postMissionScreen->open(std::move(stats), playFanfare);
+    menu.highlight(postMissionScreen->focusedId());
+    syncPostMissionMenuOverlay();
+    postMissionScreen->draw(renderer);
 }
 
 void GameSession::openLogMenu() {
     if (briefing.active()) return;
+    dismissPostMissionScreen();
     std::vector<ss2::MenuItem> items;
     items.push_back({"resume", ss2::tr("Close"), "", true});
     if (hud) {
@@ -397,6 +509,7 @@ void GameSession::openLogMenu() {
 
 void GameSession::openForceOverviewMenu(bool fromPauseMenu) {
     if (!simulation || !scene || briefing.active()) return;
+    dismissPostMissionScreen();
     forceRosterGroups.clear();
     std::vector<ss2::MenuItem> items;
     items.push_back(fromPauseMenu
@@ -886,6 +999,7 @@ void GameSession::openSaveLoadMenu() {
         orderNotice.show(ss2::tr("Save/load disabled in multiplayer."), ss2::NoticeKind::unsupported);
         return;
     }
+    dismissPostMissionScreen();
     std::vector<ss2::MenuItem> items;
     items.push_back({"back", ss2::tr("Back to pause menu"), "", true});
     items.push_back({"", ss2::tr("Save Game"), "", false});

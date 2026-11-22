@@ -286,4 +286,110 @@ private:
     std::vector<std::uint8_t> rgba_;
 };
 
+enum class GoldMedalFaction : std::uint8_t {
+    Soviet = 0,  // ZVEZDY[0] / ZV_GOLD[0..4] / ZV_M[0] (Red Star)
+    Axis = 1,    // ZVEZDY[1] / ZV_GOLD[5..9] / ZV_M[1] (Iron Cross)
+    Allied = 2,  // ZVEZDY[2] / ZV_GOLD[10..14] / ZV_M[2] (Allied Star)
+};
+
+struct GoldPostMissionStats {
+    bool victory{false};
+    std::string missionTitle;
+    std::string commanderName{"YourID"};
+    GoldMedalFaction faction{GoldMedalFaction::Allied};
+    bool isRussianCampaign{false};
+    bool isJapaneseCampaign{false};
+
+    unsigned elapsedSeconds{0};
+    unsigned enemyInfantryKilled{0};
+    unsigned enemyVehiclesDestroyed{0};
+    unsigned enemyTanksDestroyed{0};
+    unsigned enemyGunsDestroyed{0};
+    unsigned enemyPlanesShotDown{0};
+    unsigned buildingsDemolished{0};
+    unsigned airSortiesFlown{0};
+    unsigned friendlyCasualties{0};
+
+    int battleScore{0};
+    int bestScore{0};
+    bool isNewBest{false};
+    int starRating{0};  // 0..10 retail Gold star rating
+
+    bool hasNextCampaign{false};
+    std::string nextCampaignTitle;
+    bool canReplay{true};
+    bool canBrowseCampaigns{true};
+    bool canBrowseMissions{true};
+    float sfxVolume{1.0f};
+};
+
+struct GoldPostMissionResult {
+    bool consumed{false};
+    bool closed{false};
+    std::string activated;
+};
+
+// Authentic Sudden Strike II Gold 2.2 Post-Mission Statistics, Medals & Victory/Defeat screen.
+// Composites retail menu_common.sue artwork (mainbk*.jpg / win_rus.pck / win_jap.pck backdrops,
+// stat_pic.pck unit silhouettes, mstat_bt.pck / rs_bt.pck button geometry, ZVEZDY.PCK /
+// ZV_GOLD.PCK / ZV_M.PCK faction medals & gold star ratings, and winwav / loosewav fanfare audio)
+// onto an aspect-fitted 800x600 stage inside OverlaySlot::panel, with an asset-free fallback.
+class GoldPostMissionScreen {
+public:
+    GoldPostMissionScreen(SDL_Window* window, const std::filesystem::path& gameDir,
+                          std::optional<int> fixedBgIndex = std::nullopt);
+    ~GoldPostMissionScreen();
+
+    GoldPostMissionScreen(const GoldPostMissionScreen&) = delete;
+    GoldPostMissionScreen& operator=(const GoldPostMissionScreen&) = delete;
+
+    void open(GoldPostMissionStats stats, bool playFanfare = true);
+    void close();
+    bool active() const { return active_; }
+
+    bool hasRetailAssets() const;
+    bool hasFanfareAudio() const;
+    bool fanfarePlaying() const;
+    void stopFanfare();
+
+    const GoldPostMissionStats& stats() const { return stats_; }
+    const std::string& focusedId() const { return focusedId_; }
+    const std::string& hoveredId() const { return hoveredId_; }
+    std::vector<std::string> actionIds() const;
+    std::optional<std::pair<double, double>> actionStageCenter(std::string_view id) const;
+    void setFocusedId(std::string_view id);
+
+    GoldPostMissionResult handleEvent(const SDL_Event& event);
+    std::string handleKey(SDL_Keycode key, bool* outClosed = nullptr);
+    void handleMouseMove(double stageX, double stageY);
+    std::string handleMouseDown(double stageX, double stageY);
+    void handleMouseUp();
+
+    void renderToBuffer(int pixelW, int pixelH, std::vector<std::uint8_t>& outRgba);
+    void draw(VulkanWindow& renderer);
+    void clear(VulkanWindow& renderer);
+
+private:
+    struct Assets;
+    struct ActionButton;
+
+    void loadAssets(std::optional<int> fixedBgIndex);
+    void startFanfare(bool victory, float volume);
+    std::vector<ActionButton> buildActionButtons() const;
+    std::string hitTestStage(double sx, double sy) const;
+    void cycleFocus(int step);
+
+    SDL_Window* window_{};
+    std::filesystem::path gameDir_;
+    std::unique_ptr<Assets> assets_;
+    GoldPostMissionStats stats_{};
+    bool active_{false};
+    std::string hoveredId_;
+    std::string focusedId_;
+    bool dirty_{true};
+    int lastPixelW_{0};
+    int lastPixelH_{0};
+    std::vector<std::uint8_t> rgba_;
+};
+
 }
