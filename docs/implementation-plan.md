@@ -31,6 +31,6 @@ Tutorial I plays end to end on the native build: the normal-input playthrough re
 
 Next work, in order:
 
-1. Remaining retail `n2Game_Dll.dll` / `n2Cad800.dll` parity items (HUD/weather overlays, progressive building damage, supply crates, voice/SFX polish).
+1. Remaining retail `n2Game_Dll.dll` / `n2Cad800.dll` parity items (progressive building damage stages, supply crates / paratrooper cargo drops, unit acknowledgement voice/SFX polish).
 
 The physical BC-250 / RADV 4K 120 Hz gate passed on 22 November 2026 (`validation.md`). The project still has no Git remote, so the CI workflow has never run. [Tutorial I results](tutorial-simulation.md)
