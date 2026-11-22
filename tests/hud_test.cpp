@@ -4,6 +4,7 @@
 #include "ui/strings.hpp"
 #include <cmath>
 #include <cstdlib>
+#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
@@ -615,6 +616,201 @@ int main(int argc, char** argv) {
                   rRes.classLabel == "rifle" && rRes.shiftHeld,
                   "Phase 4W right-click class card did not emit exclude selectClass");
             std::cout << "Phase 4W HUD class card right-click exclude PASSED\n";
+
+            // Retail Gold 2.2 skin fallback, Weather overlay (Rain/Snow/Fog), opaqueAtWindow invariance,
+            // and damaged-aircraft smoke/fire trails.
+            {
+                if (!SDL_SetWindowSize(window.get(), 800, 600)) throw std::runtime_error(SDL_GetError());
+                SDL_SyncWindow(window.get());
+                SDL_Event resizeEv;
+                while (SDL_PollEvent(&resizeEv)) {
+                    renderer.handleEvent(resizeEv);
+                }
+                int wLog{}, hLog{}, pw{}, ph{};
+                SDL_GetWindowSize(window.get(), &wLog, &hLog);
+                SDL_GetWindowSizeInPixels(window.get(), &pw, &ph);
+
+                ss2::Hud weatherHud(window.get());
+                check(!weatherHud.hasRetailAssets() && weatherHud.panelRecordCount() == 0,
+                      "fresh Hud starts in asset-free procedural mode");
+                check(!weatherHud.loadRetailAssets("/nonexistent/ss2/gold/install"),
+                      "loadRetailAssets returns false when retail archives are absent");
+                check(!weatherHud.hasRetailAssets(), "failed loadRetailAssets preserves procedural fallback");
+
+                // Synthetic damaged-aircraft trail lifecycle.
+                weatherHud.recordAirSortieTrail(101u, 200, 200, 8u, 100, 100, true, true, false);
+                check(!weatherHud.hasActiveAirTrails(), "undamaged aircraft emits no smoke/fire trail");
+                weatherHud.recordAirSortieTrail(101u, 220, 200, 8u, 40, 100, true, true, true);
+                weatherHud.recordAirSortieTrail(101u, 240, 200, 8u, 35, 100, true, true, false);
+                check(weatherHud.hasActiveAirTrails(), "AA-damaged aircraft emits trailing smoke/fire puffs");
+                std::vector<ss2::MapBeam> trailBeams;
+                weatherHud.appendAirTrailBeams(1, 16u, trailBeams);
+                check(trailBeams.size() >= 2u, "damaged aircraft trail populates smoke/fire beams");
+                for (int step = 0; step < 12; ++step) (void)weatherHud.stepAirTrails(0.20f);
+                check(!weatherHud.hasActiveAirTrails(), "aircraft smoke/fire trails expire cleanly over time");
+
+                // Weather overlay: Clear vs Rain vs Snow vs Fog in real Vulkan frames + opaqueAtWindow invariance.
+                renderer.setMap(solid(unsigned(pw), unsigned(ph), 72, 88, 64));
+                ss2::HudState ws;
+                ws.hasSelection = true;
+                ws.selection = {{"rifle", 6, 1.0f, 1.0f}};
+                weatherHud.update(ws);
+                weatherHud.setWeather(ss2::assets::WeatherKind::Clear, 0u);
+                weatherHud.draw(renderer);
+                const auto clearFrame = renderer.captureFrame();
+                const int wBarTop = int(clearFrame.height) - int(weatherHud.height());
+
+                const auto checkViewportPassThrough = [&](const char* label) {
+                    for (int gy = 16; gy < wBarTop - 8; gy += 48) {
+                        for (int gx = 24; gx < pw - 24; gx += 96) {
+                            const float lx = float(gx) * float(wLog) / float(pw);
+                            const float ly = float(gy) * float(hLog) / float(ph);
+                            check(!weatherHud.opaqueAtWindow(lx, ly), label);
+                        }
+                    }
+                    // Transparent upper-right L-cutout must also stay non-opaque in all weather modes.
+                    const float cutX = float(pw - 24) * float(wLog) / float(pw);
+                    const float cutY = float(wBarTop + 4) * float(hLog) / float(ph);
+                    check(!weatherHud.opaqueAtWindow(cutX, cutY), label);
+                    // Opaque console plates must remain opaque.
+                    const float barX = 16.0f * float(wLog) / float(pw);
+                    const float barY = float(ph - 12) * float(hLog) / float(ph);
+                    check(weatherHud.opaqueAtWindow(barX, barY), "HUD console stays opaque under weather");
+                };
+                checkViewportPassThrough("opaqueAtWindow false over Clear viewport");
+
+                const auto countViewportDiffs = [&](const MapImage& a, const MapImage& b) {
+                    int diffs = 0;
+                    for (int y = 8; y < wBarTop - 8; ++y) {
+                        for (int x = 8; x < int(a.width) - 8; ++x) {
+                            const std::size_t idx = (std::size_t(y) * a.width + std::size_t(x)) * 4u;
+                            if (a.rgba[idx] != b.rgba[idx] || a.rgba[idx + 1] != b.rgba[idx + 1] ||
+                                a.rgba[idx + 2] != b.rgba[idx + 2]) {
+                                ++diffs;
+                            }
+                        }
+                    }
+                    return diffs;
+                };
+
+                weatherHud.setWeather(ss2::assets::WeatherKind::Rain, 4u);
+                weatherHud.draw(renderer);
+                const auto rainFrameA = renderer.captureFrame();
+                check(countViewportDiffs(clearFrame, rainFrameA) > 500, "WeatherKind::Rain visibly alters viewport pixels");
+                checkViewportPassThrough("opaqueAtWindow stays false over Rain viewport");
+
+                weatherHud.setWeather(ss2::assets::WeatherKind::Rain, 11u);
+                weatherHud.draw(renderer);
+                const auto rainFrameB = renderer.captureFrame();
+                check(countViewportDiffs(rainFrameA, rainFrameB) > 200, "WeatherKind::Rain streaks animate across ticks");
+
+                weatherHud.setWeather(ss2::assets::WeatherKind::Rain, 4u);
+                weatherHud.draw(renderer);
+                const auto rainRepeat = renderer.captureFrame();
+                check(rainRepeat.rgba == rainFrameA.rgba, "WeatherKind::Rain rendering is deterministic for a given tick");
+
+                weatherHud.setWeather(ss2::assets::WeatherKind::Snow, 6u);
+                weatherHud.draw(renderer);
+                const auto snowFrame = renderer.captureFrame();
+                check(countViewportDiffs(clearFrame, snowFrame) > 500, "WeatherKind::Snow visibly alters viewport pixels");
+                check(countViewportDiffs(rainFrameA, snowFrame) > 500, "WeatherKind::Snow differs from Rain");
+                checkViewportPassThrough("opaqueAtWindow stays false over Snow viewport");
+
+                weatherHud.setWeather(ss2::assets::WeatherKind::Fog, 8u);
+                weatherHud.draw(renderer);
+                const auto fogFrame = renderer.captureFrame();
+                check(countViewportDiffs(clearFrame, fogFrame) > 1000, "WeatherKind::Fog mist alters viewport pixels");
+                check(countViewportDiffs(snowFrame, fogFrame) > 500, "WeatherKind::Fog differs from Snow");
+                checkViewportPassThrough("opaqueAtWindow stays false over Fog viewport");
+
+                weatherHud.setWeather(ss2::assets::WeatherKind::Clear, 0u);
+                weatherHud.draw(renderer);
+                const auto backToClear = renderer.captureFrame();
+                check(backToClear.rgba == clearFrame.rgba, "returning to WeatherKind::Clear restores exact viewport");
+                std::cout << "HUD live Weather (Clear/Rain/Snow/Fog) & opaqueAtWindow invariance PASSED\n";
+
+                // Optional retail Gold 2.2 HUD skin + AIRFIRE.ANI/AIRSMOKE.ANI verification when present.
+                std::filesystem::path retailDir;
+                if (const char* env = std::getenv("SS2_PRIVATE_GAME"); env && *env) {
+                    retailDir = env;
+                } else if (const char* home = std::getenv("HOME"); home && *home) {
+                    const auto candidate = std::filesystem::path(home) / "ss2-private/game/app";
+                    if (std::filesystem::exists(candidate / "lng.sue")) retailDir = candidate;
+                }
+                if (!retailDir.empty() && std::filesystem::exists(retailDir)) {
+                    ss2::Hud retailHud(window.get());
+                    retailHud.setMinimap(solid(200, 100, 40, 90, 50));
+                    ss2::Hud procHud(window.get());
+                    procHud.setMinimap(solid(200, 100, 40, 90, 50));
+
+                    ss2::HudState rs;
+                    rs.hasSelection = true;
+                    rs.hasInfantry = true;
+                    rs.hasBombard = true;
+                    rs.selection = {{"rifle", 8, 0.9f, 0.8f}, {"officer", 1, 1.0f, 1.0f}};
+                    rs.airReady = {1, 1, 2, 1, 1};
+                    rs.armedAir = 2;
+                    procHud.update(rs);
+
+                    check(retailHud.loadRetailAssets(retailDir), "loadRetailAssets succeeds on Gold 2.2 gameDir");
+                    check(retailHud.hasRetailAssets(), "hasRetailAssets true after loading lng.sue");
+                    check(retailHud.panelRecordCount() == 184u, "panel.dat decodes all 184 records");
+                    check(retailHud.pdropRecordCount() == 9u, "pdrop.dat decodes all 9 records");
+                    check(retailHud.retailTextCount() >= 60u, "game.lng decodes localized tactical strings");
+                    check(retailHud.retailText("ITXT_STOP").find("STOP") != std::string::npos,
+                          "game.lng ITXT_STOP decoded");
+                    check(retailHud.retailText("ITXT_AMOVE").find("ASSAULT") != std::string::npos,
+                          "game.lng ITXT_AMOVE decoded");
+                    check(retailHud.retailText("ITXT_PLANESTR1", 2u).find("PARATROOPS") != std::string::npos,
+                          "game.lng indexed ITXT_PLANESTR1[2] decoded");
+                    check(retailHud.hasAirVfxAtlas() &&
+                          retailHud.airFireFrameCount() >= 20u &&
+                          retailHud.airSmokeFrameCount() >= 45u,
+                          "game_common.sue AIRFIRE.ANI and AIRSMOKE.ANI decoded into sprite sheet");
+
+                    retailHud.update(rs);
+                    check(retailHud.rgba() != procHud.rgba(),
+                          "retail panel.dat + pdrop.dat skin visibly skins the HUD vs procedural fallback");
+                    check(retailHud.rgba()[(std::size_t(3) * retailHud.width() + 3) * 4 + 3] == 255,
+                          "retail left console stays opaque");
+                    check(retailHud.rgba()[(std::size_t(retailHud.height() - 3) * retailHud.width() + retailHud.width() - 4) * 4 + 3] == 255,
+                          "retail bottom tray stays opaque");
+                    check(retailHud.rgba()[(std::size_t(3) * retailHud.width() + retailHud.width() - 4) * 4 + 3] == 0,
+                          "retail upper-right L-cutout stays transparent");
+
+                    const Mouse rMouse{window.get(), retailHud};
+                    const auto stopR = retailHud.buttonRect(HudAction::stop);
+                    retailHud.handle(rMouse.button(SDL_EVENT_MOUSE_BUTTON_DOWN, centreX(stopR), centreY(stopR)));
+                    check(retailHud.handle(rMouse.button(SDL_EVENT_MOUSE_BUTTON_UP, centreX(stopR), centreY(stopR))).action == HudAction::stop,
+                          "retail HUD preserves Stop button hitbox");
+                    const auto paraR = retailHud.airButtonRect(2);
+                    check(paraR.width > 0 && paraR.height > 0, "retail paratrooper air pill has valid rect");
+                    retailHud.handle(rMouse.button(SDL_EVENT_MOUSE_BUTTON_DOWN, centreX(paraR), centreY(paraR)));
+                    const auto paraUp = retailHud.handle(rMouse.button(SDL_EVENT_MOUSE_BUTTON_UP, centreX(paraR), centreY(paraR)));
+                    check(paraUp.action == HudAction::airSupport && paraUp.airSlot == 2,
+                          "retail paratrooper air pill dispatches slot 2");
+                    const auto stopPt = rMouse.at(centreX(stopR), centreY(stopR));
+                    const auto rStopTip = retailHud.tooltipAtWindow(stopPt.x, stopPt.y);
+                    check(rStopTip && rStopTip->lines.size() >= 2u,
+                          "retail button tooltip includes game.lng ITXT subtitle");
+
+                    // Validate Vulkan sprite rendering of decoded AIRFIRE.ANI / AIRSMOKE.ANI trail sprites.
+                    renderer.setSpriteAtlas(5u, retailHud.airVfxAtlas());
+                    retailHud.bindAirVfxAtlasSlot(5u);
+                    retailHud.recordAirSortieTrail(77u, 320, 220, 4u, 30, 100, true, true, true);
+                    retailHud.recordAirCrashTrail(340, 230);
+                    std::vector<ss2::Sprite> trailSprites;
+                    retailHud.appendAirTrailSprites(1, trailSprites);
+                    check(!trailSprites.empty(), "retail AIRFIRE/AIRSMOKE trail emits GPU sprites");
+                    renderer.setSprites(trailSprites);
+                    retailHud.draw(renderer);
+                    const auto vfxFrame = renderer.captureFrame();
+                    check(vfxFrame.width == unsigned(pw) && vfxFrame.height == unsigned(ph),
+                          "Vulkan frame captured with retail HUD skin and AIRFIRE/AIRSMOKE sprites");
+                    renderer.setSprites({});
+                    std::cout << "Retail Gold 2.2 panel.dat + pdrop.dat + game.lng + AIRFIRE/AIRSMOKE PASSED\n";
+                }
+            }
         }
     } catch (const std::exception& e) {
         std::cerr << e.what() << '\n';

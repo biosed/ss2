@@ -409,6 +409,8 @@ void GameSession::initializeMission() {
         hudMapW = mapWidth;
         hudMapH = mapHeight;
         hud.emplace(window);
+        hud->loadRetailAssets(gameDir);
+        hud->setWeather(data.weather, 0u);
         baseMinimap = downsampleOverview(composedMap, 512u, 256u);
         hud->setMinimap(baseMinimap);
         if (!hdPack.empty() && std::filesystem::is_directory(hdPack / "hud-portraits")) {
@@ -430,6 +432,11 @@ void GameSession::initializeMission() {
         for (const auto& u : infantry) ensureUnitPortrait(u.id, false);
         for (const auto& v : vehicleUnits) ensureUnitPortrait(v.id, true);
         renderer.setMap(composedMap);
+        if (hud && hud->hasAirVfxAtlas() && gpuNextSlot < planeAtlasBase) {
+            const unsigned airVfxSlot = gpuNextSlot++;
+            renderer.setSpriteAtlas(airVfxSlot, hud->airVfxAtlas());
+            hud->bindAirVfxAtlasSlot(airVfxSlot);
+        }
         if (isTutorial1 && mapScale == 2 && !smoothTerrain) {
             smoothTerrain = true;
         }
@@ -797,14 +804,15 @@ bool GameSession::ensureGpuInfantrySlot(const std::string& id) {
 
 void GameSession::syncGpuSprites() {
     if (!scene) return;
-    if (gpuAtlasSlots.empty() && worldGpuSprites.empty() && livePlanes.empty()) {
+    const bool hasAirTrails = hud && hud->hasActiveAirTrails() && hud->airVfxAtlasSlot().has_value();
+    if (gpuAtlasSlots.empty() && worldGpuSprites.empty() && livePlanes.empty() && !hasAirTrails) {
         if (planesClearedNeeded) {
             renderer.setSprites({});
             planesClearedNeeded = false;
         }
         return;
     }
-    planesClearedNeeded = !livePlanes.empty();
+    planesClearedNeeded = !livePlanes.empty() || hasAirTrails;
     struct DrawItem {
         ss2::Sprite sprite;
         int sortY;
@@ -900,7 +908,7 @@ void GameSession::syncGpuSprites() {
                 0.0f,
                 0.40f
             },
-            999999
+            999998
         });
         items.push_back({
             {
@@ -915,6 +923,13 @@ void GameSession::syncGpuSprites() {
             },
             1000000
         });
+    }
+    if (hasAirTrails) {
+        std::vector<ss2::Sprite> trailSprites;
+        hud->appendAirTrailSprites(mapScale, trailSprites);
+        for (const auto& ts : trailSprites) {
+            items.push_back({ts, 999999});
+        }
     }
     std::stable_sort(items.begin(), items.end(),
                      [](const DrawItem& a, const DrawItem& b) { return a.sortY < b.sortY; });

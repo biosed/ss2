@@ -13,6 +13,11 @@ namespace ss2 {
 bool GameSession::updateViewTooltipAndPresent() {
     const auto noticeFrame = std::chrono::steady_clock::now();
     const double frameDt = std::clamp(std::chrono::duration<double>(noticeFrame - lastNoticeFrame).count(), 0.0, 0.1);
+    if (hud && !paused && hud->hasActiveAirTrails() && frameDt > 0.0) {
+        if (hud->stepAirTrails(static_cast<float>(frameDt))) {
+            syncGpuSprites();
+        }
+    }
     if ((SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS) && !briefing.active() && !menu.active()) {
         const bool* kb = SDL_GetKeyboardState(nullptr);
         double kdx = 0.0, kdy = 0.0;

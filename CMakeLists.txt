@@ -55,6 +55,7 @@ add_library(ss2_assets STATIC src/assets/sprite.cpp src/assets/mission.cpp src/a
     src/assets/unit_catalog.cpp)
 target_include_directories(ss2_assets PUBLIC src)
 target_link_libraries(ss2_assets PRIVATE ZLIB::ZLIB JPEG::JPEG PNG::PNG)
+target_link_libraries(ss2_briefing PUBLIC ss2_assets)
 find_package(Threads REQUIRED)
 add_library(ss2_sim STATIC src/sim/tutorial.cpp src/sim/command.cpp src/sim/lockstep.cpp src/sim/mission_runner.cpp src/sim/mission_snapshot.cpp src/sim/infantry_step.cpp
     src/sim/tutorial_units.cpp src/sim/tutorial_units_ai.cpp src/sim/tutorial_units_combat.cpp src/sim/tutorial_units_vehicles.cpp
@@ -274,7 +275,7 @@ if(BUILD_TESTING)
     add_test(NAME vulkan_wsi_recovery COMMAND wsi_recovery_test ${validation_arg})
     add_test(NAME gold_frontend_vulkan COMMAND gold_frontend_test --window ${validation_arg})
     if(SS2_PRIVATE_GAME)
-      set_tests_properties(gold_frontend_vulkan PROPERTIES ENVIRONMENT "SS2_PRIVATE_GAME=${SS2_PRIVATE_GAME}")
+      set_tests_properties(gold_frontend_vulkan command_bar PROPERTIES ENVIRONMENT "SS2_PRIVATE_GAME=${SS2_PRIVATE_GAME}")
       add_test(NAME gold_cli_record_replay COMMAND ${CMAKE_COMMAND}
         -DPROGRAM=$<TARGET_FILE:ss2>
         -DGAME_DIR=${SS2_PRIVATE_GAME}

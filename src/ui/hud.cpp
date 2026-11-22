@@ -1,11 +1,16 @@
 #include "ui/hud.hpp"
 #include "ui/strings.hpp"
+#include "assets/indexed.hpp"
+#include "assets/sprite.hpp"
 #include "render/window.hpp"
 
 #include <pango/pangocairo.h>
 #include <algorithm>
+#include <cctype>
 #include <cmath>
+#include <span>
 #include <stdexcept>
+#include <system_error>
 #include <utility>
 
 namespace ss2 {
@@ -97,9 +102,336 @@ bool hasRole(const HudState& state, std::initializer_list<const char*> needles) 
 bool hasOfficerSelection(const HudState& state) {
     return (state.hasSelection || !state.selection.empty()) && hasRole(state, {"officer"});
 }
+
+Surface makeNullSurface() {
+    return Surface(nullptr, cairo_surface_destroy);
 }
 
-Hud::Hud(SDL_Window* parent) : parent_(parent) {
+std::uint16_t readU16LE(std::span<const std::uint8_t> bytes, std::size_t at) {
+    return static_cast<std::uint16_t>(bytes[at] | (std::uint16_t(bytes[at + 1]) << 8));
+}
+
+std::int16_t readI16LE(std::span<const std::uint8_t> bytes, std::size_t at) {
+    return static_cast<std::int16_t>(readU16LE(bytes, at));
+}
+
+std::uint32_t readU32LE(std::span<const std::uint8_t> bytes, std::size_t at) {
+    return std::uint32_t(readU16LE(bytes, at)) | (std::uint32_t(readU16LE(bytes, at + 2)) << 16);
+}
+
+bool parseOffsetRecords(std::span<const std::uint8_t> raw, std::uint32_t minRecords, std::uint32_t maxRecords,
+                        std::vector<std::span<const std::uint8_t>>& outRecords) {
+    outRecords.clear();
+    if (raw.size() < 8) return false;
+    const std::uint32_t count = readU32LE(raw, 0);
+    if (count < minRecords || count > maxRecords) return false;
+    const std::size_t headerBytes = 4u + std::size_t(count + 1u) * 4u;
+    if (raw.size() < headerBytes) return false;
+
+    std::vector<std::uint32_t> offsets(count + 1u);
+    for (std::uint32_t i = 0; i <= count; ++i) {
+        offsets[i] = readU32LE(raw, 4u + std::size_t(i) * 4u);
+    }
+    if (offsets[0] < headerBytes || offsets[count] > raw.size()) return false;
+    for (std::uint32_t i = 0; i < count; ++i) {
+        if (offsets[i] > offsets[i + 1u]) return false;
+    }
+    outRecords.reserve(count);
+    for (std::uint32_t i = 0; i < count; ++i) {
+        outRecords.push_back(raw.subspan(offsets[i], offsets[i + 1u] - offsets[i]));
+    }
+    return true;
+}
+
+Surface decodeIndexedSurface(std::span<const std::uint8_t> sprite, std::span<const std::uint8_t> palette) {
+    if (sprite.size() < 9 || palette.size() < 512) return makeNullSurface();
+    const int originX = readI16LE(sprite, 0);
+    const int originY = readI16LE(sprite, 2);
+    const int width = readI16LE(sprite, 4);
+    const int height = readI16LE(sprite, 6);
+    if (width <= 0 || height <= 0 || width > 2048 || height > 2048) return makeNullSurface();
+    try {
+        assets::MapImage img{
+            static_cast<unsigned>(width),
+            static_cast<unsigned>(height),
+            std::vector<std::uint8_t>(std::size_t(width) * height * 4u, 0u),
+        };
+        assets::drawIndexedFrame(img, -originX, -originY, sprite, palette);
+        return image(img);
+    } catch (...) {
+        return makeNullSurface();
+    }
+}
+
+void drawSurfaceCrisp(cairo_t* cr, cairo_surface_t* surf, double x, double y, double w, double h, double alpha = 1.0) {
+    if (!surf || w <= 0.0 || h <= 0.0) return;
+    const int sw = cairo_image_surface_get_width(surf);
+    const int sh = cairo_image_surface_get_height(surf);
+    if (sw <= 0 || sh <= 0) return;
+    cairo_save(cr);
+    cairo_rectangle(cr, x, y, w, h);
+    cairo_clip(cr);
+    cairo_translate(cr, x, y);
+    cairo_scale(cr, w / double(sw), h / double(sh));
+    cairo_set_source_surface(cr, surf, 0.0, 0.0);
+    cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_BILINEAR);
+    if (alpha >= 0.999) cairo_paint(cr);
+    else cairo_paint_with_alpha(cr, alpha);
+    cairo_restore(cr);
+}
+
+void tileSurfaceRegion(cairo_t* cr, cairo_surface_t* surf, int rx, int ry, int rw, int rh, double alpha) {
+    if (!surf || rw <= 0 || rh <= 0) return;
+    const int sw = cairo_image_surface_get_width(surf);
+    const int sh = cairo_image_surface_get_height(surf);
+    if (sw <= 0 || sh <= 0) return;
+    cairo_save(cr);
+    cairo_rectangle(cr, rx, ry, rw, rh);
+    cairo_clip(cr);
+    for (int y = ry; y < ry + rh; y += sh) {
+        for (int x = rx; x < rx + rw; x += sw) {
+            cairo_set_source_surface(cr, surf, x, y);
+            cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_NEAREST);
+            cairo_paint_with_alpha(cr, alpha);
+        }
+    }
+    cairo_restore(cr);
+}
+
+std::string stripRetailKeyTag(std::string s) {
+    for (;;) {
+        const auto open = s.find("(~KEY_");
+        if (open == std::string::npos) break;
+        const auto close = s.find("~)", open);
+        if (close == std::string::npos) break;
+        std::size_t start = open;
+        while (start > 0 && s[start - 1] == ' ') --start;
+        s.erase(start, (close + 2) - start);
+    }
+    while (!s.empty() && (s.back() == ' ' || s.back() == '\t')) s.pop_back();
+    return s;
+}
+
+void parseGameLng(std::string_view rawText, std::map<std::string, std::vector<std::string>>& out) {
+    std::size_t pos = 0;
+    while (pos < rawText.size()) {
+        std::size_t eol = rawText.find('\n', pos);
+        if (eol == std::string_view::npos) eol = rawText.size();
+        std::string_view line = rawText.substr(pos, eol - pos);
+        pos = eol + 1;
+        while (!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '\t')) {
+            line.remove_suffix(1);
+        }
+        std::size_t lead = 0;
+        while (lead < line.size() && (line[lead] == ' ' || line[lead] == '\t')) ++lead;
+        line.remove_prefix(lead);
+        if (line.empty() || line.front() == '[' || line.front() == ';' || line.front() == '/') continue;
+
+        std::size_t sep = 0;
+        while (sep < line.size() && line[sep] != ' ' && line[sep] != '\t') ++sep;
+        std::string_view rawKey = line.substr(0, sep);
+        std::string_view rawVal = line.substr(sep);
+        while (!rawVal.empty() && (rawVal.front() == ' ' || rawVal.front() == '\t')) rawVal.remove_prefix(1);
+        if (rawKey.empty()) continue;
+
+        std::size_t idx = 0;
+        const auto brOpen = rawKey.find('[');
+        const auto brClose = rawKey.find(']');
+        if (brOpen != std::string_view::npos && brClose != std::string_view::npos && brClose > brOpen + 1) {
+            std::size_t parsed = 0;
+            bool ok = true;
+            for (std::size_t k = brOpen + 1; k < brClose; ++k) {
+                if (rawKey[k] < '0' || rawKey[k] > '9') { ok = false; break; }
+                parsed = parsed * 10u + std::size_t(rawKey[k] - '0');
+            }
+            if (ok && parsed < 32u) idx = parsed;
+            rawKey = rawKey.substr(0, brOpen);
+        }
+        auto& vec = out[std::string(rawKey)];
+        if (vec.size() <= idx) vec.resize(idx + 1u);
+        vec[idx] = assets::decodeMissionText(rawVal);
+    }
+}
+
+// Decode a 0xCA000002 .ANI file paired with its 1024-byte (RGB565 + bgTrans254) .COL palette,
+// stamping each non-empty frame centered into a cellSize x cellSize cell of `sheet`.
+std::size_t decodeAniFramesIntoSheet(std::span<const std::uint8_t> ani,
+                                     std::span<const std::uint8_t> col,
+                                     assets::MapImage& sheet,
+                                     unsigned sheetCols,
+                                     unsigned cellSize,
+                                     std::size_t startCell,
+                                     std::size_t maxCells) {
+    if (ani.size() < 12 || col.size() < 1024) return 0;
+    if (readU32LE(ani, 0) != 0xCA000002u) return 0;
+    const std::uint32_t frameCount = readU32LE(ani, 4);
+    if (frameCount == 0 || frameCount > 256u) return 0;
+    const std::size_t hdrBytes = 8u + std::size_t(frameCount + 1u) * 4u;
+    if (ani.size() < hdrBytes) return 0;
+
+    std::vector<std::uint32_t> offs(frameCount + 1u);
+    for (std::uint32_t i = 0; i <= frameCount; ++i) {
+        offs[i] = readU32LE(ani, 8u + std::size_t(i) * 4u);
+    }
+    if (offs[0] < hdrBytes || offs[frameCount] > ani.size()) return 0;
+
+    // Precompute straight RGBA8 palette from 256 x (u16 premul_rgb565, u16 bg_trans_254).
+    std::array<std::array<std::uint8_t, 4>, 256> rgbaPal{};
+    for (std::size_t idx = 0; idx < 256u; ++idx) {
+        const std::uint16_t c565 = readU16LE(col, idx * 4u);
+        const std::uint16_t bgTrans = readU16LE(col, idx * 4u + 2u);
+        const unsigned r5 = (c565 >> 11u) & 31u;
+        const unsigned g6 = (c565 >> 5u) & 63u;
+        const unsigned b5 = c565 & 31u;
+        const unsigned pr = (r5 << 3u) | (r5 >> 2u);
+        const unsigned pg = (g6 << 2u) | (g6 >> 4u);
+        const unsigned pb = (b5 << 3u) | (b5 >> 2u);
+        const int alpha254 = std::clamp(254 - int(bgTrans & 0xFFu), 0, 254);
+        const int a8 = std::max((alpha254 * 255 + 127) / 254,
+                                c565 != 0u ? int(std::max({pr, pg, pb})) : 0);
+        if (a8 <= 0) {
+            rgbaPal[idx] = {0, 0, 0, 0};
+        } else {
+            rgbaPal[idx] = {
+                static_cast<std::uint8_t>(std::min(255, (int(pr) * 255 + a8 / 2) / a8)),
+                static_cast<std::uint8_t>(std::min(255, (int(pg) * 255 + a8 / 2) / a8)),
+                static_cast<std::uint8_t>(std::min(255, (int(pb) * 255 + a8 / 2) / a8)),
+                static_cast<std::uint8_t>(std::clamp(a8, 0, 255)),
+            };
+        }
+    }
+
+    std::size_t written = 0;
+    const int half = int(cellSize) / 2;
+    for (std::uint32_t fi = 0; fi < frameCount && written < maxCells; ++fi) {
+        if (offs[fi] > offs[fi + 1u]) break;
+        const auto spr = ani.subspan(offs[fi], offs[fi + 1u] - offs[fi]);
+        if (spr.size() < 9) continue;
+        const int ox = readI16LE(spr, 0);
+        const int oy = readI16LE(spr, 2);
+        const int fw = readI16LE(spr, 4);
+        const int fh = readI16LE(spr, 6);
+        const std::uint8_t tag = spr[8];
+        if ((tag != 0xA1u && tag != 0xA2u) || fw <= 1 || fh <= 1 || fw > 256 || fh > 256) continue;
+
+        const std::size_t cellIdx = startCell + written;
+        const int cellLeft = int(cellIdx % sheetCols) * int(cellSize);
+        const int cellTop = int(cellIdx / sheetCols) * int(cellSize);
+        const bool compact = (tag == 0xA1u);
+        std::size_t pos = 9u;
+        bool ok = true;
+        for (int y = 0; y < fh; ++y) {
+            if (pos + 2u > spr.size()) { ok = false; break; }
+            const unsigned rlen = readU16LE(spr, pos);
+            pos += 2u;
+            if (rlen > spr.size() - pos) { ok = false; break; }
+            const auto row = spr.subspan(pos, rlen);
+            pos += rlen;
+            int x = 0;
+            for (std::size_t i = 0; i < row.size();) {
+                const std::uint8_t op = row[i++];
+                const int cnt = op & (compact ? 127 : 63);
+                if (cnt > fw - x) { ok = false; break; }
+                const bool skip = !compact && (op & 192u) == 192u;
+                const bool rep = (op & 128u) != 0u && !skip;
+                const std::size_t used = (skip || cnt == 0) ? 0u : (rep ? 1u : std::size_t(cnt));
+                if (used > row.size() - i) { ok = false; break; }
+                for (int j = 0; !skip && j < cnt; ++j) {
+                    const std::uint8_t palIdx = row[i + (rep ? 0u : std::size_t(j))];
+                    if (compact && rep && palIdx == 0u) continue;
+                    const auto c = rgbaPal[palIdx];
+                    if (c[3] == 0u) continue;
+                    const int lx = half + ox + x + j;
+                    const int ly = half + oy + y;
+                    if (lx < 1 || ly < 1 || lx >= int(cellSize) - 1 || ly >= int(cellSize) - 1) continue;
+                    const int dx = cellLeft + lx;
+                    const int dy = cellTop + ly;
+                    if (dx < 0 || dy < 0 || dx >= int(sheet.width) || dy >= int(sheet.height)) continue;
+                    auto* dst = &sheet.rgba[(std::size_t(dy) * sheet.width + std::size_t(dx)) * 4u];
+                    dst[0] = c[0];
+                    dst[1] = c[1];
+                    dst[2] = c[2];
+                    dst[3] = c[3];
+                }
+                i += used;
+                x += cnt;
+            }
+            if (!ok) break;
+        }
+        if (ok) ++written;
+    }
+    return written;
+}
+
+std::uint32_t hashWeather(std::uint32_t x) noexcept {
+    x ^= x >> 16u;
+    x *= 0x7feb352du;
+    x ^= x >> 15u;
+    x *= 0x846ca68bu;
+    x ^= x >> 16u;
+    return x;
+}
+}
+
+struct Hud::RetailAssets {
+    static constexpr unsigned kAirSheetCols = 10u;
+    static constexpr unsigned kAirSheetRows = 8u;
+    static constexpr unsigned kAirCellSize = 40u;
+
+    bool loaded = false;
+    std::size_t panelRecordCount = 0;
+    std::size_t pdropRecordCount = 0;
+
+    Surface panelLeftPlate = makeNullSurface();
+    Surface panelRightTray = makeNullSurface();
+    Surface pdropPlate = makeNullSurface();
+    Surface pdropChuteIcon = makeNullSurface();
+    std::array<Surface, 4> pdropButtons{
+        makeNullSurface(), makeNullSurface(), makeNullSurface(), makeNullSurface()
+    };
+    Surface menuBtnNormal = makeNullSurface();
+    Surface menuBtnPressed = makeNullSurface();
+    Surface pauseBtnNormal = makeNullSurface();
+    Surface pauseBtnPressed = makeNullSurface();
+    Surface blankBtnBevel = makeNullSurface();
+    Surface medicIcon = makeNullSurface();
+    Surface specialIcon = makeNullSurface();
+    std::map<HudAction, std::pair<Surface, Surface>> cmdButtons;
+    std::array<std::pair<Surface, Surface>, 5> airIcons{{
+        {makeNullSurface(), makeNullSurface()},
+        {makeNullSurface(), makeNullSurface()},
+        {makeNullSurface(), makeNullSurface()},
+        {makeNullSurface(), makeNullSurface()},
+        {makeNullSurface(), makeNullSurface()},
+    }};
+    std::map<std::string, std::vector<std::string>> texts;
+
+    assets::MapImage airVfxSheet{};
+    std::size_t airFireFrames = 0;
+    std::size_t airSmokeFrames = 0;
+    std::optional<unsigned> airVfxSlot;
+
+    struct PlaneTrailState {
+        int lastX = 0;
+        int lastY = 0;
+        float distAccum = 0.0f;
+        bool initialized = false;
+    };
+    struct AirPuff {
+        float x = 0.0f;
+        float y = 0.0f;
+        float vx = 0.0f;
+        float vy = 0.0f;
+        float age = 0.0f;
+        float duration = 1.0f;
+        float scale = 1.0f;
+        bool isFire = false;
+    };
+    std::map<std::uint32_t, PlaneTrailState> planeTrails;
+    std::vector<AirPuff> puffs;
+};
+
+Hud::Hud(SDL_Window* parent) : parent_(parent), retail_(std::make_unique<RetailAssets>()) {
     if (!parent_) throw std::invalid_argument("HUD needs a parent window");
     std::unique_ptr<PangoFontMap, decltype(&g_object_unref)> map(pango_cairo_font_map_new(), g_object_unref);
     fonts_.reset(pango_font_map_create_context(map.get()), g_object_unref);
@@ -108,6 +440,353 @@ Hud::Hud(SDL_Window* parent) : parent_(parent) {
                 {HudAction::pause, "Pause", "P", {}}, {HudAction::log, "Log", "L", {}}};
     layout();
     render();
+}
+
+Hud::~Hud() = default;
+
+bool Hud::loadRetailAssets(const std::filesystem::path& gameDir) {
+    if (!retail_) retail_ = std::make_unique<RetailAssets>();
+    if (gameDir.empty()) return false;
+    std::error_code ec;
+    if (!std::filesystem::exists(gameDir, ec)) return false;
+
+    bool panelOk = false;
+    bool pdropOk = false;
+
+    const auto lngSue = assets::resolveCaseInsensitivePath(gameDir, "lng.sue");
+    if (std::filesystem::exists(lngSue, ec)) {
+        try {
+            const auto panelBytes = assets::readSueEntry(lngSue, "panel.dat");
+            std::vector<std::span<const std::uint8_t>> recs;
+            if (parseOffsetRecords(panelBytes, 176u, 256u, recs)) {
+                retail_->panelRecordCount = recs.size();
+                const auto pal = recs[0];
+                retail_->panelLeftPlate = decodeIndexedSurface(recs[2], pal);
+                retail_->panelRightTray = decodeIndexedSurface(recs[4], pal);
+                retail_->menuBtnNormal = decodeIndexedSurface(recs[9], pal);
+                retail_->menuBtnPressed = decodeIndexedSurface(recs[10], pal);
+                retail_->pauseBtnNormal = decodeIndexedSurface(recs[15], pal);
+                retail_->pauseBtnPressed = decodeIndexedSurface(recs[16], pal);
+                retail_->blankBtnBevel = decodeIndexedSurface(recs[35], pal);
+                retail_->medicIcon = decodeIndexedSurface(recs[111], pal);
+                retail_->specialIcon = decodeIndexedSurface(recs[67], pal);
+
+                auto loadPair = [&](HudAction act, std::size_t nIdx, std::size_t pIdx) {
+                    if (nIdx < recs.size() && pIdx < recs.size()) {
+                        auto a = decodeIndexedSurface(recs[nIdx], pal);
+                        auto b = decodeIndexedSurface(recs[pIdx], pal);
+                        if (a && b) retail_->cmdButtons.insert_or_assign(act, std::pair{std::move(a), std::move(b)});
+                    }
+                };
+                // Exact Gold 2.2 n2Game_Dll.dll (0x100fc74c / 0x100fc83c) command button mappings:
+                loadPair(HudAction::stop, 61u, 62u);          // ITXT_STOP
+                loadPair(HudAction::holdFire, 32u, 33u);      // ITXT_HOLDFIRE
+                loadPair(HudAction::crouch, 167u, 168u);      // ITXT_FOOTCRAWL
+                loadPair(HudAction::mission, 63u, 64u);       // ITXT_COVER
+                loadPair(HudAction::pause, 15u, 16u);         // ITXT_PAUSE
+                loadPair(HudAction::log, 13u, 14u);           // ITXT_LOAD / dispatch
+                loadPair(HudAction::recon, 85u, 86u);         // ITXT_BINOCULAR
+                loadPair(HudAction::attackMove, 55u, 56u);    // ITXT_AMOVE
+                loadPair(HudAction::patrol, 101u, 102u);      // ITXT_PLANE_PATROL
+                loadPair(HudAction::attackGround, 57u, 58u);  // ITXT_GAUBFIRE
+                loadPair(HudAction::unload, 59u, 60u);        // ITXT_UNLOAD
+                loadPair(HudAction::mine, 77u, 78u);          // ITXT_LAYMINE
+                loadPair(HudAction::scatter, 65u, 66u);       // ITXT_SCATTER
+
+                // Air mission icons: Bomber, Recon, Paratrooper, Supply, Fighter
+                retail_->airIcons[0] = {decodeIndexedSurface(recs[95], pal), decodeIndexedSurface(recs[96], pal)};
+                retail_->airIcons[1] = {decodeIndexedSurface(recs[99], pal), decodeIndexedSurface(recs[100], pal)};
+                retail_->airIcons[2] = {decodeIndexedSurface(recs[97], pal), decodeIndexedSurface(recs[98], pal)};
+                retail_->airIcons[3] = {decodeIndexedSurface(recs[97], pal), decodeIndexedSurface(recs[98], pal)};
+                retail_->airIcons[4] = {decodeIndexedSurface(recs[103], pal), decodeIndexedSurface(recs[104], pal)};
+
+                panelOk = retail_->panelLeftPlate != nullptr &&
+                          retail_->panelRightTray != nullptr &&
+                          !retail_->cmdButtons.empty();
+            }
+        } catch (...) {
+        }
+
+        try {
+            const auto pdropBytes = assets::readSueEntry(lngSue, "pdrop.dat");
+            std::vector<std::span<const std::uint8_t>> precs;
+            if (parseOffsetRecords(pdropBytes, 9u, 32u, precs)) {
+                retail_->pdropRecordCount = precs.size();
+                const auto ppal = precs[0];
+                retail_->pdropPlate = decodeIndexedSurface(precs[3], ppal);
+                retail_->pdropChuteIcon = decodeIndexedSurface(precs[4], ppal);
+                for (std::size_t k = 0; k < 4u; ++k) {
+                    retail_->pdropButtons[k] = decodeIndexedSurface(precs[5u + k], ppal);
+                }
+                if (retail_->pdropButtons[2] && retail_->pdropButtons[3]) {
+                    retail_->airIcons[2] = {
+                        decodeIndexedSurface(precs[7], ppal),
+                        decodeIndexedSurface(precs[8], ppal)
+                    };
+                }
+                pdropOk = retail_->pdropPlate != nullptr && retail_->pdropChuteIcon != nullptr;
+            }
+        } catch (...) {
+        }
+
+        try {
+            const auto glng = assets::readSueEntry(lngSue, "game.lng");
+            parseGameLng(std::string_view(reinterpret_cast<const char*>(glng.data()), glng.size()), retail_->texts);
+        } catch (...) {
+        }
+    }
+
+    if (retail_->texts.empty()) {
+        const auto langSue = assets::resolveCaseInsensitivePath(gameDir, "lang.sue");
+        if (std::filesystem::exists(langSue, ec)) {
+            try {
+                const auto glng = assets::readSueEntry(langSue, "game.lng");
+                parseGameLng(std::string_view(reinterpret_cast<const char*>(glng.data()), glng.size()), retail_->texts);
+            } catch (...) {
+            }
+        }
+    }
+
+    const auto commonSue = assets::resolveCaseInsensitivePath(gameDir, "game_common.sue");
+    if (std::filesystem::exists(commonSue, ec)) {
+        try {
+            const auto fireAni = assets::readSueEntry(commonSue, "AIRFIRE.ANI");
+            const auto fireCol = assets::readSueEntry(commonSue, "AIRFIRE.COL");
+            const auto smokeAni = assets::readSueEntry(commonSue, "AIRSMOKE.ANI");
+            const auto smokeCol = assets::readSueEntry(commonSue, "AIRSMOKE.COL");
+
+            const unsigned sheetW = RetailAssets::kAirSheetCols * RetailAssets::kAirCellSize;
+            const unsigned sheetH = RetailAssets::kAirSheetRows * RetailAssets::kAirCellSize;
+            assets::MapImage sheet{
+                sheetW, sheetH,
+                std::vector<std::uint8_t>(std::size_t(sheetW) * sheetH * 4u, 0u)
+            };
+            const std::size_t maxTotal = std::size_t(RetailAssets::kAirSheetCols) * RetailAssets::kAirSheetRows;
+            const std::size_t nFire = decodeAniFramesIntoSheet(
+                fireAni, fireCol, sheet, RetailAssets::kAirSheetCols, RetailAssets::kAirCellSize, 0u, 28u);
+            const std::size_t nSmoke = decodeAniFramesIntoSheet(
+                smokeAni, smokeCol, sheet, RetailAssets::kAirSheetCols, RetailAssets::kAirCellSize,
+                nFire, maxTotal - nFire);
+            if (nFire > 0 && nSmoke > 0) {
+                retail_->airVfxSheet = std::move(sheet);
+                retail_->airFireFrames = nFire;
+                retail_->airSmokeFrames = nSmoke;
+            }
+        } catch (...) {
+        }
+    }
+
+    retail_->loaded = panelOk && pdropOk;
+    if (retail_->loaded) render();
+    return retail_->loaded;
+}
+
+bool Hud::hasRetailAssets() const noexcept {
+    return retail_ && retail_->loaded;
+}
+
+std::size_t Hud::panelRecordCount() const noexcept {
+    return retail_ ? retail_->panelRecordCount : 0u;
+}
+
+std::size_t Hud::pdropRecordCount() const noexcept {
+    return retail_ ? retail_->pdropRecordCount : 0u;
+}
+
+std::size_t Hud::retailTextCount() const noexcept {
+    return retail_ ? retail_->texts.size() : 0u;
+}
+
+std::string Hud::retailText(std::string_view key, std::size_t index) const {
+    if (!retail_) return {};
+    const auto it = retail_->texts.find(std::string(key));
+    if (it == retail_->texts.end() || index >= it->second.size()) return {};
+    return it->second[index];
+}
+
+void Hud::setWeather(assets::WeatherKind kind, std::uint32_t phaseTicks) {
+    if (kind == assets::WeatherKind::Clear) phaseTicks = 0;
+    if (weather_ == kind && weatherPhase_ == phaseTicks) return;
+    weather_ = kind;
+    weatherPhase_ = phaseTicks;
+    ++weatherRevision_;
+}
+
+bool Hud::hasAirVfxAtlas() const noexcept {
+    return retail_ && retail_->airFireFrames > 0 && retail_->airSmokeFrames > 0 &&
+           retail_->airVfxSheet.width > 0 && retail_->airVfxSheet.height > 0;
+}
+
+const assets::MapImage& Hud::airVfxAtlas() const noexcept {
+    static const assets::MapImage kEmpty{};
+    return retail_ ? retail_->airVfxSheet : kEmpty;
+}
+
+std::size_t Hud::airFireFrameCount() const noexcept {
+    return retail_ ? retail_->airFireFrames : 0u;
+}
+
+std::size_t Hud::airSmokeFrameCount() const noexcept {
+    return retail_ ? retail_->airSmokeFrames : 0u;
+}
+
+void Hud::bindAirVfxAtlasSlot(unsigned slot) noexcept {
+    if (retail_) retail_->airVfxSlot = slot;
+}
+
+std::optional<unsigned> Hud::airVfxAtlasSlot() const noexcept {
+    return retail_ ? retail_->airVfxSlot : std::nullopt;
+}
+
+void Hud::recordAirSortieTrail(std::uint32_t sortieId, int mapX, int mapY, unsigned dir32,
+                               int hp, int maxHp, bool alive, bool active, bool tookHit) {
+    if (!retail_) return;
+    if (!active) {
+        retail_->planeTrails.erase(sortieId);
+        return;
+    }
+    auto& st = retail_->planeTrails[sortieId];
+    const float prevX = st.initialized ? float(st.lastX) : float(mapX);
+    const float prevY = st.initialized ? float(st.lastY) : float(mapY);
+    const float dx = float(mapX) - prevX;
+    const float dy = float(mapY) - prevY;
+    const float stepDist = std::hypot(dx, dy);
+    st.lastX = mapX;
+    st.lastY = mapY;
+    st.initialized = true;
+
+    const bool damaged = maxHp > 0 && (hp < maxHp || !alive);
+    if (!damaged && !tookHit) {
+        st.distAccum = 0.0f;
+        return;
+    }
+
+    const float hpRatio = maxHp > 0 ? std::clamp(float(hp) / float(maxHp), 0.0f, 1.0f) : 0.0f;
+    const bool severe = !alive || hpRatio <= 0.55f;
+    constexpr double kTwoPi = 6.28318530717958647692;
+    const double headingRad = (double(dir32 & 31u) / 32.0) * kTwoPi;
+    // Offset slightly aft of the aircraft center along the inverse flight heading.
+    const float tailX = float(mapX) - float(std::sin(headingRad)) * 10.0f;
+    const float tailY = float(mapY) + float(std::cos(headingRad)) * 7.0f;
+
+    auto pushPuff = [&](float px, float py, float vx, float vy, float dur, float sc, bool fire) {
+        if (retail_->puffs.size() >= 96u) retail_->puffs.erase(retail_->puffs.begin());
+        retail_->puffs.push_back({px, py, vx, vy, 0.0f, dur, sc, fire});
+    };
+
+    if (tookHit) {
+        pushPuff(tailX, tailY, -dx * 0.25f, -8.0f, 0.55f, 1.25f, true);
+        pushPuff(tailX + 3.0f, tailY - 2.0f, 4.0f, -12.0f, 1.15f, 1.30f, false);
+    }
+
+    st.distAccum += stepDist;
+    const float spacing = severe ? 11.0f : 18.0f;
+    if (st.distAccum >= spacing || (stepDist == 0.0f && tookHit)) {
+        st.distAccum = std::fmod(st.distAccum, spacing);
+        const std::uint32_t jitter = hashWeather(sortieId * 2654435761u ^ std::uint32_t(mapX * 73856093 ^ mapY * 19349663));
+        const float jx = (float(jitter & 0xFFu) / 255.0f - 0.5f) * 6.0f;
+        const float jy = (float((jitter >> 8u) & 0xFFu) / 255.0f - 0.5f) * 4.0f;
+        pushPuff(tailX + jx, tailY + jy, jx * 0.8f, -10.0f - (severe ? 4.0f : 0.0f),
+                 severe ? 1.25f : 0.95f, severe ? 1.25f : 0.95f, false);
+        if (severe) {
+            pushPuff(tailX + jx * 0.4f, tailY + jy * 0.4f, jx * 0.4f, -6.0f, 0.48f, 1.15f, true);
+        }
+    }
+}
+
+void Hud::recordAirCrashTrail(int mapX, int mapY) {
+    if (!retail_) return;
+    for (int k = 0; k < 6; ++k) {
+        const std::uint32_t h = hashWeather(std::uint32_t(mapX * 31 + mapY * 17 + k * 97));
+        const float ox = (float(h & 0xFFu) / 255.0f - 0.5f) * 22.0f;
+        const float oy = (float((h >> 8u) & 0xFFu) / 255.0f - 0.5f) * 14.0f;
+        if (retail_->puffs.size() >= 96u) retail_->puffs.erase(retail_->puffs.begin());
+        retail_->puffs.push_back({
+            float(mapX) + ox, float(mapY) + oy,
+            ox * 0.5f, -14.0f - float(k) * 2.0f,
+            0.0f, 1.35f + 0.12f * float(k), 1.45f, (k % 2) == 0
+        });
+    }
+}
+
+bool Hud::stepAirTrails(float dtSeconds) {
+    if (!retail_ || retail_->puffs.empty()) return false;
+    const float dt = std::clamp(dtSeconds, 0.0f, 0.25f);
+    if (dt <= 0.0f) return false;
+    for (auto& p : retail_->puffs) {
+        p.age += dt;
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+    }
+    std::erase_if(retail_->puffs, [](const RetailAssets::AirPuff& p) {
+        return p.age >= p.duration;
+    });
+    return true;
+}
+
+bool Hud::hasActiveAirTrails() const noexcept {
+    return retail_ && !retail_->puffs.empty();
+}
+
+void Hud::appendAirTrailSprites(int mapScale, std::vector<Sprite>& outSprites) const {
+    if (!retail_ || !retail_->airVfxSlot || retail_->puffs.empty()) return;
+    if (retail_->airFireFrames == 0 || retail_->airSmokeFrames == 0) return;
+
+    const float s = float(std::max(1, mapScale));
+    const unsigned slot = *retail_->airVfxSlot;
+    const unsigned cols = RetailAssets::kAirSheetCols;
+    const float cell = float(RetailAssets::kAirCellSize);
+
+    // Draw trailing smoke puffs first, then bright fire tongues on top.
+    for (bool firePass : {false, true}) {
+        for (const auto& p : retail_->puffs) {
+            if (p.isFire != firePass) continue;
+            const float t = std::clamp(p.age / std::max(0.05f, p.duration), 0.0f, 0.999f);
+            const std::size_t frameCount = firePass ? retail_->airFireFrames : retail_->airSmokeFrames;
+            const std::size_t baseCell = firePass ? 0u : retail_->airFireFrames;
+            const std::size_t cellIdx = baseCell + std::min(frameCount - 1u, std::size_t(t * float(frameCount)));
+            const float u0 = float(cellIdx % cols) * cell + 1.0f;
+            const float v0 = float(cellIdx / cols) * cell + 1.0f;
+            const float u1 = u0 + cell - 2.0f;
+            const float v1 = v0 + cell - 2.0f;
+            const float growth = firePass ? (1.0f + 0.15f * t) : (0.90f + 0.55f * t);
+            const float dst = (cell - 2.0f) * p.scale * growth * s;
+            const float alpha = firePass ? std::clamp(1.0f - 0.65f * t, 0.15f, 1.0f)
+                                         : std::clamp(0.88f * (1.0f - t), 0.08f, 0.88f);
+            outSprites.push_back({
+                p.x * s - dst * 0.5f,
+                p.y * s - dst * 0.5f,
+                dst,
+                dst,
+                u0, v0, u1, v1,
+                slot,
+                1.0f,
+                alpha
+            });
+        }
+    }
+}
+
+void Hud::appendAirTrailBeams(int mapScale, std::size_t maxCount, std::vector<MapBeam>& outBeams) const {
+    if (!retail_ || retail_->puffs.empty() || maxCount == 0u) return;
+    const float s = float(std::max(1, mapScale));
+    std::size_t added = 0;
+    const std::size_t stride = std::max<std::size_t>(1u, (retail_->puffs.size() + maxCount - 1u) / maxCount);
+    for (std::size_t i = 0; i < retail_->puffs.size() && added < maxCount; i += stride) {
+        const auto& p = retail_->puffs[i];
+        const float t = std::clamp(p.age / std::max(0.05f, p.duration), 0.0f, 1.0f);
+        const float wx = p.x * s;
+        const float wy = p.y * s;
+        if (p.isFire) {
+            const float fade = (1.0f - t) * 0.82f;
+            outBeams.push_back({wx, wy, wx, wy - 4.0f * s, 7.5f * p.scale * s, 255, 145, 40, fade, fade * 0.35f});
+        } else {
+            const float fade = (1.0f - t) * 0.46f;
+            outBeams.push_back({wx, wy, wx, wy - (8.0f + 10.0f * t) * s,
+                                (8.0f + 7.0f * t) * p.scale * s, 60, 55, 50, fade, fade * 0.20f});
+        }
+        ++added;
+    }
 }
 
 void Hud::setMinimap(const assets::MapImage& overview) {
@@ -175,6 +854,7 @@ void Hud::refit() {
     draggingMinimap_ = false;
     layout();
     render();
+    ++weatherRevision_;
 }
 
 void Hud::update(const HudState& state) {
@@ -756,6 +1436,16 @@ void Hud::render() {
         // Low right horizontal unit/status tray
         fillSteelPlate(leftBlockW, trayTop, w - leftBlockW, trayH);
 
+        if (retail_ && retail_->loaded) {
+            if (retail_->panelRightTray) {
+                tileSurfaceRegion(cr, retail_->panelRightTray.get(), 0, 0, leftBlockW, full, 0.55);
+                tileSurfaceRegion(cr, retail_->panelRightTray.get(), leftBlockW, trayTop, w - leftBlockW, trayH, 0.62);
+            }
+            if (retail_->panelLeftPlate) {
+                drawSurfaceCrisp(cr, retail_->panelLeftPlate.get(), 0.0, 0.0, double(leftBlockW), double(full), 0.48);
+            }
+        }
+
         // Crisp 2px bright steel outer rim along the entire L-shaped top/step perimeter
         colour(cr, 198, 206, 192);
         cairo_rectangle(cr, 0, 0, leftBlockW, 2);
@@ -883,16 +1573,30 @@ void Hud::render() {
             drawCompassRose(cr, m.x + m.width - 13.0, m.y + 13.0, std::clamp(m.height * 0.095, 5.5, 10.0));
             // Classic power symbol tucked in lower-left corner outside the diamond (opens Pause Menu)
             const bool menuHover = hovered_ && *hovered_ == HudAction::menu;
-            if (menuHover) {
-                colour(cr, 72, 82, 62);
-                cairo_arc(cr, m.x + 11.0, m.y + m.height - 22.0, 8.0, 0, 2 * G_PI);
-                cairo_fill(cr);
+            const bool menuDown = pressed_ && *pressed_ == HudAction::menu;
+            if (retail_ && retail_->loaded && retail_->menuBtnNormal) {
+                auto* mSurf = ((menuHover || menuDown) && retail_->menuBtnPressed)
+                    ? retail_->menuBtnPressed.get() : retail_->menuBtnNormal.get();
+                drawSurfaceCrisp(cr, mSurf, m.x + 3.0, m.y + m.height - 30.0, 15.0, 17.0);
+            } else {
+                if (menuHover) {
+                    colour(cr, 72, 82, 62);
+                    cairo_arc(cr, m.x + 11.0, m.y + m.height - 22.0, 8.0, 0, 2 * G_PI);
+                    cairo_fill(cr);
+                }
+                drawPowerSymbol(cr, m.x + 11.0, m.y + m.height - 22.0, 5.0);
             }
-            drawPowerSymbol(cr, m.x + 11.0, m.y + m.height - 22.0, 5.0);
             // 3 tiny square utility pips along the bottom-left lip (down, up, pause)
             const int pip = 10, py = m.y + m.height - pip - 1;
             for (int k = 0; k < 3; ++k) {
                 const int px = m.x + 2 + k * (pip + 2);
+                if (k == 2 && retail_ && retail_->loaded && retail_->pauseBtnNormal) {
+                    auto* pSurf = (state_.paused && retail_->pauseBtnPressed)
+                        ? retail_->pauseBtnPressed.get() : retail_->pauseBtnNormal.get();
+                    drawSurfaceCrisp(cr, pSurf, double(px), double(py), double(pip), double(pip));
+                    bevelFrame(cr, px, py, pip, pip, state_.paused);
+                    continue;
+                }
                 colour(cr, k == 2 && state_.paused ? 74 : 32, k == 2 && state_.paused ? 88 : 37, k == 2 && state_.paused ? 56 : 33);
                 cairo_rectangle(cr, px, py, pip, pip);
                 cairo_fill(cr);
@@ -966,7 +1670,26 @@ void Hud::render() {
         const double iconTop = r.y + 4.0;
         const double iconBottom = captionY - 1.0;
         const double iconR = std::clamp(std::min(double(r.width) - 8.0, iconBottom - iconTop) * 0.31, 4.5, 16.0);
-        drawCommandIcon(cr, act, r.x + r.width * 0.53, (iconTop + iconBottom) * 0.53, iconR, on || down);
+        bool drewRetailBtn = false;
+        if (retail_ && retail_->loaded) {
+            const auto bit = retail_->cmdButtons.find(act);
+            if (bit != retail_->cmdButtons.end() && bit->second.first) {
+                auto* bSurf = ((on || down) && bit->second.second) ? bit->second.second.get() : bit->second.first.get();
+                if (retail_->blankBtnBevel && (act == HudAction::holdFire || act == HudAction::crouch ||
+                                               act == HudAction::pause || act == HudAction::log)) {
+                    drawSurfaceCrisp(cr, retail_->blankBtnBevel.get(), r.x + 1.0, r.y + 1.0,
+                                     std::max(2.0, r.width - 2.0), std::max(2.0, r.height - 2.0), 0.55);
+                }
+                const double boxSide = std::clamp(std::min(double(r.width) - 6.0, iconBottom - iconTop + 2.0), 10.0, 28.0);
+                const double bx0 = r.x + (r.width - boxSide) * 0.52;
+                const double by0 = (iconTop + iconBottom - boxSide) * 0.5;
+                drawSurfaceCrisp(cr, bSurf, bx0, by0, boxSide, boxSide, 0.96);
+                drewRetailBtn = true;
+            }
+        }
+        if (!drewRetailBtn) {
+            drawCommandIcon(cr, act, r.x + r.width * 0.53, (iconTop + iconBottom) * 0.53, iconR, on || down);
+        }
         if (key && *key) {
             const int badgeW = std::max(9, keySize + 2), badgeH = std::max(9, keySize + 2);
             const double bx = r.x + 2.0, by = r.y + 2.0;
@@ -1025,6 +1748,10 @@ void Hud::render() {
                 colour(cr, 22, 26, 23);
                 cairo_rectangle(cr, r.x, r.y, r.width, r.height);
                 cairo_fill(cr);
+                if (retail_ && retail_->loaded && retail_->blankBtnBevel) {
+                    drawSurfaceCrisp(cr, retail_->blankBtnBevel.get(), r.x + 1.0, r.y + 1.0,
+                                     std::max(2.0, r.width - 2.0), std::max(2.0, r.height - 2.0), 0.65);
+                }
                 bevelFrame(cr, r.x, r.y, r.width, r.height, true);
                 continue;
             }
@@ -1072,6 +1799,10 @@ void Hud::render() {
             colour(cr, 22, 26, 23);
             cairo_rectangle(cr, r.x, r.y, r.width, r.height);
             cairo_fill(cr);
+            if (retail_ && retail_->loaded && retail_->blankBtnBevel) {
+                drawSurfaceCrisp(cr, retail_->blankBtnBevel.get(), r.x + 1.0, r.y + 1.0,
+                                 std::max(2.0, r.width - 2.0), std::max(2.0, r.height - 2.0), 0.65);
+            }
             bevelFrame(cr, r.x, r.y, r.width, r.height, true);
             continue;
         }
@@ -1131,6 +1862,10 @@ void Hud::render() {
                 else colour(cr, 42, 50, 44);
                 cairo_rectangle(cr, ar.x, ar.y, ar.width, ar.height);
                 cairo_fill(cr);
+                if (retail_ && retail_->loaded && retail_->pdropPlate) {
+                    drawSurfaceCrisp(cr, retail_->pdropPlate.get(), ar.x, ar.y, ar.width, ar.height,
+                                     armed ? 0.42 : 0.58);
+                }
                 bevelFrame(cr, ar.x, ar.y, ar.width, ar.height, down);
                 if (armed) {
                     colour(cr, 235, 212, 118);
@@ -1138,9 +1873,28 @@ void Hud::render() {
                     cairo_rectangle(cr, ar.x + 1, ar.y + 1, ar.width - 2, ar.height - 2);
                     cairo_stroke(cr);
                 }
+                int textX = ar.x;
+                int textW = ar.width;
+                if (retail_ && retail_->loaded) {
+                    const auto& pair = retail_->airIcons[std::size_t(k)];
+                    auto* iconSurf = ((armed || down) && pair.second) ? pair.second.get() : pair.first.get();
+                    const int iconSz = std::clamp(ar.height - 2, 8, 14);
+                    if (iconSurf && ar.width >= iconSz + 18) {
+                        drawSurfaceCrisp(cr, iconSurf, ar.x + 2.0, ar.y + (ar.height - iconSz) * 0.5,
+                                         double(iconSz), double(iconSz), 0.95);
+                        if (k == 2 && retail_->pdropChuteIcon) {
+                            const int pipSz = std::max(6, iconSz - 3);
+                            drawSurfaceCrisp(cr, retail_->pdropChuteIcon.get(),
+                                             ar.x + 3.0, ar.y + (ar.height - pipSz) * 0.5,
+                                             double(pipSz), double(pipSz), 0.95);
+                        }
+                        textX = ar.x + iconSz + 2;
+                        textW = std::max(8, ar.width - iconSz - 3);
+                    }
+                }
                 colour(cr, armed ? 245 : 230, armed ? 236 : 220, armed ? 180 : 172);
                 const std::string lbl = std::string(kAirLetters[k]) + ":" + std::to_string(state_.airReady[std::size_t(k)]);
-                text(cr, fonts_.get(), lbl, size, true, ar.x, y - 1, ar.width, true);
+                text(cr, fonts_.get(), lbl, size, true, textX, y - 1, textW, true);
             }
             static const std::pair<HudAction, const char*> hints[] = {
                 {HudAction::stop, "Stop: cancel movement and attacks (S)"},
@@ -1455,35 +2209,42 @@ std::optional<HudTip> Hud::tooltipAtWindow(float windowX, float windowY) const {
     const auto p = barPoint(windowX, windowY);
     if (!opaqueAtBarPoint(p)) return std::nullopt;
     if (const auto act = buttonAt(p->x, p->y)) {
+        auto withRetailHint = [&](HudTip tip, std::string_view itxtKey) {
+            if (retail_ && retail_->loaded) {
+                const std::string raw = stripRetailKeyTag(retailText(itxtKey));
+                if (!raw.empty()) tip.lines.push_back(raw);
+            }
+            return tip;
+        };
         switch (*act) {
         case HudAction::stop:
-            return HudTip{tr("Stop (S)"), {tr("Halt movement and clear current orders")}};
+            return withRetailHint(HudTip{tr("Stop (S)"), {tr("Halt movement and clear current orders")}}, "ITXT_STOP");
         case HudAction::holdFire:
-            return HudTip{tr("Hold Fire (H)"), {tr("Toggle weapons hold / fire at will")}};
+            return withRetailHint(HudTip{tr("Hold Fire (H)"), {tr("Toggle weapons hold / fire at will")}}, "ITXT_HOLDFIRE");
         case HudAction::crouch:
-            return HudTip{tr("Crouch / Prone (C)"), {tr("Take cover and reduce visibility")}};
+            return withRetailHint(HudTip{tr("Crouch / Prone (C)"), {tr("Take cover and reduce visibility")}}, "ITXT_FOOTCRAWL");
         case HudAction::mission:
-            return HudTip{tr("Mission Objective (M)"), {tr("Focus camera on mission marker")}};
+            return withRetailHint(HudTip{tr("Mission Objective (M)"), {tr("Focus camera on mission marker")}}, "ITXT_COVER");
         case HudAction::log:
             return HudTip{tr("Battle Log (L)"), {tr("Open mission event log")}};
         case HudAction::menu:
-            return HudTip{tr("Menu (Esc)"), {tr("Open pause menu, save/load & controls")}};
+            return withRetailHint(HudTip{tr("Menu (Esc)"), {tr("Open pause menu, save/load & controls")}}, "ITXT_MENU");
         case HudAction::pause:
-            return HudTip{tr("Pause (Ctrl+P)"), {tr("Pause or resume battle clock")}};
+            return withRetailHint(HudTip{tr("Pause (Ctrl+P)"), {tr("Pause or resume battle clock")}}, "ITXT_PAUSE");
         case HudAction::recon:
-            return HudTip{tr("Binoculars (B)"), {tr("Extend officer sight range while stationary")}};
+            return withRetailHint(HudTip{tr("Binoculars (B)"), {tr("Extend officer sight range while stationary")}}, "ITXT_BINOCULAR");
         case HudAction::attackMove:
-            return HudTip{tr("Attack-Move (A)"), {tr("Advance and engage hostiles along the way")}};
+            return withRetailHint(HudTip{tr("Attack-Move (A)"), {tr("Advance and engage hostiles along the way")}}, "ITXT_AMOVE");
         case HudAction::patrol:
-            return HudTip{tr("Patrol (Q)"), {tr("Patrol continuously between current position and target")}};
+            return withRetailHint(HudTip{tr("Patrol (Q)"), {tr("Patrol continuously between current position and target")}}, "ITXT_PLANE_PATROL");
         case HudAction::attackGround:
-            return HudTip{tr("Attack Ground (G)"), {tr("Bombard terrain or buildings with primary ordnance")}};
+            return withRetailHint(HudTip{tr("Attack Ground (G)"), {tr("Bombard terrain or buildings with primary ordnance")}}, "ITXT_GAUBFIRE");
         case HudAction::unload:
-            return HudTip{tr("Unload / Unhitch (U)"), {tr("Disembark passengers, unhitch gun, or evacuate building")}};
+            return withRetailHint(HudTip{tr("Unload / Unhitch (U)"), {tr("Disembark passengers, unhitch gun, or evacuate building")}}, "ITXT_UNLOAD");
         case HudAction::mine:
-            return HudTip{tr("Lay AT Mine (E)"), {tr("Sapper plants an anti-tank mine at current tile")}};
+            return withRetailHint(HudTip{tr("Lay AT Mine (E)"), {tr("Sapper plants an anti-tank mine at current tile")}}, "ITXT_LAYMINE");
         case HudAction::scatter:
-            return HudTip{tr("Scatter (D)"), {tr("Disperse infantry immediately away from explosions")}};
+            return withRetailHint(HudTip{tr("Scatter (D)"), {tr("Disperse infantry immediately away from explosions")}}, "ITXT_SCATTER");
         default:
             return std::nullopt;
         }
@@ -1677,10 +2438,176 @@ HudResult Hud::handle(const SDL_Event& event) {
     }
 }
 
+void Hud::composeWeatherOverlay() {
+    const int winW = std::max(1, int(width_));
+    const int winH = std::max(int(height_), top_ + int(height_));
+    composedRgba_.assign(std::size_t(winW) * std::size_t(winH) * 4u, 0u);
+
+    const auto blendWeatherPixel = [&](int px, int py, std::uint8_t r, std::uint8_t g, std::uint8_t b, std::uint8_t a) {
+        if (px < 0 || py < 0 || px >= winW || py >= winH || a == 0u) return;
+        if (py >= top_) {
+            const int by = py - top_;
+            if (by < int(height_)) {
+                const std::size_t bi = (std::size_t(by) * width_ + std::size_t(px)) * 4u;
+                if (bi + 3u < rgba_.size() && rgba_[bi + 3u] > 0u) return;
+            }
+        }
+        auto* dst = &composedRgba_[(std::size_t(py) * std::size_t(winW) + std::size_t(px)) * 4u];
+        if (dst[3] == 0u) {
+            dst[0] = r; dst[1] = g; dst[2] = b; dst[3] = a;
+            return;
+        }
+        // Straight-alpha 'over' blend: C_out = (C_src * a_src + C_dst * a_dst * (1 - a_src)) / a_out
+        const unsigned sa = a;
+        const unsigned da = dst[3];
+        const unsigned invSa = 255u - sa;
+        const unsigned outA = sa + (da * invSa + 127u) / 255u;
+        if (outA == 0u) return;
+        const auto mix = [&](unsigned sc, unsigned dc) -> std::uint8_t {
+            const unsigned num = sc * sa * 255u + dc * da * invSa;
+            return static_cast<std::uint8_t>(std::min(255u, (num + (outA * 255u) / 2u) / (outA * 255u)));
+        };
+        dst[0] = mix(r, dst[0]);
+        dst[1] = mix(g, dst[1]);
+        dst[2] = mix(b, dst[2]);
+        dst[3] = static_cast<std::uint8_t>(std::min(255u, outA));
+    };
+
+    // 1. Copy opaque/semi-opaque HUD bar rows into the bottom of the full-window overlay.
+    for (int by = 0; by < int(height_); ++by) {
+        const int wy = top_ + by;
+        if (wy < 0 || wy >= winH) continue;
+        const auto* srcRow = &rgba_[std::size_t(by) * width_ * 4u];
+        auto* dstRow = &composedRgba_[std::size_t(wy) * std::size_t(winW) * 4u];
+        std::copy_n(srcRow, std::size_t(winW) * 4u, dstRow);
+    }
+
+    // 2. Render deterministic atmospheric weather across all open viewport pixels (including L-cutout).
+    const int viewBottom = winH;
+    if (weather_ == assets::WeatherKind::Fog) {
+        const float cx = float(winW) * 0.5f;
+        const float cy = float(std::max(1, top_)) * 0.5f;
+        const float invRx = 1.0f / std::max(1.0f, cx);
+        const float invRy = 1.0f / std::max(1.0f, float(winH) * 0.5f);
+        const float drift = float(weatherPhase_) * 0.035f;
+        for (int y = 0; y < viewBottom; ++y) {
+            const float ny = (float(y) - cy) * invRy;
+            const float waveY = std::sin(float(y) * 0.022f + drift * 0.6f);
+            for (int x = 0; x < winW; ++x) {
+                if (y >= top_) {
+                    const std::size_t bi = (std::size_t(y - top_) * width_ + std::size_t(x)) * 4u;
+                    if (bi + 3u < rgba_.size() && rgba_[bi + 3u] > 0u) continue;
+                }
+                const float nx = (float(x) - cx) * invRx;
+                const float r2 = std::min(1.8f, nx * nx + ny * ny);
+                const float bank = 0.5f + 0.5f * std::sin(float(x) * 0.014f + drift + waveY * 1.4f);
+                const float mist = std::clamp(0.05f + 0.19f * r2 + 0.05f * bank, 0.04f, 0.30f);
+                auto* dst = &composedRgba_[(std::size_t(y) * std::size_t(winW) + std::size_t(x)) * 4u];
+                dst[0] = 186u;
+                dst[1] = 200u;
+                dst[2] = 212u;
+                dst[3] = static_cast<std::uint8_t>(std::lround(mist * 255.0f));
+            }
+        }
+    } else if (weather_ == assets::WeatherKind::Rain) {
+        // Subtle wet-slate atmospheric overcast wash
+        for (int y = 0; y < viewBottom; ++y) {
+            for (int x = 0; x < winW; ++x) {
+                if (y >= top_) {
+                    const std::size_t bi = (std::size_t(y - top_) * width_ + std::size_t(x)) * 4u;
+                    if (bi + 3u < rgba_.size() && rgba_[bi + 3u] > 0u) continue;
+                }
+                auto* dst = &composedRgba_[(std::size_t(y) * std::size_t(winW) + std::size_t(x)) * 4u];
+                dst[0] = 94u;
+                dst[1] = 112u;
+                dst[2] = 132u;
+                dst[3] = 18u;
+            }
+        }
+        // Deterministic angled rain streaks + ground splash ripples
+        const int streakCount = std::clamp((winW * viewBottom) / 2600, 96, 420);
+        const int spanW = winW + 96;
+        const int spanH = viewBottom + 64;
+        for (int i = 0; i < streakCount; ++i) {
+            const std::uint32_t h0 = hashWeather(std::uint32_t(i) * 0x9e3779b9u ^ 0x51a7c3d1u);
+            const int speedY = 18 + int(h0 & 7u) * 2;
+            const int speedX = -(speedY * 2) / 5;
+            const int len = 14 + int((h0 >> 4u) & 7u) * 2;
+            const std::int64_t t = std::int64_t(weatherPhase_);
+            int headX = int(((std::int64_t(h0 >> 8u) % spanW) + t * speedX) % spanW);
+            if (headX < 0) headX += spanW;
+            headX -= 32;
+            int headY = int(((std::int64_t(h0 >> 18u) % spanH) + t * speedY) % spanH) - 24;
+            const std::uint8_t baseA = static_cast<std::uint8_t>(92u + ((h0 >> 12u) & 63u));
+            for (int step = 0; step < len; ++step) {
+                const int px = headX + (step * 2) / 5;
+                const int py = headY - step;
+                const unsigned fadeA = (unsigned(baseA) * unsigned(len - step)) / unsigned(len);
+                blendWeatherPixel(px, py, 198u, 218u, 240u, static_cast<std::uint8_t>(fadeA));
+            }
+            if (((h0 + weatherPhase_ * 5u) & 15u) == 0u) {
+                blendWeatherPixel(headX - 1, headY, 210u, 226u, 244u, 84u);
+                blendWeatherPixel(headX + 1, headY, 210u, 226u, 244u, 84u);
+            }
+        }
+    } else if (weather_ == assets::WeatherKind::Snow) {
+        // Subtle crisp winter frost wash
+        for (int y = 0; y < viewBottom; ++y) {
+            for (int x = 0; x < winW; ++x) {
+                if (y >= top_) {
+                    const std::size_t bi = (std::size_t(y - top_) * width_ + std::size_t(x)) * 4u;
+                    if (bi + 3u < rgba_.size() && rgba_[bi + 3u] > 0u) continue;
+                }
+                auto* dst = &composedRgba_[(std::size_t(y) * std::size_t(winW) + std::size_t(x)) * 4u];
+                dst[0] = 212u;
+                dst[1] = 224u;
+                dst[2] = 238u;
+                dst[3] = 14u;
+            }
+        }
+        // Deterministic multi-depth drifting snowflakes
+        const int flakeCount = std::clamp((winW * viewBottom) / 2800, 90, 380);
+        const int spanW = winW + 48;
+        const int spanH = viewBottom + 48;
+        for (int i = 0; i < flakeCount; ++i) {
+            const std::uint32_t h0 = hashWeather(std::uint32_t(i) * 0x85ebca6bu ^ 0xc2b2ae35u);
+            const bool foreground = (h0 & 3u) == 0u;
+            const int speedY = foreground ? 4 : (2 + int(h0 & 1u));
+            const int driftX = 1 + int((h0 >> 3u) & 1u);
+            const float sway = std::sin(float(weatherPhase_) * 0.08f + float(h0 & 0xFFu) * 0.05f) * (foreground ? 7.0f : 4.0f);
+            const std::int64_t t = std::int64_t(weatherPhase_);
+            int fx = int(((std::int64_t(h0 >> 8u) % spanW) + t * driftX + std::llround(sway)) % spanW);
+            if (fx < 0) fx += spanW;
+            fx -= 24;
+            const int fy = int(((std::int64_t(h0 >> 17u) % spanH) + t * speedY) % spanH) - 24;
+            const std::uint8_t coreA = foreground ? 204u : 148u;
+            blendWeatherPixel(fx, fy, 244u, 248u, 255u, coreA);
+            blendWeatherPixel(fx + 1, fy, 236u, 242u, 252u, static_cast<std::uint8_t>(coreA * 3u / 4u));
+            blendWeatherPixel(fx, fy + 1, 236u, 242u, 252u, static_cast<std::uint8_t>(coreA * 3u / 4u));
+            if (foreground) {
+                blendWeatherPixel(fx - 1, fy, 232u, 240u, 250u, static_cast<std::uint8_t>(coreA / 2u));
+                blendWeatherPixel(fx, fy - 1, 232u, 240u, 250u, static_cast<std::uint8_t>(coreA / 2u));
+            }
+        }
+    }
+}
+
 void Hud::draw(VulkanWindow& renderer) {
     refit();
-    if (drawn_ == revision_) return;
-    renderer.setOverlay(width_, height_, rgba_, OverlaySlot::hud);
+    if (weather_ == assets::WeatherKind::Clear) {
+        if (!overlayWasWeather_ && drawn_ == revision_) return;
+        renderer.setOverlay(width_, height_, rgba_, OverlaySlot::hud);
+        drawn_ = revision_;
+        weatherDrawn_ = weatherRevision_;
+        overlayWasWeather_ = false;
+        return;
+    }
+    if (overlayWasWeather_ && drawn_ == revision_ && weatherDrawn_ == weatherRevision_) return;
+    composeWeatherOverlay();
+    const unsigned fullWinH = static_cast<unsigned>(std::max(int(height_), top_ + int(height_)));
+    renderer.setOverlay(width_, fullWinH, composedRgba_, OverlaySlot::hud);
     drawn_ = revision_;
+    weatherDrawn_ = weatherRevision_;
+    overlayWasWeather_ = true;
 }
 }

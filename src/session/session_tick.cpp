@@ -755,9 +755,21 @@ void GameSession::stepSimulationEvents() {
             }
             if (ap.active) {
                 auto [it, inserted] = livePlanes.try_emplace(ap.id);
+                const int prevPlaneHp = inserted ? ap.maxHp : it->second.pose.hp;
+                if (hud && combatEffects) {
+                    const auto* pSpec = unitCatalog ? unitCatalog->findPlane(ap.planeId) : nullptr;
+                    if (!pSpec || pSpec->hasFallSmoke) {
+                        hud->recordAirSortieTrail(ap.id, ap.x, ap.y, ap.dir32, ap.hp, ap.maxHp,
+                                                  ap.alive, true, ap.hp < prevPlaneHp);
+                    }
+                }
                 it->second.pose = ap;
                 if (inserted) uploadPlaneSprite(it->second);
             } else {
+                if (hud) {
+                    hud->recordAirSortieTrail(ap.id, ap.x, ap.y, ap.dir32, ap.hp, ap.maxHp,
+                                              false, false, false);
+                }
                 const auto it = livePlanes.find(ap.id);
                 if (it != livePlanes.end()) {
                     planeAtlas.release(it->second.spriteKey);
@@ -931,9 +943,17 @@ void GameSession::stepSimulationEvents() {
                 }
                 stampBattleCrater(ae.x, ae.y, true);
                 pushMinimapPing(ae.x, ae.y, true);
-                if (combatEffects && activeVfx.size() < 64) {
-                    activeVfx.push_back({ActiveVfx::Kind::VehicleExplosion, ax, ay, ax, ay, now,
-                                         std::chrono::milliseconds(700)});
+                if (combatEffects) {
+                    if (hud) {
+                        hud->recordAirCrashTrail(ae.x, ae.y);
+                        spritesDirty = true;
+                    }
+                    if (activeVfx.size() < 64) {
+                        activeVfx.push_back({ActiveVfx::Kind::VehicleExplosion, ax, ay, ax, ay, now,
+                                             std::chrono::milliseconds(700)});
+                    }
+                    if (burningWrecks.size() >= 8) burningWrecks.erase(burningWrecks.begin());
+                    burningWrecks.push_back({ax, ay, now + std::chrono::seconds(14)});
                 }
                 const auto* pSpec = unitCatalog ? unitCatalog->findPlane(ae.planeId) : nullptr;
                 const std::string fallSnd = (pSpec && !pSpec->fallSound.empty())

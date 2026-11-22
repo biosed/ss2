@@ -330,6 +330,9 @@ void GameSession::updateHudAndBeams() {
                 if (q > 0.0f) hs.pings.push_back({mp.u, mp.v, mp.hostile, q});
             }
         }
+        if (simulation) {
+            hud->setWeather(simulation->data().weather, simulation->simTick());
+        }
         hud->update(hs);
         hud->draw(renderer);
     }
@@ -489,8 +492,9 @@ void GameSession::updateHudAndBeams() {
     }
     const std::vector<ss2::ZeppelinMarkerStatus> beamZeppelins =
         (multiplayer.enabled && simulation) ? simulation->zeppelinStatuses() : std::vector<ss2::ZeppelinMarkerStatus>{};
+    const bool hasAirTrailBeams = combatEffects && hud && hud->hasActiveAirTrails();
     if (!activeVfx.empty() || !burningWrecks.empty() || !crippledSmokeVehicles.empty() ||
-        !movingSmokeVehicles.empty() || !livePlanes.empty() || !orderLines.empty() ||
+        !movingSmokeVehicles.empty() || !livePlanes.empty() || hasAirTrailBeams || !orderLines.empty() ||
         previewRing || facePreview || !rangePreviews.empty() || !visibleOnScreenMines.empty() ||
         !statusBadges.empty() || !beamZeppelins.empty() || !activeBeacons.empty() || vfxWasNonEmpty) {
         const auto now = std::chrono::steady_clock::now();
@@ -692,6 +696,9 @@ void GameSession::updateHudAndBeams() {
                     const float rise = (16.0f + 8.0f * std::sin(animPhase * 4.5f + static_cast<float>(sid))) * s;
                     beams.push_back({px, py, px + sway, py - rise, 7.0f * s, 60, 55, 50, 0.42f, 0.06f});
                 }
+            }
+            if (hud && hud->hasActiveAirTrails() && beams.size() < 64u) {
+                hud->appendAirTrailBeams(mapScale, 64u - beams.size(), beams);
             }
             for (const auto& bw : burningWrecks) {
                 if (beams.size() >= 64) break;

@@ -1,19 +1,24 @@
 #pragma once
 
 #include "assets/map_image.hpp"
+#include "assets/mission.hpp"
 #include <SDL3/SDL.h>
 #include <array>
 #include <cstdint>
+#include <filesystem>
 #include <map>
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 struct _PangoContext;
 
 namespace ss2 {
 class VulkanWindow;
+struct Sprite;
+struct MapBeam;
 
 // One line of the selection readout. health and ammo are 0..1, averaged by the caller.
 struct HudClass {
@@ -101,10 +106,41 @@ struct HudTip {
 class Hud {
 public:
     explicit Hud(SDL_Window* parent);
+    ~Hud();
 
     void setMinimap(const assets::MapImage& overview);   // any size; scaled to fit
     void setPortrait(const std::string& label, const assets::MapImage& image);
     void update(const HudState&);                        // redraws only when something changed
+
+    // Optional retail Gold 2.2 tactical skin (lng.sue\panel.dat, pdrop.dat, game.lng) and
+    // damaged-aircraft VFX animations (game_common.sue\AIRFIRE.ANI, AIRSMOKE.ANI).
+    // Safe to omit or call with a missing directory; falls back cleanly to procedural art.
+    bool loadRetailAssets(const std::filesystem::path& gameDir);
+    bool hasRetailAssets() const noexcept;
+    std::size_t panelRecordCount() const noexcept;
+    std::size_t pdropRecordCount() const noexcept;
+    std::size_t retailTextCount() const noexcept;
+    std::string retailText(std::string_view key, std::size_t index = 0) const;
+
+    // Live atmospheric weather overlay across the map viewport (Clear has zero overhead).
+    void setWeather(assets::WeatherKind kind, std::uint32_t phaseTicks = 0);
+    assets::WeatherKind weather() const noexcept { return weather_; }
+    std::uint32_t weatherPhase() const noexcept { return weatherPhase_; }
+
+    // Damaged-aircraft smoke & fire trail VFX (AIRFIRE.ANI / AIRSMOKE.ANI + beam fallback).
+    bool hasAirVfxAtlas() const noexcept;
+    const assets::MapImage& airVfxAtlas() const noexcept;
+    std::size_t airFireFrameCount() const noexcept;
+    std::size_t airSmokeFrameCount() const noexcept;
+    void bindAirVfxAtlasSlot(unsigned slot) noexcept;
+    std::optional<unsigned> airVfxAtlasSlot() const noexcept;
+    void recordAirSortieTrail(std::uint32_t sortieId, int mapX, int mapY, unsigned dir32,
+                              int hp, int maxHp, bool alive, bool active, bool tookHit);
+    void recordAirCrashTrail(int mapX, int mapY);
+    bool stepAirTrails(float dtSeconds);
+    bool hasActiveAirTrails() const noexcept;
+    void appendAirTrailSprites(int mapScale, std::vector<Sprite>& outSprites) const;
+    void appendAirTrailBeams(int mapScale, std::size_t maxCount, std::vector<MapBeam>& outBeams) const;
 
     // Message log. The newest message is shown in the strip; logText() returns the most
     // recent ones, newest last, one per line, for showing in a panel when Log is clicked.
@@ -135,8 +171,10 @@ public:
     void cancelMinimapDrag() { draggingMinimap_ = false; }
 
 private:
+    struct RetailAssets;
     void layout();
     void render();
+    void composeWeatherOverlay();
     void refit();   // lays the bar out again when the window's pixel size no longer matches
     Rect reconButtonRect() const;
     Rect row3Rect(int col) const;
@@ -168,6 +206,12 @@ private:
     int strip_ = 0;                      // height of the strip along the top of the bar
     bool draggingMinimap_ = false;
     std::vector<std::uint8_t> rgba_;
+    std::vector<std::uint8_t> composedRgba_;
+    assets::WeatherKind weather_ = assets::WeatherKind::Clear;
+    std::uint32_t weatherPhase_ = 0;
+    std::unique_ptr<RetailAssets> retail_;
     std::uint64_t revision_ = 0, drawn_ = 0;
+    std::uint64_t weatherRevision_ = 0, weatherDrawn_ = 0;
+    bool overlayWasWeather_ = false;
 };
 }
