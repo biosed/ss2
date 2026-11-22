@@ -827,6 +827,12 @@ void MissionRunner::stepGroupAiLocked(bool fastOnly) {
                                          ai.zone2, z2x, z2y, hasZone2, tick, true);
             continue;
         }
+        if (ai.behavior == igroups::kAiPlaneMove) {
+            (void)units_.orderGroupPlane(g, ai.aiFlags, zones,
+                                         ai.zone1, z1x, z1y, hasZone1,
+                                         ai.zone2, z2x, z2y, hasZone2, tick, true);
+            continue;
+        }
         if (ai.behavior == igroups::kAiFurgTransport) {
             (void)units_.orderGroupTransport(g, ai.aiFlags, targetGrp, zones,
                                              ai.zone1, z1x, z1y, hasZone1,

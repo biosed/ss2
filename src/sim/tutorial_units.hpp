@@ -413,6 +413,10 @@ public:
                            unsigned zone1, int z1x, int z1y, bool hasZone1,
                            unsigned zone2, int z2x, int z2y, bool hasZone2,
                            unsigned tick, bool onlyNonPlayer = true);
+    size_t orderGroupPlane(unsigned group, std::uint32_t aiFlags, std::span<const std::uint8_t> zones,
+                           unsigned zone1, int z1x, int z1y, bool hasZone1,
+                           unsigned zone2, int z2x, int z2y, bool hasZone2,
+                           unsigned tick, bool onlyNonPlayer = true);
     size_t orderAttackGroundVehicles(std::span<const size_t> indices, int mapX, int mapY);
     size_t orderAttackGroundSoldiers(std::span<const size_t> indices, int mapX, int mapY);
     std::optional<unsigned> lastHitTick(unsigned player) const;

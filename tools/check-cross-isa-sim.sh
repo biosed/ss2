@@ -58,6 +58,7 @@ SIM_SRCS=(
     "$ROOT/src/sim/mission_runner.cpp"
     "$ROOT/src/sim/infantry_step.cpp"
     "$ROOT/src/sim/tutorial_units.cpp"
+    "$ROOT/src/sim/tutorial_units_ai.cpp"
     "$ROOT/src/sim/tutorial_units_combat.cpp"
     "$ROOT/src/sim/tutorial_units_vehicles.cpp"
     "$ROOT/src/sim/tutorial_units_support.cpp"

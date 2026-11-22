@@ -656,7 +656,9 @@ void runPhase4Fto4O() {
                     const int playerSightNorm = ss2::effectiveSightRadius(desc, 0, false, 0, 2);
                     const int enemySightNorm = ss2::effectiveSightRadius(desc, 0, false, 1, 2);
                     const int enemySightHard = ss2::effectiveSightRadius(desc, 0, false, 1, 3);
-                    if (playerSightEasy <= playerSightNorm || enemySightHard <= enemySightNorm) {
+                    // Gold CSoldier::GetSightRadius (0x10021381: cmp [ecx+8], 1; jg) scales Easy player sight by 1.3x
+                    // and leaves Hard AI sight equal to Normal (Hard scales combat damage instead).
+                    if (playerSightEasy <= playerSightNorm || enemySightHard != enemySightNorm) {
                         throw std::runtime_error("Phase 4M effectiveSightRadius difficulty scaling mismatch");
                     }
 

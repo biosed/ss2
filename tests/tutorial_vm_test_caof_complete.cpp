@@ -1410,6 +1410,127 @@ void runCaofCompleteOpcodes() {
             }
             check(reachedZ1 && reachedZ2,
                   "ai_train_move failed to snap off-rail zone centroids and patrol between zone 1 and zone 2");
+
+            // Multi-car consist test (3 coupled railcars in group 10): unified patrol direction without head-on split.
+            auto makeConsistMission = [&]() {
+                auto md = makeFlatMission();
+                md.scripts.push_back({0x7fffffffu});
+                md.obstacles.assign(64u * 64u, 0x000Fu);
+                for (unsigned tx = 8u; tx <= 52u; ++tx) {
+                    md.obstacles[24u * 64u + tx] = 0x0000u;
+                }
+                for (unsigned ty = 23u; ty <= 25u; ++ty) {
+                    for (unsigned tx = 14u; tx <= 18u; ++tx) md.zones[ty * 64u + tx] = 1u;
+                    for (unsigned tx = 36u; tx <= 40u; ++tx) md.zones[ty * 64u + tx] = 2u;
+                }
+                md.locations[1] = px64(16, 24);
+                md.locations[2] = px64(38, 24);
+                md.hasInitialGroups = true;
+                md.initialGroups[10].behavior = ss2::igroups::kAiTrainMove;
+                md.initialGroups[10].zone1 = 1u;
+                md.initialGroups[10].zone2 = 2u;
+
+                const auto [c0x, c0y] = px64(25, 24);
+                const auto [c1x, c1y] = px64(27, 24);
+                const auto [c2x, c2y] = px64(29, 24);
+                std::vector<ss2::assets::Placement> veh{
+                    {"armored_train", c0x, c0y, 0, 100, 100, 10, 1},
+                    {"armored_train", c1x, c1y, 0, 100, 100, 10, 1},
+                    {"armored_train", c2x, c2y, 0, 100, 100, 10, 1},
+                };
+                ss2::TutorialUnits u(
+                    ss2::InfantryPathGrid::fromSubCellMasks(md.width, md.height, md.flags, md.obstacles),
+                    {}, veh, ss2::FogGrid(md.width, md.height, md.flags), 2, false, {}, specCat);
+                return std::pair{std::move(md), std::move(u)};
+            };
+
+            auto [cmdA, cuA] = makeConsistMission();
+            auto [cmdB, cuB] = makeConsistMission();
+            ss2::MissionRunner conA(ss2::MissionRunner::ManualClock{}, std::move(cmdA), std::move(cuA));
+            ss2::MissionRunner conB(ss2::MissionRunner::ManualClock{}, std::move(cmdB), std::move(cuB));
+            bool consistReachedZ1 = false;
+            bool consistReachedZ2 = false;
+            for (unsigned step = 0u; step < 20u; ++step) {
+                conA.advanceTicks(45u);
+                conB.advanceTicks(45u);
+                check(conA.stateHash() == conB.stateHash(),
+                      "Multi-car ai_train_move twin runner stateHash diverged");
+                const auto snap = conA.takeFullSnapshot();
+                int avgX = 0;
+                for (std::size_t k = 0; k < 3u; ++k) {
+                    const auto& cv = snap.units.vehicles[k];
+                    const int ty = ss2::tutorialFootWorld(cv.x, cv.y, 64 * 32).second / 32;
+                    check(ty == 24, "Multi-car train car left railroad track tileY == 24");
+                    avgX += cv.x;
+                }
+                avgX /= 3;
+                // Cars must remain spaced along the track rather than collapsing onto identical coordinates.
+                const int span01 = std::abs(snap.units.vehicles[0].x - snap.units.vehicles[1].x);
+                const int span12 = std::abs(snap.units.vehicles[1].x - snap.units.vehicles[2].x);
+                check(span01 >= 16 || span12 >= 16,
+                      "Multi-car train consist collapsed all 3 cars onto identical coordinates");
+                if (std::abs(avgX - z1RailX) <= 128) consistReachedZ1 = true;
+                if (std::abs(avgX - z2RailX) <= 128) consistReachedZ2 = true;
+            }
+            check(consistReachedZ1 && consistReachedZ2,
+                  "Multi-car ai_train_move consist failed to patrol coherently between zone 1 and zone 2");
+        }
+
+        // 7. ai_plane_move (11, n2Game_Dll.dll 0x10053c50): >= 70% HP gate, aif_zonenoenemy halt, and airfield parking.
+        {
+            ss2::assets::UnitSpec parkedPlane{};
+            parkedPlane.id = "yak_ground";
+            parkedPlane.isVehicle = true;
+            parkedPlane.health = 200;
+            parkedPlane.moveSpeed = 1.8;
+            parkedPlane.sight = 14;
+            const auto planeCat = ss2::assets::UnitCatalog::fromSpecs({parkedPlane});
+
+            auto md = makeFlatMission();
+            md.obstacles.assign(64u * 64u, 0u);
+            for (unsigned ty = 28u; ty <= 32u; ++ty) {
+                for (unsigned tx = 36u; tx <= 40u; ++tx) md.zones[ty * 64u + tx] = 1u; // Airfield Zone 1
+            }
+            md.locations[1] = px64(38, 30);
+            md.scripts.push_back({0x7fffffffu});
+            md.hasInitialGroups = true;
+            md.initialGroups[11].behavior = ss2::igroups::kAiPlaneMove;
+            md.initialGroups[11].aiFlags = ss2::igroups::kAifZoneNoEnemy;
+            md.initialGroups[11].zone1 = 1u;
+
+            const auto [p0x, p0y] = px64(14, 30);
+            const auto [p1x, p1y] = px64(14, 32);
+            const auto [enX, enY] = px64(38, 30); // Hostile soldier blocking Airfield Zone 1 initially
+            std::vector<ss2::assets::Placement> veh{
+                {"yak_ground", p0x, p0y, 0, 100, 0, 11, 1}, // 100% HP (>= 70% threshold)
+                {"yak_ground", p1x, p1y, 0, 50, 0, 11, 1},  // 50% HP (< 70% threshold -> stays grounded)
+            };
+            std::vector<ss2::assets::Infantry> inf{
+                {"dguner", enX, enY, 100, 0, 1, 0},
+            };
+            ss2::TutorialUnits u(
+                ss2::InfantryPathGrid::fromSubCellMasks(md.width, md.height, md.flags, md.obstacles),
+                inf, veh, ss2::FogGrid(md.width, md.height, md.flags), 2, false, {}, planeCat);
+            ss2::MissionRunner runner(ss2::MissionRunner::ManualClock{}, std::move(md), std::move(u));
+
+            // While enemy occupies Airfield Zone 1, neither plane may relocate.
+            runner.advanceTicks(80u);
+            auto snapBlocked = runner.takeFullSnapshot();
+            check(std::abs(snapBlocked.units.vehicles[0].x - p0x) <= 16 &&
+                      std::abs(snapBlocked.units.vehicles[1].x - p1x) <= 16,
+                  "ai_plane_move relocated into enemy-occupied airfield despite aif_zonenoenemy");
+
+            // Clear enemy from Airfield Zone 1 -> intact plane [0] relocates and parks; damaged plane [1] (50% HP) stays grounded.
+            const auto [awayX, awayY] = px64(10, 10);
+            (void)runner.move(std::array<std::size_t, 1>{0}, awayX, awayY);
+            runner.advanceTicks(360u);
+            auto snapArrived = runner.takeFullSnapshot();
+            const auto [z1x, z1y] = px64(38, 30);
+            check(std::hypot(snapArrived.units.vehicles[0].x - z1x, snapArrived.units.vehicles[0].y - z1y) <= 160.0,
+                  "ai_plane_move intact plane failed to relocate to cleared Airfield Zone 1");
+            check(std::abs(snapArrived.units.vehicles[1].x - p1x) <= 16 &&
+                      std::abs(snapArrived.units.vehicles[1].y - p1y) <= 16,
+                  "ai_plane_move relocated damaged plane (< 70% maxHp) contrary to 0x10053d1c");
         }
     }
 

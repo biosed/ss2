@@ -158,6 +158,94 @@ void testSightMatrixParity() {
     const auto off = ss2::InfantryCombatDesc::forUnitId("dofficer");
     require(ss2::effectiveSightRadius(off, 0, false, 0, 1, false, 50) == 7,
             "Officer Easy Snow sight must be 7 (weather truncation before 1.3x Easy bonus)");
+    // Gold CSoldier::GetSightRadius (0x10021381) has no Hard-mode AI sight boost.
+    require(ss2::effectiveSightRadius(off, 0, false, 1, 3, false, 100) == 13,
+            "Hard difficulty must not boost AI soldier sight beyond Normal");
+
+    // Verify pre-weather binocular, garrison (CHouse::GetSightRadius 0x100290e0), and High Ground (+2) ordering:
+    {
+        std::vector<std::uint32_t> flags(48u * 48u, 0u);
+        flags[24u * 48u + 10u] = 0x2000u; // elevated hill at tile (10, 24)
+        const auto subPos = [](int tx, int ty) {
+            const int su = tx * 32 + 16, sv = ty * 32 + 16;
+            return std::pair<int, int>{48 * 32 + su - sv, (su + sv) / 2};
+        };
+
+        // 1. Officer binoculars on Easy + Snow (50%): (13 + 7) = 20 -> Snow 50% = 10 -> Easy 1.3x = 13 tiles!
+        //    (Post-weather without Easy on bino would have given 7 + 3 = 10 tiles, missing dy=13.)
+        ss2::assets::UnitSpec offSpec{};
+        offSpec.id = "dofficer";
+        offSpec.sight = 13;
+        offSpec.binocularSight = 20;
+        ss2::assets::UnitSpec agSpec{};
+        agSpec.id = "aguner";
+        agSpec.sight = 12;
+        ss2::assets::UnitSpec smgSpec{};
+        smgSpec.id = "dsmg";
+        smgSpec.sight = 11;
+        const auto cat = ss2::assets::UnitCatalog::fromSpecs({offSpec, agSpec, smgSpec});
+
+        const auto makeInf = [](std::string id, int x, int y, int ammo, int grp, int owner) {
+            ss2::assets::Infantry u{};
+            u.id = std::move(id);
+            u.x = x;
+            u.y = y;
+            u.hp = 100;
+            u.ammo = ammo;
+            u.group = grp;
+            u.owner = owner;
+            return u;
+        };
+
+        const auto [ox, oy] = subPos(20, 30);
+        const auto [ex13, ey13] = subPos(20, 17); // dy = 13 tiles
+        const ss2::assets::Infantry pOff = makeInf("dofficer", ox, oy, 40, 0, 0);
+        const ss2::assets::Infantry eAg = makeInf("aguner", ex13, ey13, 64, 3, 1);
+        ss2::TutorialUnits binoSim(
+            ss2::InfantryPathGrid::fromWalkable(96, 96, std::vector<std::uint8_t>(96 * 96, 1)),
+            std::vector<ss2::assets::Infantry>{pOff, eAg}, {},
+            ss2::FogGrid(48, 48, flags), /*difficulty=*/1, false, {}, cat);
+        binoSim.setWeather(ss2::assets::WeatherKind::Snow); // default Snow visPct = 55% -> (20*55)/100 = 11 -> *1.3 = 14
+        require(!binoSim.isValidAttackTarget(1, 0), "Un-binoculared officer in Snow must not spot at dy=13");
+        require(binoSim.toggleBinoculars(std::array<std::size_t, 1>{0}) == true, "Officer must activate binoculars");
+        require(binoSim.isValidAttackTarget(1, 0),
+                "Officer with pre-weather binoculars + Easy 1.3x in Snow must spot at dy=13");
+
+        // 2. Crouched rifleman garrisoning a building (0x100290e0): uses standing sight (12) + 3 = 15 (not crouched 9 + 3 = 12).
+        const auto [bx, by] = subPos(30, 30);
+        const auto [ex15, ey15] = subPos(30, 15); // dy = 15 tiles
+        const ss2::assets::Infantry pRif = makeInf("dguner", bx, by, 40, 0, 0);
+        const ss2::assets::Infantry eFar = makeInf("aguner", ex15, ey15, 64, 3, 1);
+        ss2::TutorialUnits garSim(
+            ss2::InfantryPathGrid::fromWalkable(96, 96, std::vector<std::uint8_t>(96 * 96, 1)),
+            std::vector<ss2::assets::Infantry>{pRif, eFar}, {},
+            ss2::FogGrid(48, 48, flags), /*difficulty=*/2, false);
+        ss2::assets::BuildingPlacement bld{};
+        bld.x = bx; bld.y = by; bld.left = bx - 32; bld.top = by - 32; bld.width = 64; bld.height = 64;
+        bld.maxHp = 600; bld.capacity = 6;
+        garSim.setBuildings({bld});
+        require(garSim.toggleCrouch(std::array<std::size_t, 1>{0}) == true, "Rifleman must crouch before garrison");
+        require(!garSim.isValidAttackTarget(1, 0), "Crouched rifleman outdoors (9t) must not spot dy=15");
+        require(garSim.orderGarrisonBuilding(std::array<std::size_t, 1>{0}, 0) == 1u, "Garrison order must be accepted");
+        for (int t = 0; t < 16 && !garSim.isValidAttackTarget(1, 0); ++t) (void)garSim.step();
+        require(garSim.isValidAttackTarget(1, 0),
+                "Garrisoned crouched soldier must use standing sight + 3 = 15t per CHouse::GetSightRadius (0x100290e0)");
+
+        // 3. High Ground (+2) scales pre-weather in Snow (60%): SMG (11 + 2 = 13) * 60 / 100 = 7 tiles (not 6 + 2 = 8).
+        const auto [hx, hy] = subPos(10, 24);
+        const auto [ex8, ey8] = subPos(10, 16); // dy = 8 tiles
+        const auto [ex7, ey7] = subPos(10, 17); // dy = 7 tiles
+        const ss2::assets::Infantry pHill = makeInf("dsmg", hx, hy, 40, 0, 0);
+        const ss2::assets::Infantry eAt8 = makeInf("aguner", ex8, ey8, 64, 3, 1);
+        const ss2::assets::Infantry eAt7 = makeInf("aguner", ex7, ey7, 64, 3, 1);
+        ss2::TutorialUnits hillSim(
+            ss2::InfantryPathGrid::fromWalkable(96, 96, std::vector<std::uint8_t>(96 * 96, 1)),
+            std::vector<ss2::assets::Infantry>{pHill, eAt8, eAt7}, {},
+            ss2::FogGrid(48, 48, flags), /*difficulty=*/2, false, {}, cat);
+        hillSim.setWeather(ss2::assets::WeatherKind::Snow); // 60%: floor((11+2)*60/100) = 7 (vs post-weather 6+2 = 8)
+        require(hillSim.isValidAttackTarget(2, 0), "Elevated SMG in Snow must spot at dy=7");
+        require(!hillSim.isValidAttackTarget(1, 0), "Elevated SMG in Snow must scale +2 pre-weather (7t, not 8t)");
+    }
 }
 
 void testPerimeterFlags() {

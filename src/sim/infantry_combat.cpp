@@ -319,8 +319,6 @@ int effectiveSightRadius(const InfantryCombatDesc& desc, int expa, bool crouched
     }
     if (difficulty <= 1 && owner == 0) {
         r = (r * 13) / 10;
-    } else if (difficulty == 3 && owner != 0 && owner != 3) {
-        r = (r * 115) / 100;
     }
     return std::clamp(r, 1, 31);
 }
