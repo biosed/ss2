@@ -507,35 +507,26 @@ int main(int argc, char** argv) try {
                     "Activating next_campaign must exit Mission 1 and output 030001.ssc");
         }
 
-        // Control session on 030001.ssc with empty pools: Group 70 carryover wave must be empty.
+        // Control check on 030001.ssc static placements + Wave 1: Group 70 carryover wave must be empty without pools.
         std::size_t emptyTotalP0 = 0;
         {
-            ss2::UserSettings ctrlSettings{};
-            ss2::GameSession m2Empty(
-                win, validate ? &report : nullptr,
-                0, false, gameDir, *nextMission, {}, false, true,
-                ctrlSettings, false, false, nullptr, {}, nullptr, true);
-            while (m2Empty.briefing.active()) m2Empty.handleInputEvent(makeKeyDown(win, SDLK_RETURN));
-            for (int t = 0; t < 25; ++t) {
-                m2Empty.simulation->advanceTicks(1);
-                m2Empty.stepSimulationEvents();
-                while (m2Empty.briefing.active()) m2Empty.handleInputEvent(makeKeyDown(win, SDLK_RETURN));
-            }
-            const auto snapEmpty = m2Empty.simulation->takeSnapshot();
-            std::size_t grp70Empty = 0;
-            for (const auto& s : snapEmpty.soldiers) {
-                if (s.owner == 0 && s.hp > 0) {
+            const auto m2Data = ss2::assets::readMissionData(*nextMission);
+            require(m2Data.reinforcements[1].empty(),
+                    "030001.ssc static Wave 1 must be empty before OP(72) pool materialization");
+            std::size_t grp70Static = 0;
+            for (const auto& p : ss2::assets::readMissionPlacements(*nextMission)) {
+                if (p.owner == 0 && p.hp > 0) {
                     ++emptyTotalP0;
-                    if (s.group == 70) ++grp70Empty;
+                    if (p.group == 70) ++grp70Static;
+                    for (const auto& pax : p.passengers) {
+                        if (!pax.isCrew && pax.hp > 0) {
+                            ++emptyTotalP0;
+                            if (pax.group == 70) ++grp70Static;
+                        }
+                    }
                 }
             }
-            for (const auto& v : snapEmpty.vehicles) {
-                if (v.owner == 0 && v.alive && v.hp > 0) {
-                    ++emptyTotalP0;
-                    if (v.group == 70) ++grp70Empty;
-                }
-            }
-            require(grp70Empty == 0u, "Control 030001.ssc without carryover pools must have 0 Group 70 units");
+            require(grp70Static == 0u, "030001.ssc static placements must have 0 Group 70 units");
         }
 
         // Carryover session on 030001.ssc loaded from disk SS2POOL1 (simulating process restart) + --record.

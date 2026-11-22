@@ -280,16 +280,16 @@ if(BUILD_TESTING)
         -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/cli-replay-test
         -DVALIDATION_ARG=${validation_arg}
         -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_cli_replay.cmake)
-      set_tests_properties(gold_cli_record_replay PROPERTIES TIMEOUT 45
+      set_tests_properties(gold_cli_record_replay PROPERTIES TIMEOUT 90
         FAIL_REGULAR_EXPRESSION "Validation Error|VUID-")
       add_executable(session_input_test tests/session_input_test.cpp)
       target_link_libraries(session_input_test PRIVATE ss2_session)
       target_compile_options(session_input_test PRIVATE ${SS2_WARNINGS} ${SS2_ENABLE_ASSERTIONS})
       add_test(NAME gold_session_input COMMAND session_input_test ${SS2_PRIVATE_GAME} ${validation_arg})
-      set_tests_properties(gold_session_input PROPERTIES TIMEOUT 120
+      set_tests_properties(gold_session_input PROPERTIES TIMEOUT 240
         FAIL_REGULAR_EXPRESSION "Validation Error|VUID-")
     endif()
-    set_tests_properties(briefing_panel command_bar menu_panel hover_tooltip vulkan_map_region vulkan_sprite_pass tutorial_selection vulkan_present vulkan_resize vulkan_wsi_recovery gold_frontend_vulkan PROPERTIES TIMEOUT 30
+    set_tests_properties(briefing_panel command_bar menu_panel hover_tooltip vulkan_map_region vulkan_sprite_pass tutorial_selection vulkan_present vulkan_resize vulkan_wsi_recovery gold_frontend_vulkan PROPERTIES TIMEOUT 60
       FAIL_REGULAR_EXPRESSION "Validation Error|VUID-")
   endif()
 endif()

@@ -2,6 +2,7 @@
 #include "assets/placement.hpp"
 #include "assets/scenery.hpp"
 #include "assets/terrain.hpp"
+#include "sim/tutorial_coordinates.hpp"
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -925,7 +926,494 @@ void runCaofCompleteOpcodes() {
               "Expected SS2FULL3 round-trip to preserve group aiFlags and lastReserveTick");
     }
 
-    std::cout << "CAOF complete 17-opcode + air-route + pool-carryover + bridges + I-GROUPS checks PASSED\n";
+    // 6. Specialized retail I-GROUPS AI behaviors (ai_sold_art, ai_recon, ai_furg_transport,
+    //    ai_katya_move, ai_train_move) and conditional zone gating (aif_zonehaveown, aif_zonenoenemy).
+    {
+        ss2::assets::UnitSpec crewInf{};
+        crewInf.id = "dguner";
+        crewInf.isVehicle = false;
+        crewInf.health = 100;
+        crewInf.ammo1 = 40;
+        crewInf.moveSpeed = 1.8;
+        crewInf.sight = 12;
+        crewInf.canBeCrew = 1;
+        crewInf.shot1 = {"rifle", ss2::assets::HitType::Machine, 18, 18, 220, 220, 0, 12, 1, 12, "rifle"};
+
+        ss2::assets::UnitSpec scoutSpec{};
+        scoutSpec.id = "sdkfz.222";
+        scoutSpec.isVehicle = true;
+        scoutSpec.health = 240;
+        scoutSpec.ammo1 = 40;
+        scoutSpec.moveSpeed = 2.4;
+        scoutSpec.canMoveBackward = true;
+        scoutSpec.backMoveSpeed = 1.6;
+        scoutSpec.sight = 16;
+        scoutSpec.marchEnabled = true;
+        scoutSpec.marchSightBonus = 4;
+        scoutSpec.shot1 = {"ac20", ss2::assets::HitType::Pierce, 35, 35, 320, 320, 0, 10, 2, 24, "ac20"};
+
+        ss2::assets::UnitSpec tankSpec{};
+        tankSpec.id = "t34";
+        tankSpec.isVehicle = true;
+        tankSpec.health = 600;
+        tankSpec.ammo1 = 30;
+        tankSpec.moveSpeed = 2.0;
+        tankSpec.sight = 12;
+        tankSpec.roleClass = "tank";
+        tankSpec.shot1 = {"ap76", ss2::assets::HitType::Pierce, 110, 110, 360, 360, 0, 20, 1, 20, "tankgun"};
+
+        ss2::assets::UnitSpec howitzerSpec{};
+        howitzerSpec.id = "lefh18";
+        howitzerSpec.isVehicle = true;
+        howitzerSpec.selType = "howitzer";
+        howitzerSpec.turretType = "gaub";
+        howitzerSpec.towWeightClass = "medium";
+        howitzerSpec.health = 260;
+        howitzerSpec.ammo1 = 30;
+        howitzerSpec.moveSpeed = 0.0;
+        howitzerSpec.sight = 12;
+        howitzerSpec.crewNumber = 2;
+        howitzerSpec.attackCrew = 1;
+        howitzerSpec.shot1 = {"he105", ss2::assets::HitType::Explosive, 220, 220, 700, 700, 120, 25, 1, 25, "howitzer"};
+        howitzerSpec.shot1.indirectArc = true;
+
+        ss2::assets::UnitSpec atgSpec{};
+        atgSpec.id = "pak40";
+        atgSpec.isVehicle = true;
+        atgSpec.selType = "atg";
+        atgSpec.roleClass = "at";
+        atgSpec.turretType = "atg";
+        atgSpec.towWeightClass = "light";
+        atgSpec.health = 200;
+        atgSpec.ammo1 = 30;
+        atgSpec.moveSpeed = 0.0;
+        atgSpec.sight = 12;
+        atgSpec.crewNumber = 2;
+        atgSpec.attackCrew = 1;
+        atgSpec.shot1 = {"ap75", ss2::assets::HitType::Pierce, 140, 140, 520, 520, 0, 18, 1, 18, "pak"};
+
+        ss2::assets::UnitSpec apcSpec{};
+        apcSpec.id = "sdkfz.251";
+        apcSpec.isVehicle = true;
+        apcSpec.health = 300;
+        apcSpec.moveSpeed = 2.4;
+        apcSpec.sight = 11;
+        apcSpec.stock = 4;
+
+        ss2::assets::UnitSpec katyaSpec{};
+        katyaSpec.id = "bm-13";
+        katyaSpec.isVehicle = true;
+        katyaSpec.selType = "rl";
+        katyaSpec.health = 220;
+        katyaSpec.ammo1 = 16;
+        katyaSpec.moveSpeed = 2.2;
+        katyaSpec.sight = 12;
+        katyaSpec.shot1 = {"katy", ss2::assets::HitType::Explosive, 240, 240, 760, 760, 140, 5, 4, 180, "katyusha"};
+        katyaSpec.shot1.indirectArc = true;
+
+        ss2::assets::UnitSpec trainSpec{};
+        trainSpec.id = "armored_train";
+        trainSpec.isVehicle = true;
+        trainSpec.selType = "train";
+        trainSpec.targetType = "train";
+        trainSpec.walkOnGround = false;
+        trainSpec.walkOnWater = false;
+        trainSpec.walkOnShallows = false;
+        trainSpec.canMoveBackward = true;
+        trainSpec.moveSpeed = 2.2;
+        trainSpec.backMoveSpeed = 2.0;
+        trainSpec.health = 1200;
+        trainSpec.ammo1 = 50;
+        trainSpec.sight = 14;
+        trainSpec.shot1 = {"train76", ss2::assets::HitType::Explosive, 130, 130, 480, 480, 0, 18, 1, 18, "tankgun"};
+
+        const auto specCat = ss2::assets::UnitCatalog::fromSpecs({
+            crewInf, scoutSpec, tankSpec, howitzerSpec, atgSpec, apcSpec, katyaSpec, trainSpec
+        });
+
+        // 6a. Conditional zone flags: aif_zonehaveown (1<<1) and aif_zonenoenemy (1<<2) + mid-advance stop.
+        {
+            auto md = makeFlatMission();
+            md.obstacles.assign(64u * 64u, 0u);
+            md.scripts.push_back({0x7fffffffu});
+            for (int y = 18; y <= 22; ++y) {
+                for (int x = 28; x <= 32; ++x) md.zones[std::size_t(y) * 64u + std::size_t(x)] = 1u;
+                for (int x = 38; x <= 42; ++x) md.zones[std::size_t(y) * 64u + std::size_t(x)] = 2u;
+            }
+            md.locations[1] = px64(30, 20);
+            md.locations[2] = px64(40, 20);
+            md.hasInitialGroups = true;
+            // Group 1 requires friendly unit in zone 1 before advancing.
+            md.initialGroups[1].behavior = ss2::igroups::kAiTankGuard;
+            md.initialGroups[1].aiFlags = ss2::igroups::kAifZoneHaveOwn;
+            md.initialGroups[1].zone1 = 1u;
+            // Group 2 requires zero enemy units in zone 2 before advancing.
+            md.initialGroups[2].behavior = ss2::igroups::kAiTankGuard;
+            md.initialGroups[2].aiFlags = ss2::igroups::kAifZoneNoEnemy;
+            md.initialGroups[2].zone1 = 2u;
+
+            const auto [t1x, t1y] = px64(14, 20);
+            const auto [t2x, t2y] = px64(8, 20);
+            const auto [allyStartX, allyStartY] = px64(26, 20); // 2 tiles west of zone 1 (x=28..32)
+            const auto [enemyInZ2X, enemyInZ2Y] = px64(42, 20); // inside zone 2 east edge (x=38..42)
+            const auto [enemyOutX, enemyOutY] = px64(44, 20);   // 2 tiles outside zone 2
+
+            std::vector<ss2::assets::Infantry> inf{
+                {"dguner", enemyInZ2X, enemyInZ2Y, 100, 40, 0, 0}, // player 0 blocking zone 2
+                {"dguner", allyStartX, allyStartY, 100, 40, 9, 1}, // friendly outside zone 1 initially
+            };
+            std::vector<ss2::assets::Placement> veh{
+                {"t34", t1x, t1y, 0, 100, 100, 1, 1},
+                {"t34", t2x, t2y, 0, 100, 100, 2, 1},
+            };
+            ss2::TutorialUnits units(
+                ss2::InfantryPathGrid::fromSubCellMasks(md.width, md.height, md.flags, md.obstacles),
+                inf, veh, ss2::FogGrid(md.width, md.height, md.flags), 2, false, {}, specCat);
+            ss2::MissionRunner runner(ss2::MissionRunner::ManualClock{}, std::move(md), std::move(units));
+
+            runner.advanceTicks(90u);
+            auto snapBlocked = runner.takeFullSnapshot();
+            check(snapBlocked.units.vehicles[0].x == t1x && snapBlocked.units.vehicles[0].y == t1y,
+                  "aif_zonehaveown group 1 moved before friendly entered zone 1");
+            check(snapBlocked.units.vehicles[1].x == t2x && snapBlocked.units.vehicles[1].y == t2y,
+                  "aif_zonenoenemy group 2 moved while enemy occupied zone 2");
+
+            // Move friendly soldier 1 into zone 1 and player soldier 0 just outside zone 2.
+            (void)runner.orderGroupMove(9u, px64(30, 20).first, px64(30, 20).second, true);
+            (void)runner.move(std::array<std::size_t, 1>{0u}, enemyOutX, enemyOutY);
+            runner.advanceTicks(130u);
+            auto snapOpen = runner.takeFullSnapshot();
+            check(snapOpen.units.vehicles[0].x > t1x + 48,
+                  "aif_zonehaveown group 1 did not advance after friendly entered zone 1");
+            const int midX = snapOpen.units.vehicles[1].x;
+            check(midX > t2x + 48,
+                  "aif_zonenoenemy group 2 did not advance after enemy cleared zone 2");
+
+            // Re-enter zone 2 with player unit while group 2 tank is still mid-map -> must halt mid-advance.
+            (void)runner.move(std::array<std::size_t, 1>{0u}, enemyInZ2X, enemyInZ2Y);
+            runner.advanceTicks(100u);
+            const int stoppedX = runner.takeFullSnapshot().units.vehicles[1].x;
+            runner.advanceTicks(80u);
+            check(runner.takeFullSnapshot().units.vehicles[1].x == stoppedX &&
+                      stoppedX < px64(36, 20).first,
+                  "aif_zonenoenemy group 2 failed to halt mid-advance when enemy re-entered zone 2");
+        }
+
+        // 6b. ai_sold_art (4): infantry crew neutral howitzer & friendly decrewed AT gun, respect aif_atgnouse, and fire.
+        {
+            auto md = makeFlatMission();
+            md.obstacles.assign(64u * 64u, 0u);
+            md.scripts.push_back({0x7fffffffu});
+            md.locations[1] = px64(22, 22);
+            md.locations[2] = px64(18, 38);
+            md.hasInitialGroups = true;
+            md.initialGroups[3].behavior = ss2::igroups::kAiSoldArt;
+            md.initialGroups[3].zone1 = 1u;
+            md.initialGroups[4].behavior = ss2::igroups::kAiSoldArt;
+            md.initialGroups[4].aiFlags = ss2::igroups::kAifAtgNoUse;
+            md.initialGroups[4].zone1 = 2u;
+
+            const auto [s3aX, s3aY] = px64(20, 22);
+            const auto [s3bX, s3bY] = px64(20, 24);
+            const auto [howX, howY] = px64(23, 22);
+            const auto [atgX, atgY] = px64(23, 24);
+            const auto [s4X, s4Y] = px64(16, 38);
+            const auto [atgNoUseX, atgNoUseY] = px64(18, 38);
+            const auto [targetX, targetY] = px64(30, 22);
+
+            std::vector<ss2::assets::Infantry> inf{
+                {"dguner", s3aX, s3aY, 100, 40, 3, 1},
+                {"dguner", s3bX, s3bY, 100, 40, 3, 1},
+                {"dguner", s4X, s4Y, 100, 40, 4, 1},
+                {"dguner", targetX, targetY, 100, 40, 0, 0}, // spotted enemy in range of crewed guns
+            };
+            ss2::assets::VehicleUnit neutralHow{};
+            neutralHow.id = "lefh18";
+            neutralHow.x = howX; neutralHow.y = howY;
+            neutralHow.hp = 100; neutralHow.ammo = 100;
+            neutralHow.owner = 3; neutralHow.group = 0;
+            neutralHow.alive = true; neutralHow.hasCrew = false;
+
+            ss2::assets::VehicleUnit decrewedAtg{};
+            decrewedAtg.id = "pak40";
+            decrewedAtg.x = atgX; decrewedAtg.y = atgY;
+            decrewedAtg.hp = 100; decrewedAtg.ammo = 100;
+            decrewedAtg.owner = 1; decrewedAtg.group = 3;
+            decrewedAtg.alive = true; decrewedAtg.hasCrew = false;
+
+            ss2::assets::VehicleUnit forbiddenAtg{};
+            forbiddenAtg.id = "pak40";
+            forbiddenAtg.x = atgNoUseX; forbiddenAtg.y = atgNoUseY;
+            forbiddenAtg.hp = 100; forbiddenAtg.ammo = 100;
+            forbiddenAtg.owner = 3; forbiddenAtg.group = 0;
+            forbiddenAtg.alive = true; forbiddenAtg.hasCrew = false;
+
+            ss2::TutorialUnits units(
+                ss2::InfantryPathGrid::fromSubCellMasks(md.width, md.height, md.flags, md.obstacles),
+                inf, {}, ss2::FogGrid(md.width, md.height, md.flags), 2, false,
+                {neutralHow, decrewedAtg, forbiddenAtg}, specCat);
+            ss2::MissionRunner runner(ss2::MissionRunner::ManualClock{}, std::move(md), std::move(units));
+
+            bool gunFired = false;
+            for (unsigned t = 0u; t < 200u; ++t) {
+                runner.advanceTicks(1u);
+                for (const auto& vp : runner.pollVehiclePoses()) {
+                    if ((vp.index == 0u || vp.index == 1u) && vp.fired) gunFired = true;
+                }
+            }
+            const auto snap = runner.takeFullSnapshot();
+            check(snap.units.vehicles[0].hasCrew && snap.units.vehicles[0].owner == 1 &&
+                      snap.units.vehicles[0].group == 3,
+                  "ai_sold_art did not crew neutral howitzer and adopt group 3");
+            check(snap.units.vehicles[1].hasCrew && snap.units.vehicles[1].owner == 1,
+                  "ai_sold_art did not re-crew friendly decrewed AT gun");
+            check(!snap.units.vehicles[2].hasCrew && snap.units.vehicles[2].owner == 3,
+                  "ai_sold_art violated aif_atgnouse by crewing forbidden AT gun");
+            check(gunFired, "ai_sold_art crewed artillery/AT gun did not engage spotted enemy in range");
+        }
+
+        // 6c. ai_recon (1): scout advances to zone 1 holding fire to spot enemy, then retreats to zone 2 when threatened.
+        {
+            auto md = makeFlatMission();
+            md.obstacles.assign(64u * 64u, 0u);
+            md.scripts.push_back({0x7fffffffu});
+            md.locations[1] = px64(30, 20); // recon target zone
+            md.locations[2] = px64(14, 20); // safe retreat zone
+            md.hasInitialGroups = true;
+            md.initialGroups[5].behavior = ss2::igroups::kAiRecon;
+            md.initialGroups[5].zone1 = 1u;
+            md.initialGroups[5].zone2 = 2u;
+
+            const auto [scStartX, scStartY] = px64(18, 20);
+            const auto [enemyFarX, enemyFarY] = px64(40, 20);   // ~358px from zone 1: spotted (>256px) without close threat
+            const auto [enemyCloseX, enemyCloseY] = px64(33, 20); // ~107px from zone 1: triggers close-range retreat
+
+            std::vector<ss2::assets::Infantry> inf{
+                {"dguner", enemyFarX, enemyFarY, 100, 40, 0, 0},
+            };
+            std::vector<ss2::assets::Placement> veh{
+                {"sdkfz.222", scStartX, scStartY, 0, 100, 100, 5, 1},
+            };
+            ss2::TutorialUnits units(
+                ss2::InfantryPathGrid::fromSubCellMasks(md.width, md.height, md.flags, md.obstacles),
+                inf, veh, ss2::FogGrid(md.width, md.height, md.flags), 2, true, {}, specCat);
+            units.setGroupHoldFire(0u, true, false); // keep player target passive during spotting phase
+            ss2::MissionRunner runner(ss2::MissionRunner::ManualClock{}, std::move(md), std::move(units));
+
+            bool scoutEverFired = false;
+            for (unsigned t = 0u; t < 160u; ++t) {
+                runner.advanceTicks(1u);
+                for (const auto& vp : runner.pollVehiclePoses()) {
+                    if (vp.index == 0u && vp.fired) scoutEverFired = true;
+                }
+            }
+            const auto atReconSnap = runner.takeFullSnapshot();
+            check(!scoutEverFired && atReconSnap.units.vehicles[0].holdFire,
+                  "ai_recon scout failed to hold fire while advancing to zone 1");
+            check(atReconSnap.units.vehicles[0].x > scStartX + 320,
+                  "ai_recon scout did not advance into target zone 1");
+
+            // Enemy closes to <256px of scout -> scout must retreat westward toward safe zone 2 without firing.
+            const int peakX = atReconSnap.units.vehicles[0].x;
+            (void)runner.move(std::array<std::size_t, 1>{0u}, enemyCloseX, enemyCloseY);
+            for (unsigned t = 0u; t < 240u; ++t) {
+                runner.advanceTicks(1u);
+                for (const auto& vp : runner.pollVehiclePoses()) {
+                    if (vp.index == 0u && vp.fired) scoutEverFired = true;
+                }
+            }
+            const auto retreatedSnap = runner.takeFullSnapshot();
+            check(!scoutEverFired, "ai_recon scout fired instead of retreating");
+            check(retreatedSnap.units.vehicles[0].x < peakX - 180,
+                  "ai_recon scout did not retreat toward safe zone 2 when enemy entered close range");
+        }
+
+        // 6d. ai_furg_transport (13): APC shuttles infantry both from zone1->zone2 and by targetGroup->zone3.
+        {
+            auto md = makeFlatMission();
+            md.obstacles.assign(64u * 64u, 0u);
+            md.scripts.push_back({0x7fffffffu});
+            md.locations[1] = px64(20, 18); // pickup zone 1
+            md.locations[2] = px64(38, 18); // dropoff zone 2
+            md.locations[3] = px64(38, 32); // dropoff zone 3 for targetGroup shuttle
+            md.hasInitialGroups = true;
+            // Group 6 APC: zone1 pickup -> zone2 unload.
+            md.initialGroups[6].behavior = ss2::igroups::kAiFurgTransport;
+            md.initialGroups[6].zone1 = 1u;
+            md.initialGroups[6].zone2 = 2u;
+            // Group 7 APC: target group 8 pickup -> zone3 unload.
+            md.initialGroups[7].behavior = ss2::igroups::kAiFurgTransport;
+            md.initialGroups[7].group1 = 8u;
+            md.initialGroups[7].zone2 = 3u;
+
+            const auto [apc1X, apc1Y] = px64(14, 18);
+            const auto [z1InfA_X, z1InfA_Y] = px64(20, 18);
+            const auto [z1InfB_X, z1InfB_Y] = px64(21, 18);
+            const auto [apc2X, apc2Y] = px64(14, 32);
+            const auto [g8InfX, g8InfY] = px64(20, 32);
+
+            std::vector<ss2::assets::Infantry> inf{
+                {"dguner", z1InfA_X, z1InfA_Y, 100, 40, 11, 1},
+                {"dguner", z1InfB_X, z1InfB_Y, 100, 40, 11, 1},
+                {"dguner", g8InfX, g8InfY, 100, 40, 8, 1},
+            };
+            std::vector<ss2::assets::Placement> veh{
+                {"sdkfz.251", apc1X, apc1Y, 0, 100, 100, 6, 1},
+                {"sdkfz.251", apc2X, apc2Y, 0, 100, 100, 7, 1},
+            };
+            ss2::TutorialUnits units(
+                ss2::InfantryPathGrid::fromSubCellMasks(md.width, md.height, md.flags, md.obstacles),
+                inf, veh, ss2::FogGrid(md.width, md.height, md.flags), 2, false, {}, specCat);
+            ss2::MissionRunner runner(ss2::MissionRunner::ManualClock{}, std::move(md), std::move(units));
+
+            bool sawEmbarked1 = false;
+            bool sawEmbarked2 = false;
+            for (unsigned t = 0u; t < 420u; ++t) {
+                runner.advanceTicks(1u);
+                for (const auto& vp : runner.pollVehiclePoses()) {
+                    if (vp.index == 0u && vp.passengerCount > 0) sawEmbarked1 = true;
+                    if (vp.index == 1u && vp.passengerCount > 0) sawEmbarked2 = true;
+                }
+            }
+            const auto snap = runner.takeFullSnapshot();
+            check(sawEmbarked1 && snap.units.vehicles[0].passengers.empty(),
+                  "ai_furg_transport APC 0 did not board and unload zone1 infantry");
+            check(!snap.units.soldiers[0].embarked && !snap.units.soldiers[1].embarked &&
+                      snap.units.soldiers[0].cellX / 2 >= 34 && snap.units.soldiers[1].cellX / 2 >= 34,
+                  "ai_furg_transport APC 0 did not deliver infantry to destination zone 2");
+            check(sawEmbarked2 && snap.units.vehicles[1].passengers.empty() &&
+                      !snap.units.soldiers[2].embarked && snap.units.soldiers[2].cellX / 2 >= 34,
+                  "ai_furg_transport APC 1 did not shuttle targetGroup=8 infantry to zone 3");
+        }
+
+        // 6e. ai_katya_move (10): rocket launcher advances to firing zone 1, avoids friendly-fire cluster,
+        //     fires salvo at spotted enemy cluster, scoots to cover zone 2 while reloading, then returns.
+        {
+            auto md = makeFlatMission();
+            md.obstacles.assign(64u * 64u, 0u);
+            md.scripts.push_back({0x7fffffffu});
+            md.locations[1] = px64(26, 20); // firing zone 1
+            md.locations[2] = px64(14, 20); // cover/reload zone 2
+            md.hasInitialGroups = true;
+            md.initialGroups[9].behavior = ss2::igroups::kAiKatyaMove;
+            md.initialGroups[9].zone1 = 1u;
+            md.initialGroups[9].zone2 = 2u;
+
+            const auto [katStartX, katStartY] = px64(14, 20);
+            const auto [spotterX, spotterY] = px64(31, 20);
+            const auto [mixedEnemyX, mixedEnemyY] = px64(31, 21); // close to friendly spotter -> -2 penalty!
+            const auto [clearEnemyX, clearEnemyY] = px64(35, 20); // clear enemy cluster in range -> +2 score!
+
+            std::vector<ss2::assets::Infantry> inf{
+                {"dguner", spotterX, spotterY, 500, 40, 20, 1},       // friendly spotter near mixedEnemy
+                {"dguner", mixedEnemyX, mixedEnemyY, 500, 40, 0, 0},  // enemy hugging friendly spotter
+                {"dguner", clearEnemyX, clearEnemyY, 500, 40, 0, 0},  // clear enemy 1
+                {"dguner", clearEnemyX + 16, clearEnemyY, 500, 40, 0, 0}, // clear enemy 2
+            };
+            std::vector<ss2::assets::Placement> veh{
+                {"bm-13", katStartX, katStartY, 0, 100, 100, 9, 1},
+            };
+            ss2::TutorialUnits units(
+                ss2::InfantryPathGrid::fromSubCellMasks(md.width, md.height, md.flags, md.obstacles),
+                inf, veh, ss2::FogGrid(md.width, md.height, md.flags), 2, false, {}, specCat);
+            units.setGroupHoldFire(20u, true, false);
+            units.setGroupHoldFire(0u, true, false);
+            ss2::MissionRunner runner(ss2::MissionRunner::ManualClock{}, std::move(md), std::move(units));
+
+            int rocketsFired = 0;
+            int lastTargetX = 0;
+            int firingX = 0;
+            bool scootedBack = false;
+            bool returnedAfterReload = false;
+            int minReloadX = 999999;
+
+            for (unsigned t = 0u; t < 480u; ++t) {
+                runner.advanceTicks(1u);
+                for (const auto& vp : runner.pollVehiclePoses()) {
+                    if (vp.index != 0u) continue;
+                    if (vp.fired && vp.firedRocket) {
+                        ++rocketsFired;
+                        lastTargetX = vp.targetX;
+                        firingX = std::max(firingX, vp.x);
+                    }
+                    if (rocketsFired >= 4 && vp.x < firingX - 200) {
+                        scootedBack = true;
+                        minReloadX = std::min(minReloadX, vp.x);
+                    }
+                    if (scootedBack && vp.x > minReloadX + 180) {
+                        returnedAfterReload = true;
+                    }
+                }
+            }
+            check(rocketsFired >= 4, "ai_katya_move did not fire full rocket salvo from firing zone 1");
+            check(lastTargetX > mixedEnemyX + 120,
+                  "ai_katya_move failed friendly-fire cluster avoidance (-2 allied weight)");
+            check(scootedBack,
+                  "ai_katya_move did not scoot back to reload/cover zone 2 during burstReload cooldown");
+            check(returnedAfterReload,
+                  "ai_katya_move did not return toward firing zone 1 after reload completed");
+        }
+
+        // 6f. ai_train_move (12): armored train patrols along 1-tile rail track between off-track zone centroids
+        //     with twin-runner determinism parity.
+        {
+            auto makeTrainMission = [&]() {
+                auto md = makeFlatMission();
+                md.scripts.push_back({0x7fffffffu});
+                // Block ground nibble (0x000F) everywhere EXCEPT the straight railroad line at tileY == 24!
+                md.obstacles.assign(64u * 64u, 0x000Fu);
+                for (unsigned tx = 8u; tx <= 52u; ++tx) {
+                    md.obstacles[24u * 64u + tx] = 0x0000u;
+                }
+                for (unsigned ty = 22u; ty <= 28u; ++ty) {
+                    for (unsigned tx = 14u; tx <= 18u; ++tx) md.zones[ty * 64u + tx] = 1u;
+                    for (unsigned tx = 36u; tx <= 40u; ++tx) md.zones[ty * 64u + tx] = 2u;
+                }
+                // Place zone centroids 3 tiles OFF the track (tileY=27, where obstacles=0x000F blocks trains!).
+                md.locations[1] = px64(16, 27);
+                md.locations[2] = px64(38, 27);
+                md.hasInitialGroups = true;
+                md.initialGroups[10].behavior = ss2::igroups::kAiTrainMove;
+                md.initialGroups[10].zone1 = 1u;
+                md.initialGroups[10].zone2 = 2u;
+
+                const auto [trX, trY] = px64(26, 24);
+                std::vector<ss2::assets::Placement> veh{
+                    {"armored_train", trX, trY, 0, 100, 100, 10, 1},
+                };
+                ss2::TutorialUnits u(
+                    ss2::InfantryPathGrid::fromSubCellMasks(md.width, md.height, md.flags, md.obstacles),
+                    {}, veh, ss2::FogGrid(md.width, md.height, md.flags), 2, false, {}, specCat);
+                return std::pair{std::move(md), std::move(u)};
+            };
+
+            auto [mdA, uA] = makeTrainMission();
+            auto [mdB, uB] = makeTrainMission();
+            ss2::MissionRunner trainA(ss2::MissionRunner::ManualClock{}, std::move(mdA), std::move(uA));
+            ss2::MissionRunner trainB(ss2::MissionRunner::ManualClock{}, std::move(mdB), std::move(uB));
+
+            bool reachedZ1 = false;
+            bool reachedZ2 = false;
+            const int z1RailX = px64(16, 24).first;
+            const int z2RailX = px64(38, 24).first;
+            for (unsigned step = 0u; step < 16u; ++step) {
+                trainA.advanceTicks(45u);
+                trainB.advanceTicks(45u);
+                check(trainA.stateHash() == trainB.stateHash(),
+                      "ai_train_move twin runner stateHash diverged");
+                const auto snap = trainA.takeFullSnapshot();
+                const auto& tv = snap.units.vehicles[0];
+                const int trainTileY = ss2::tutorialFootWorld(tv.x, tv.y, 64 * 32).second / 32;
+                check(trainTileY == 24, "ai_train_move left railroad track tileY == 24");
+                if (std::abs(tv.x - z1RailX) <= 96) reachedZ1 = true;
+                if (std::abs(tv.x - z2RailX) <= 96) reachedZ2 = true;
+            }
+            check(reachedZ1 && reachedZ2,
+                  "ai_train_move failed to snap off-rail zone centroids and patrol between zone 1 and zone 2");
+        }
+    }
+
+    std::cout << "CAOF complete 17-opcode + air-route + pool-carryover + bridges + specialized I-GROUPS checks PASSED\n";
 }
 
 void runRetailCaofCorpusCheck(const std::filesystem::path& gameDir) {
@@ -1016,17 +1504,44 @@ void runRetailCaofCorpusCheck(const std::filesystem::path& gameDir) {
                   c010Md.initialGroups[70].reservMinUnits == 20u &&
                   c010Md.initialGroups[70].reservExpaPct == 30u,
               "Expected campaign/010007.ssc group 70 I-GROUPS reserve configuration");
+
+        // Retail specialized I-GROUPS checks: ai_katya_move (10), ai_train_move (12), ai_furg_transport (13),
+        // and conditional zone flags aif_zonehaveown (0x2) / aif_zonenoenemy (0x4).
+        const auto fleeMd = ss2::assets::readMissionData(gameDir / "maps/single/FLEE TO THE FRONT.SSM");
+        bool sawFleeKatya = false;
+        bool sawFleeTrain = false;
+        for (const auto& ig : fleeMd.initialGroups) {
+            if (ig.behavior == ss2::igroups::kAiKatyaMove) sawFleeKatya = true;
+            if (ig.behavior == ss2::igroups::kAiTrainMove) sawFleeTrain = true;
+        }
+        check(sawFleeKatya && sawFleeTrain,
+              "Expected FLEE TO THE FRONT.SSM to contain ai_katya_move (10) and ai_train_move (12)");
+
+        const auto c010004Md = ss2::assets::readMissionData(gameDir / "maps/campaign/010004.ssc");
+        bool sawTransport = false;
+        bool sawZoneCond = false;
+        for (const auto& ig : c010004Md.initialGroups) {
+            if (ig.behavior == ss2::igroups::kAiFurgTransport) sawTransport = true;
+            if ((ig.aiFlags & (ss2::igroups::kAifZoneHaveOwn | ss2::igroups::kAifZoneNoEnemy)) != 0u) {
+                sawZoneCond = true;
+            }
+        }
+        check(sawTransport && sawZoneCond,
+              "Expected campaign/010004.ssc to contain ai_furg_transport (13) and conditional zone flags");
     }
 
-    // Smoke-step representative retail missions exercising OP(8/9/31/33/39/46/62/63/71/72/75/83/84/85/86/90/91).
+    // Smoke-step representative retail missions exercising OP(8/9/31/33/39/46/62/63/71/72/75/83/84/85/86/90/91)
+    // and specialized I-GROUPS behaviors (ai_sold_art, ai_katya_move, ai_train_move, ai_furg_transport).
     const auto catalog = ss2::assets::UnitCatalog::load(gameDir);
-    const std::array<const char*, 6> repRelPaths{{
+    const std::array<const char*, 8> repRelPaths{{
         "maps/campaign/001000.ssc",
         "maps/campaign/006000.ssc",
+        "maps/campaign/010004.ssc",
         "maps/campaign/024001.ssc",
         "maps/single/'Dieppe [Total Victory].ssm",
         "maps/single/'Crete [Total Victory].ssm",
         "maps/single/ALONE AGAINST THE WORLD.SSM",
+        "maps/single/FLEE TO THE FRONT.SSM",
     }};
     for (const char* rel : repRelPaths) {
         const auto full = gameDir / rel;

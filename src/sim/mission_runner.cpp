@@ -774,35 +774,110 @@ void MissionRunner::run(std::stop_token stop, unsigned delayMs) {
     } catch (...) { error_ = std::current_exception(); }
 }
 
-void MissionRunner::stepGroupAiLocked() {
-    const auto& locs = tutorial_.data().locations;
+void MissionRunner::stepGroupAiLocked(bool fastOnly) {
+    const auto& data = tutorial_.data();
+    const auto& locs = data.locations;
+    const auto& zones = data.zones;
     const auto& groups = tutorial_.groupAi();
     const unsigned tick = simTick_.load(std::memory_order_relaxed);
+    std::vector<SoldierPose> aiSoldierPoses;
+
     for (unsigned g = 0u; g < groups.size(); ++g) {
         const auto& ai = groups[g];
-        if (ai.behavior == 0u) continue;
-        if ((ai.aiFlags & (1u << 22)) != 0u) {
+        if (ai.behavior == igroups::kAiNone) continue;
+        if (fastOnly &&
+            ai.behavior != igroups::kAiRecon &&
+            ai.behavior != igroups::kAiKatyaMove &&
+            ai.behavior != igroups::kAiFurgTransport) {
+            continue;
+        }
+        if ((ai.aiFlags & igroups::kAifHoldFire) != 0u) {
             units_.setGroupHoldFire(g, true, true);
         }
+
+        const bool hasZone1 = (ai.zone1 > 0u && ai.zone1 < locs.size());
+        const bool hasZone2 = (ai.zone2 > 0u && ai.zone2 < locs.size());
+        const int z1x = hasZone1 ? locs[ai.zone1].first : 0;
+        const int z1y = hasZone1 ? locs[ai.zone1].second : 0;
+        const int z2x = hasZone2 ? locs[ai.zone2].first : 0;
+        const int z2y = hasZone2 ? locs[ai.zone2].second : 0;
+        const unsigned targetGrp = ai.aiFlag0 > 0u ? ai.aiFlag0 : ai.aiFlag1;
+
+        if (ai.behavior == igroups::kAiSoldArt) {
+            (void)units_.orderGroupSoldArt(g, ai.aiFlags, zones,
+                                           ai.zone1, z1x, z1y, hasZone1,
+                                           ai.zone2, z2x, z2y, hasZone2, true);
+            continue;
+        }
+        if (ai.behavior == igroups::kAiRecon) {
+            (void)units_.orderGroupRecon(g, ai.aiFlags, zones,
+                                         ai.zone1, z1x, z1y, hasZone1,
+                                         ai.zone2, z2x, z2y, hasZone2, true);
+            continue;
+        }
+        if (ai.behavior == igroups::kAiKatyaMove) {
+            (void)units_.orderGroupKatya(g, ai.aiFlags, zones,
+                                         ai.zone1, z1x, z1y, hasZone1,
+                                         ai.zone2, z2x, z2y, hasZone2, true);
+            continue;
+        }
+        if (ai.behavior == igroups::kAiTrainMove) {
+            (void)units_.orderGroupTrain(g, ai.aiFlags, zones,
+                                         ai.zone1, z1x, z1y, hasZone1,
+                                         ai.zone2, z2x, z2y, hasZone2, tick, true);
+            continue;
+        }
+        if (ai.behavior == igroups::kAiFurgTransport) {
+            (void)units_.orderGroupTransport(g, ai.aiFlags, targetGrp, zones,
+                                             ai.zone1, z1x, z1y, hasZone1,
+                                             ai.zone2, z2x, z2y, hasZone2,
+                                             &aiSoldierPoses, true);
+            continue;
+        }
+
+        const bool hasZoneGateFlags =
+            (ai.aiFlags & (igroups::kAifZoneHaveOwn | igroups::kAifZoneNoEnemy)) != 0u;
+        const auto ownerOpt = hasZoneGateFlags ? units_.groupOwner(g, true) : std::nullopt;
+        const auto zoneOpen = [&](unsigned zIdx, int zx, int zy) {
+            if (!hasZoneGateFlags || !ownerOpt) return true;
+            return units_.checkZoneGate(zones, zIdx, zx, zy, *ownerOpt, ai.aiFlags,
+                                        igroups::kAifZoneHaveOwn, igroups::kAifZoneNoEnemy);
+        };
+
         std::uint32_t z = 0u;
-        if (ai.zone1 > 0u && ai.zone1 < locs.size() &&
-            ai.zone2 > 0u && ai.zone2 < locs.size() &&
-            ai.zone1 != ai.zone2 && (ai.aiFlags & 1u) != 0u) {
-            z = ((tick / 128u) & 1u) ? ai.zone2 : ai.zone1;
-        } else if (ai.zone1 > 0u && ai.zone1 < locs.size()) {
-            z = ai.zone1;
-        } else if (ai.zone2 > 0u && ai.zone2 < locs.size()) {
-            z = ai.zone2;
+        if (hasZone1 && hasZone2 && ai.zone1 != ai.zone2 && (ai.aiFlags & igroups::kAifRndMove) != 0u) {
+            const bool preferZ2 = ((tick / 128u) & 1u) != 0u;
+            const bool z1Ok = zoneOpen(ai.zone1, z1x, z1y);
+            const bool z2Ok = zoneOpen(ai.zone2, z2x, z2y);
+            if (!z1Ok) units_.stopGroupUnitsMovingTo(g, z1x, z1y, 224.0, true);
+            if (!z2Ok) units_.stopGroupUnitsMovingTo(g, z2x, z2y, 224.0, true);
+            if (preferZ2 && z2Ok) z = ai.zone2;
+            else if (z1Ok) z = ai.zone1;
+            else if (z2Ok) z = ai.zone2;
+        } else if (hasZone1) {
+            if (zoneOpen(ai.zone1, z1x, z1y)) {
+                z = ai.zone1;
+            } else {
+                units_.stopGroupUnitsMovingTo(g, z1x, z1y, 224.0, true);
+                if (hasZone2 && ai.zone2 != ai.zone1 && zoneOpen(ai.zone2, z2x, z2y)) {
+                    z = ai.zone2;
+                }
+            }
+        } else if (hasZone2) {
+            if (zoneOpen(ai.zone2, z2x, z2y)) {
+                z = ai.zone2;
+            } else {
+                units_.stopGroupUnitsMovingTo(g, z2x, z2y, 224.0, true);
+            }
         }
         const bool hasZone = (z > 0u && z < locs.size());
         const int zx = hasZone ? locs[z].first : 0;
         const int zy = hasZone ? locs[z].second : 0;
-        const unsigned targetGrp = ai.aiFlag0 > 0u ? ai.aiFlag0 : ai.aiFlag1;
-        if (ai.behavior == 7u || ai.behavior == 9u) {
+        if (ai.behavior == igroups::kAiFurgHelp || ai.behavior == igroups::kAiGruzReload) {
             if (targetGrp > 0u || hasZone) {
                 (void)units_.orderGroupSupport(g, targetGrp, zx, zy, hasZone, true);
             }
-        } else if (ai.behavior == 3u || ai.behavior == 6u || ai.behavior == 13u) {
+        } else if (ai.behavior == igroups::kAiSoldFollow || ai.behavior == igroups::kAiTankFollow) {
             std::optional<std::pair<int, int>> target;
             if (targetGrp > 0u) target = units_.groupCentroid(targetGrp, true);
             if (!target && hasZone) target = std::pair<int, int>{zx, zy};
@@ -812,6 +887,17 @@ void MissionRunner::stepGroupAiLocked() {
         } else if (hasZone) {
             (void)units_.orderGroupZoneBehavior(g, ai.behavior, ai.aiFlags, zx, zy, true);
         }
+    }
+
+    if (units_.fogDirty_ && units_.fog_) {
+        units_.refreshSpotting(&aiSoldierPoses, true);
+    }
+    if (!aiSoldierPoses.empty()) {
+        mergeSoldierPoses(aiSoldierPoses);
+    }
+    collectVehiclePoses();
+    if (auto snap = units_.takeFogSnapshot()) {
+        fog_ = std::move(snap);
     }
 }
 
@@ -840,8 +926,12 @@ void MissionRunner::stepTickLocked() {
     collect();
     flushScheduledReinforcements();
     if (mpSkirmish_) stepMpSkirmishLocked();
-    if (!mpSkirmish_ && (simTick_ == 1u || (simTick_ & 63u) == 19u)) {
-        stepGroupAiLocked();
+    if (!mpSkirmish_) {
+        if (simTick_ == 1u || (simTick_ & 63u) == 19u) {
+            stepGroupAiLocked(false);
+        } else if ((simTick_ & 15u) == 3u) {
+            stepGroupAiLocked(true);
+        }
     }
 }
 

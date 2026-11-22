@@ -605,7 +605,11 @@ size_t TutorialUnits::unloadVehicles(std::span<const size_t> vehicleIds, std::ve
 bool TutorialUnits::canCaptureVehicle(size_t vehicleIdx, int viewerOwner) const {
     if (vehicleIdx >= vehicles_.size() || viewerOwner < 0 || viewerOwner >= 4) return false;
     const auto& v = vehicles_[vehicleIdx];
-    if (!v.alive || v.hp <= 0 || v.owner != 3 || (multiplayerSymmetry_ && v.hasCrew)) return false;
+    if (!v.alive || v.hp <= 0 || v.isCrate) return false;
+    const bool neutralCapturable = (v.owner == 3) && (!multiplayerSymmetry_ || !v.hasCrew);
+    const bool friendlyUnmanned = !v.hasCrew && isAlliedFor(viewerOwner, v.owner);
+    if (!neutralCapturable && !friendlyUnmanned) return false;
+    if (friendlyUnmanned) return true;
     if (viewerOwner == 0 && !multiplayerSymmetry_) return v.visible;
     return !fog_ || (v.spottedMask & static_cast<std::uint8_t>(1u << viewerOwner)) != 0u;
 }
@@ -1226,7 +1230,12 @@ void TutorialUnits::stepCaptures(std::vector<SoldierPose>& changed) {
         auto& s = soldiers_[i];
         if (s.hp <= 0 || s.embarked || !s.captureVehicleTarget) continue;
         const size_t vid = *s.captureVehicleTarget;
-        if (!canCaptureVehicle(vid, s.owner)) {
+        const bool aiUnmannedTargetOk =
+            (s.owner != 0 && !multiplayerSymmetry_ && vid < vehicles_.size() &&
+             vehicles_[vid].alive && vehicles_[vid].hp > 0 && !vehicles_[vid].isCrate &&
+             !vehicles_[vid].hasCrew &&
+             (vehicles_[vid].owner == 3 || isAlliedFor(s.owner, vehicles_[vid].owner)));
+        if (!aiUnmannedTargetOk && !canCaptureVehicle(vid, s.owner)) {
             s.captureVehicleTarget.reset();
             continue;
         }
@@ -1235,8 +1244,12 @@ void TutorialUnits::stepCaptures(std::vector<SoldierPose>& changed) {
         const int sx = originX_ + su - sv;
         const int sy = (su + sv) / 2;
         if (det::detHypot(double(v.x - sx), double(v.y - sy)) <= 56.0) {
+            const int prevOwner = v.owner;
             v.owner = s.owner;
             v.hasCrew = true;
+            if (prevOwner == 3 && v.group == 0 && s.owner != 0 && !multiplayerSymmetry_) {
+                v.group = s.group;
+            }
             const bool needsQualifiedCrew = v.hasCrewProtection && v.attackCrew >= 2;
             if (s.canBeCrew > 0 || !needsQualifiedCrew) {
                 v.crewHp = v.maxCrewHp;

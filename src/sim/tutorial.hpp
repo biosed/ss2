@@ -8,6 +8,50 @@
 #include <vector>
 
 namespace ss2 {
+namespace igroups {
+// Retail I-GROUPS / CAOF OP(19) low-4-bit behavior IDs (edit3.exe RVA 0xe0d18, 14 x 32B entries).
+inline constexpr std::uint32_t kAiNone          = 0u;  // ai_none
+inline constexpr std::uint32_t kAiRecon         = 1u;  // ai_recon
+inline constexpr std::uint32_t kAiSoldGuard     = 2u;  // ai_sold_guard
+inline constexpr std::uint32_t kAiSoldFollow    = 3u;  // ai_sold_follow
+inline constexpr std::uint32_t kAiSoldArt       = 4u;  // ai_sold_art
+inline constexpr std::uint32_t kAiTankGuard     = 5u;  // ai_tank_guard
+inline constexpr std::uint32_t kAiTankFollow    = 6u;  // ai_tank_follow
+inline constexpr std::uint32_t kAiFurgHelp      = 7u;  // ai_furg_help
+inline constexpr std::uint32_t kAiFurgMove      = 8u;  // ai_furg_move
+inline constexpr std::uint32_t kAiGruzReload    = 9u;  // ai_gruz_reload
+inline constexpr std::uint32_t kAiKatyaMove     = 10u; // ai_katya_move
+inline constexpr std::uint32_t kAiPlaneMove     = 11u; // ai_plane_move
+inline constexpr std::uint32_t kAiTrainMove     = 12u; // ai_train_move
+inline constexpr std::uint32_t kAiFurgTransport = 13u; // ai_furg_transport
+
+// Retail 24-bit aif_* bitmask flags (edit3.exe RVA 0xe0ed8, 24 x 32B entries; OP(19) w0 >> 4).
+inline constexpr std::uint32_t kAifRndMove         = 1u << 0;  // 0x000001 aif_rndmove
+inline constexpr std::uint32_t kAifZoneHaveOwn     = 1u << 1;  // 0x000002 aif_zonehaveown
+inline constexpr std::uint32_t kAifZoneNoEnemy     = 1u << 2;  // 0x000004 aif_zonenoenemy
+inline constexpr std::uint32_t kAifUseObjects      = 1u << 3;  // 0x000008 aif_useobjects
+inline constexpr std::uint32_t kAifRndTarget       = 1u << 4;  // 0x000010 aif_rndtarget
+inline constexpr std::uint32_t kAifGRestrict       = 1u << 5;  // 0x000020 aif_grestrict
+inline constexpr std::uint32_t kAifZRestrict       = 1u << 6;  // 0x000040 aif_zrestrict
+inline constexpr std::uint32_t kAifAtgNoUse        = 1u << 7;  // 0x000080 aif_atgnouse
+inline constexpr std::uint32_t kAifAtgZoneHaveOwn  = 1u << 8;  // 0x000100 aif_atgzonehaveown
+inline constexpr std::uint32_t kAifAtgZoneNoEnemy  = 1u << 9;  // 0x000200 aif_atgzonenoenemy
+inline constexpr std::uint32_t kAifAtgNoMove       = 1u << 10; // 0x000400 aif_atgnomove
+inline constexpr std::uint32_t kAifAtgNoTow        = 1u << 11; // 0x000800 aif_atgnotow
+inline constexpr std::uint32_t kAifAtgNoDrop       = 1u << 12; // 0x001000 aif_atgnodrop
+inline constexpr std::uint32_t kAifGaubNoUse       = 1u << 13; // 0x002000 aif_gaubnouse
+inline constexpr std::uint32_t kAifGaubZoneHaveOwn = 1u << 14; // 0x004000 aif_gaubzonehaveown
+inline constexpr std::uint32_t kAifGaubZoneNoEnemy = 1u << 15; // 0x008000 aif_gaubzonenoenemy
+inline constexpr std::uint32_t kAifGaubNoMove      = 1u << 16; // 0x010000 aif_gaubnomove
+inline constexpr std::uint32_t kAifGaubNoTow       = 1u << 17; // 0x020000 aif_gaubnotow
+inline constexpr std::uint32_t kAifGaubNoDrop      = 1u << 18; // 0x040000 aif_gaubnodrop
+inline constexpr std::uint32_t kAifDomNoUse        = 1u << 19; // 0x080000 aif_domnouse
+inline constexpr std::uint32_t kAifDomAmbush       = 1u << 20; // 0x100000 aif_domambush
+inline constexpr std::uint32_t kAifDomHide         = 1u << 21; // 0x200000 aif_domhide
+inline constexpr std::uint32_t kAifHoldFire        = 1u << 22; // 0x400000 aif_holdfire
+inline constexpr std::uint32_t kAifEzdNoUse        = 1u << 23; // 0x800000 aif_ezdnouse
+}  // namespace igroups
+
 struct MissionEvent {
     enum Kind {
         Dialog, Message, Camera, Marker, Victory, Defeat, Reinforcement, GroupOrder, FogReveal, PlayerTeam,

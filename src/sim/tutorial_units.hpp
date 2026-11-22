@@ -380,11 +380,39 @@ public:
     std::size_t orderZoneEvacuate(std::span<const std::uint8_t> zones, unsigned zone, int mapX, int mapY);
     std::size_t orderGroupMoveLimited(unsigned group, unsigned maxCount, int mapX, int mapY);
     void setGroupHoldFire(unsigned group, bool holdFire, bool onlyNonPlayer = true);
+    std::optional<int> groupOwner(unsigned group, bool onlyNonPlayer = true) const;
     std::optional<std::pair<int, int>> groupCentroid(unsigned group, bool onlyNonPlayer = true) const;
+    bool checkZoneGate(std::span<const std::uint8_t> zones, unsigned zone, int zoneX, int zoneY,
+                       int owner, std::uint32_t aiFlags,
+                       std::uint32_t haveOwnBit, std::uint32_t noEnemyBit) const;
+    void stopGroupUnitsMovingTo(unsigned group, int targetX, int targetY, double radiusPx = 224.0,
+                                bool onlyNonPlayer = true);
     size_t orderGroupZoneBehavior(unsigned group, std::uint32_t behavior, std::uint32_t aiFlags,
                                   int mapX, int mapY, bool onlyNonPlayer = true);
     size_t orderGroupSupport(unsigned group, unsigned targetGroup, int fallbackX, int fallbackY,
                              bool hasFallback, bool onlyNonPlayer = true);
+    size_t orderGroupSoldArt(unsigned group, std::uint32_t aiFlags, std::span<const std::uint8_t> zones,
+                             unsigned zone1, int z1x, int z1y, bool hasZone1,
+                             unsigned zone2, int z2x, int z2y, bool hasZone2,
+                             bool onlyNonPlayer = true);
+    size_t orderGroupRecon(unsigned group, std::uint32_t aiFlags, std::span<const std::uint8_t> zones,
+                           unsigned zone1, int z1x, int z1y, bool hasZone1,
+                           unsigned zone2, int z2x, int z2y, bool hasZone2,
+                           bool onlyNonPlayer = true);
+    size_t orderGroupTransport(unsigned group, std::uint32_t aiFlags, unsigned targetGroup,
+                               std::span<const std::uint8_t> zones,
+                               unsigned zone1, int z1x, int z1y, bool hasZone1,
+                               unsigned zone2, int z2x, int z2y, bool hasZone2,
+                               std::vector<SoldierPose>* outUnloaded = nullptr,
+                               bool onlyNonPlayer = true);
+    size_t orderGroupKatya(unsigned group, std::uint32_t aiFlags, std::span<const std::uint8_t> zones,
+                           unsigned zone1, int z1x, int z1y, bool hasZone1,
+                           unsigned zone2, int z2x, int z2y, bool hasZone2,
+                           bool onlyNonPlayer = true);
+    size_t orderGroupTrain(unsigned group, std::uint32_t aiFlags, std::span<const std::uint8_t> zones,
+                           unsigned zone1, int z1x, int z1y, bool hasZone1,
+                           unsigned zone2, int z2x, int z2y, bool hasZone2,
+                           unsigned tick, bool onlyNonPlayer = true);
     size_t orderAttackGroundVehicles(std::span<const size_t> indices, int mapX, int mapY);
     size_t orderAttackGroundSoldiers(std::span<const size_t> indices, int mapX, int mapY);
     std::optional<unsigned> lastHitTick(unsigned player) const;
