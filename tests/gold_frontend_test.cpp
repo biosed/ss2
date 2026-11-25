@@ -6,10 +6,12 @@
 #include <SDL3/SDL.h>
 #include <png.h>
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -442,6 +444,300 @@ void testFallbackInteraction() {
     check(lfe.state().screen() == ss2::FrontEnd::Screen::SinglePlayer, "Esc from LoadGame returns to SinglePlayer");
 }
 
+struct SyntheticSueSpec {
+    std::string name;
+    std::vector<std::uint8_t> data;
+};
+
+void writeSyntheticSue(const std::filesystem::path& path, const std::vector<SyntheticSueSpec>& entries,
+                       std::uint32_t chunkSize = 256u) {
+    std::filesystem::create_directories(path.parent_path());
+    const auto push32 = [](std::vector<std::uint8_t>& dst, std::uint32_t v) {
+        dst.push_back(static_cast<std::uint8_t>(v & 0xFFu));
+        dst.push_back(static_cast<std::uint8_t>((v >> 8u) & 0xFFu));
+        dst.push_back(static_cast<std::uint8_t>((v >> 16u) & 0xFFu));
+        dst.push_back(static_cast<std::uint8_t>((v >> 24u) & 0xFFu));
+    };
+    const auto makeStoredZlib = [](std::span<const std::uint8_t> raw) {
+        if (raw.size() > 65535u) throw std::runtime_error("stored block > 64K");
+        std::vector<std::uint8_t> z{0x78u, 0x01u, 0x01u};
+        const auto len = static_cast<std::uint16_t>(raw.size());
+        const auto nlen = static_cast<std::uint16_t>(len ^ 0xFFFFu);
+        z.push_back(static_cast<std::uint8_t>(len & 0xFFu));
+        z.push_back(static_cast<std::uint8_t>((len >> 8u) & 0xFFu));
+        z.push_back(static_cast<std::uint8_t>(nlen & 0xFFu));
+        z.push_back(static_cast<std::uint8_t>((nlen >> 8u) & 0xFFu));
+        z.insert(z.end(), raw.begin(), raw.end());
+        std::uint32_t s1 = 1u, s2 = 0u;
+        for (std::uint8_t b : raw) {
+            s1 = (s1 + b) % 65521u;
+            s2 = (s2 + s1) % 65521u;
+        }
+        const std::uint32_t adler = (s2 << 16u) | s1;
+        z.push_back(static_cast<std::uint8_t>((adler >> 24u) & 0xFFu));
+        z.push_back(static_cast<std::uint8_t>((adler >> 16u) & 0xFFu));
+        z.push_back(static_cast<std::uint8_t>((adler >> 8u) & 0xFFu));
+        z.push_back(static_cast<std::uint8_t>(adler & 0xFFu));
+        return z;
+    };
+
+    std::vector<std::uint8_t> dataSec, items, names;
+    std::vector<std::uint32_t> offsets;
+    for (const auto& e : entries) {
+        const auto nameOff = static_cast<std::uint32_t>(names.size());
+        names.insert(names.end(), e.name.begin(), e.name.end());
+        names.push_back(0u);
+        const auto firstIdx = static_cast<std::uint32_t>(offsets.size());
+        offsets.push_back(static_cast<std::uint32_t>(8u + dataSec.size()));
+        for (std::size_t off = 0u; off < e.data.size(); off += chunkSize) {
+            const std::size_t n = std::min<std::size_t>(chunkSize, e.data.size() - off);
+            const auto comp = makeStoredZlib(std::span<const std::uint8_t>(e.data.data() + off, n));
+            dataSec.insert(dataSec.end(), comp.begin(), comp.end());
+            offsets.push_back(static_cast<std::uint32_t>(8u + dataSec.size()));
+        }
+        push32(items, nameOff);
+        push32(items, 8u);
+        push32(items, firstIdx);
+        push32(items, static_cast<std::uint32_t>(e.data.size()));
+        push32(items, chunkSize);
+    }
+    std::vector<std::uint8_t> offBytes;
+    for (std::uint32_t o : offsets) push32(offBytes, o);
+    const auto appendTbl = [&](std::vector<std::uint8_t>& arc, const std::vector<std::uint8_t>& tbl,
+                               std::uint32_t cnt, std::uint32_t width) {
+        const auto comp = makeStoredZlib(tbl);
+        push32(arc, static_cast<std::uint32_t>(comp.size()));
+        push32(arc, cnt);
+        push32(arc, width);
+        arc.insert(arc.end(), comp.begin(), comp.end());
+    };
+    std::vector<std::uint8_t> archive{'F', 'Z', 'F', 'S'};
+    push32(archive, static_cast<std::uint32_t>(dataSec.size()));
+    archive.insert(archive.end(), dataSec.begin(), dataSec.end());
+    appendTbl(archive, items, static_cast<std::uint32_t>(entries.size()), 20u);
+    appendTbl(archive, names, static_cast<std::uint32_t>(names.size()), 1u);
+    appendTbl(archive, offBytes, static_cast<std::uint32_t>(offsets.size()), 4u);
+
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    if (!out || !out.write(reinterpret_cast<const char*>(archive.data()),
+                           static_cast<std::streamsize>(archive.size()))) {
+        throw std::runtime_error("Failed to write synthetic menu_common.sue");
+    }
+}
+
+std::vector<std::uint8_t> makeSyntheticUiPck(std::size_t frameCount, int w, int h,
+                                             const std::vector<std::uint16_t>& perFrameRgb565) {
+    const auto push16 = [](std::vector<std::uint8_t>& dst, std::uint16_t v) {
+        dst.push_back(static_cast<std::uint8_t>(v & 0xFFu));
+        dst.push_back(static_cast<std::uint8_t>((v >> 8u) & 0xFFu));
+    };
+    const auto push32 = [](std::vector<std::uint8_t>& dst, std::uint32_t v) {
+        dst.push_back(static_cast<std::uint8_t>(v & 0xFFu));
+        dst.push_back(static_cast<std::uint8_t>((v >> 8u) & 0xFFu));
+        dst.push_back(static_cast<std::uint8_t>((v >> 16u) & 0xFFu));
+        dst.push_back(static_cast<std::uint8_t>((v >> 24u) & 0xFFu));
+    };
+    std::vector<std::uint8_t> body;
+    std::vector<std::uint32_t> table(frameCount, 0u);
+    const std::size_t hdrBytes = frameCount * 4u;
+    for (std::size_t fi = 0u; fi < frameCount; ++fi) {
+        table[fi] = static_cast<std::uint32_t>(hdrBytes + body.size());
+        push16(body, 0u);
+        push16(body, 0u);
+        push16(body, static_cast<std::uint16_t>(w));
+        push16(body, static_cast<std::uint16_t>(h));
+        body.push_back(0xA5u);
+        const std::uint16_t color = perFrameRgb565[fi % perFrameRgb565.size()];
+        for (int y = 0; y < h; ++y) {
+            std::vector<std::uint8_t> row;
+            int rem = w;
+            while (rem > 0) {
+                const int run = std::min(127, rem);
+                row.push_back(static_cast<std::uint8_t>(0x80u | unsigned(run)));
+                push16(row, color);
+                rem -= run;
+            }
+            push16(body, static_cast<std::uint16_t>(row.size()));
+            body.insert(body.end(), row.begin(), row.end());
+        }
+    }
+    std::vector<std::uint8_t> out;
+    for (std::uint32_t off : table) push32(out, off);
+    out.insert(out.end(), body.begin(), body.end());
+    return out;
+}
+
+std::vector<std::uint8_t> makeSyntheticCursorAni(std::size_t frames, int w, int h) {
+    const auto push16 = [](std::vector<std::uint8_t>& dst, std::uint16_t v) {
+        dst.push_back(static_cast<std::uint8_t>(v & 0xFFu));
+        dst.push_back(static_cast<std::uint8_t>((v >> 8u) & 0xFFu));
+    };
+    const auto push32 = [](std::vector<std::uint8_t>& dst, std::uint32_t v) {
+        dst.push_back(static_cast<std::uint8_t>(v & 0xFFu));
+        dst.push_back(static_cast<std::uint8_t>((v >> 8u) & 0xFFu));
+        dst.push_back(static_cast<std::uint8_t>((v >> 16u) & 0xFFu));
+        dst.push_back(static_cast<std::uint8_t>((v >> 24u) & 0xFFu));
+    };
+    std::vector<std::uint8_t> ani;
+    push32(ani, 0xCA000002u);
+    push32(ani, static_cast<std::uint32_t>(frames));
+    std::vector<std::uint8_t> body;
+    std::vector<std::uint32_t> offs(frames + 1u, 0u);
+    const std::size_t base = 8u + (frames + 1u) * 4u;
+    for (std::size_t fi = 0u; fi < frames; ++fi) {
+        offs[fi] = static_cast<std::uint32_t>(base + body.size());
+        push16(body, 0u);
+        push16(body, 0u);
+        push16(body, static_cast<std::uint16_t>(w));
+        push16(body, static_cast<std::uint16_t>(h));
+        body.push_back(0xA1u);
+        for (int y = 0; y < h; ++y) {
+            push16(body, 2u);
+            body.push_back(static_cast<std::uint8_t>(0x80u | unsigned(w)));
+            body.push_back(static_cast<std::uint8_t>(1u + (fi % 2u)));
+        }
+    }
+    offs[frames] = static_cast<std::uint32_t>(base + body.size());
+    for (std::uint32_t o : offs) push32(ani, o);
+    ani.insert(ani.end(), body.begin(), body.end());
+    return ani;
+}
+
+std::filesystem::path writeSyntheticMenuDir(const std::filesystem::path& dir) {
+    static constexpr std::array<std::uint8_t, 632> kTinyJpeg{
+        0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x00, 0x00, 0x01,
+        0x00, 0x01, 0x00, 0x00, 0xff, 0xdb, 0x00, 0x43, 0x00, 0x08, 0x06, 0x06, 0x07, 0x06, 0x05, 0x08,
+        0x07, 0x07, 0x07, 0x09, 0x09, 0x08, 0x0a, 0x0c, 0x14, 0x0d, 0x0c, 0x0b, 0x0b, 0x0c, 0x19, 0x12,
+        0x13, 0x0f, 0x14, 0x1d, 0x1a, 0x1f, 0x1e, 0x1d, 0x1a, 0x1c, 0x1c, 0x20, 0x24, 0x2e, 0x27, 0x20,
+        0x22, 0x2c, 0x23, 0x1c, 0x1c, 0x28, 0x37, 0x29, 0x2c, 0x30, 0x31, 0x34, 0x34, 0x34, 0x1f, 0x27,
+        0x39, 0x3d, 0x38, 0x32, 0x3c, 0x2e, 0x33, 0x34, 0x32, 0xff, 0xdb, 0x00, 0x43, 0x01, 0x09, 0x09,
+        0x09, 0x0c, 0x0b, 0x0c, 0x18, 0x0d, 0x0d, 0x18, 0x32, 0x21, 0x1c, 0x21, 0x32, 0x32, 0x32, 0x32,
+        0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32,
+        0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32,
+        0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0xff, 0xc0, 0x00,
+        0x11, 0x08, 0x00, 0x08, 0x00, 0x08, 0x03, 0x01, 0x22, 0x00, 0x02, 0x11, 0x01, 0x03, 0x11, 0x01,
+        0xff, 0xc4, 0x00, 0x1f, 0x00, 0x00, 0x01, 0x05, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a,
+        0x0b, 0xff, 0xc4, 0x00, 0xb5, 0x10, 0x00, 0x02, 0x01, 0x03, 0x03, 0x02, 0x04, 0x03, 0x05, 0x05,
+        0x04, 0x04, 0x00, 0x00, 0x01, 0x7d, 0x01, 0x02, 0x03, 0x00, 0x04, 0x11, 0x05, 0x12, 0x21, 0x31,
+        0x41, 0x06, 0x13, 0x51, 0x61, 0x07, 0x22, 0x71, 0x14, 0x32, 0x81, 0x91, 0xa1, 0x08, 0x23, 0x42,
+        0xb1, 0xc1, 0x15, 0x52, 0xd1, 0xf0, 0x24, 0x33, 0x62, 0x72, 0x82, 0x09, 0x0a, 0x16, 0x17, 0x18,
+        0x19, 0x1a, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3a, 0x43,
+        0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4a, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x63,
+        0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6a, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78, 0x79, 0x7a, 0x83,
+        0x84, 0x85, 0x86, 0x87, 0x88, 0x89, 0x8a, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97, 0x98, 0x99, 0x9a,
+        0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7, 0xa8, 0xa9, 0xaa, 0xb2, 0xb3, 0xb4, 0xb5, 0xb6, 0xb7, 0xb8,
+        0xb9, 0xba, 0xc2, 0xc3, 0xc4, 0xc5, 0xc6, 0xc7, 0xc8, 0xc9, 0xca, 0xd2, 0xd3, 0xd4, 0xd5, 0xd6,
+        0xd7, 0xd8, 0xd9, 0xda, 0xe1, 0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xe9, 0xea, 0xf1, 0xf2,
+        0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xff, 0xc4, 0x00, 0x1f, 0x01, 0x00, 0x03, 0x01,
+        0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x02,
+        0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0xff, 0xc4, 0x00, 0xb5, 0x11, 0x00, 0x02,
+        0x01, 0x02, 0x04, 0x04, 0x03, 0x04, 0x07, 0x05, 0x04, 0x04, 0x00, 0x01, 0x02, 0x77, 0x00, 0x01,
+        0x02, 0x03, 0x11, 0x04, 0x05, 0x21, 0x31, 0x06, 0x12, 0x41, 0x51, 0x07, 0x61, 0x71, 0x13, 0x22,
+        0x32, 0x81, 0x08, 0x14, 0x42, 0x91, 0xa1, 0xb1, 0xc1, 0x09, 0x23, 0x33, 0x52, 0xf0, 0x15, 0x62,
+        0x72, 0xd1, 0x0a, 0x16, 0x24, 0x34, 0xe1, 0x25, 0xf1, 0x17, 0x18, 0x19, 0x1a, 0x26, 0x27, 0x28,
+        0x29, 0x2a, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3a, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4a,
+        0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6a,
+        0x73, 0x74, 0x75, 0x76, 0x77, 0x78, 0x79, 0x7a, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88, 0x89,
+        0x8a, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97, 0x98, 0x99, 0x9a, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7,
+        0xa8, 0xa9, 0xaa, 0xb2, 0xb3, 0xb4, 0xb5, 0xb6, 0xb7, 0xb8, 0xb9, 0xba, 0xc2, 0xc3, 0xc4, 0xc5,
+        0xc6, 0xc7, 0xc8, 0xc9, 0xca, 0xd2, 0xd3, 0xd4, 0xd5, 0xd6, 0xd7, 0xd8, 0xd9, 0xda, 0xe2, 0xe3,
+        0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xe9, 0xea, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa,
+        0xff, 0xda, 0x00, 0x0c, 0x03, 0x01, 0x00, 0x02, 0x11, 0x03, 0x11, 0x00, 0x3f, 0x00, 0xe3, 0xa8,
+        0xa2, 0x8a, 0xe0, 0x39, 0x8f, 0xff, 0xd9
+    };
+    const std::vector<std::uint8_t> jpeg(kTinyJpeg.begin(), kTinyJpeg.end());
+    std::vector<std::uint8_t> curCol(1024u, 0u);
+    curCol[2] = 0xFEu; // opaque 0xa1 marker
+    curCol[4] = 0x00u; curCol[5] = 0xF8u; curCol[6] = 0x00u; // index 1 = red
+    curCol[8] = 0xE0u; curCol[9] = 0x07u; curCol[10] = 0x00u; // index 2 = green
+
+    std::vector<std::uint16_t> swatchColors(36u, 0x7BEFu);
+    swatchColors[9] = 0x07E0u; swatchColors[10] = 0x07E0u;   // British = green
+    swatchColors[21] = 0x39E7u; swatchColors[22] = 0x39E7u;  // German = dark olive
+
+    std::vector<std::uint8_t> backPcm(640u, 0x12u);
+    std::vector<std::uint8_t> briefPcm(768u, 0x34u);
+
+    std::filesystem::remove_all(dir);
+    writeSyntheticSue(dir / "menu_common.sue", {
+        {"mainbk000.jpg", jpeg},
+        {"brfbk000.jpg", jpeg},
+        {"ramka.pck", makeSyntheticUiPck(8u, 5, 5, {0xC618u})},
+        {"speedbar.pck", makeSyntheticUiPck(1u, 124, 11, {0x4208u})},
+        {"speed_bt.pck", makeSyntheticUiPck(2u, 21, 13, {0xFFE0u, 0xF800u})},
+        {"rombik.pck", makeSyntheticUiPck(11u, 25, 14, {0x2104u, 0x2104u, 0x2104u, 0x2104u, 0x2104u,
+                                                       0x2104u, 0x2104u, 0x2104u, 0x2104u, 0x2104u, 0x07E0u})},
+        {"colors_bt.pck", makeSyntheticUiPck(36u, 17, 17, swatchColors)},
+        {"sp3_rb.pck", makeSyntheticUiPck(1u, 148, 74, {0x3B06u})},
+        {"MENU_CUR.ANI", makeSyntheticCursorAni(4u, 8, 8)},
+        {"MENU_CUR.COL", curCol},
+        {"backwav", backPcm},
+        {"briefing", briefPcm},
+    });
+    return dir;
+}
+
+void testSyntheticMenuSueWidgets() {
+    const auto synDir = std::filesystem::temp_directory_path() / "ss2_gold_fe_syn_widgets";
+    writeSyntheticMenuDir(synDir);
+
+    const auto menuSue = synDir / "menu_common.sue";
+    check(ss2::assets::sueEntrySize(menuSue, "BACKWAV") == 640u, "synthetic sueEntrySize backwav");
+    check(ss2::assets::sueEntrySize(menuSue, "briefing") == 768u, "synthetic sueEntrySize briefing");
+    const auto slice = ss2::assets::readSueEntryRange(menuSue, "backwav", 200u, 150u);
+    check(slice.size() == 150u && std::all_of(slice.begin(), slice.end(), [](std::uint8_t v) { return v == 0x12u; }),
+          "synthetic readSueEntryRange cross-chunk slice");
+
+    ss2::GoldFrontEnd fe(nullptr, synDir, 0);
+    check(fe.hasMenuAssets(), "synthetic menu_common.sue loaded");
+    check(fe.hasRetailWidgets(), "synthetic GoldFrontEnd loaded ramka/speedbar/speed_bt/rombik/colors_bt/sp3_rb");
+    check(fe.hasMenuMusic(), "synthetic GoldFrontEnd indexed backwav & briefing music");
+    check(fe.activeMusicTrack() == "backwav", "GoldFrontEnd starts on backwav menu music");
+
+    // Music state machine: MainMenu ("backwav") -> Options mute ("") -> Cancel ("backwav")
+    // -> SingleMissions ("backwav") -> Briefing ("briefing") -> Launch ("").
+    fe.handleKey(SDLK_O);
+    check(fe.activeMusicTrack() == "backwav", "Options preserves backwav before mute");
+    // Toggle opt_music_mute (row idx 4: y=94+4*42+4=266..294)
+    fe.handleMouseDown(674.0, 280.0, 1);
+    check(fe.activeMusicTrack().empty(), "Options mute live-stops menu music");
+    fe.handleKey(SDLK_ESCAPE);
+    check(fe.activeMusicTrack() == "backwav", "Cancel in Options restores menu music");
+
+    fe.setMissions(makeSyntheticMissions(3));
+    fe.handleMouseDown(188.0, 128.0, 1);  // Single Player
+    fe.handleMouseDown(186.0, 263.0, 1);  // Single Missions
+    check(fe.state().screen() == ss2::FrontEnd::Screen::SingleMissions, "synthetic entered SingleMissions");
+
+    // Overviewless mission uses sp3_rb.pck olive diamond plate instead of solid black diamond.
+    std::vector<std::uint8_t> withPlate, fallbackBuf;
+    fe.renderToBuffer(1280, 720, withPlate);
+    ss2::GoldFrontEnd emptyFe(nullptr, {});
+    emptyFe.setMissions(makeSyntheticMissions(3));
+    emptyFe.handleMouseDown(188.0, 128.0, 1);
+    emptyFe.handleMouseDown(186.0, 263.0, 1);
+    emptyFe.renderToBuffer(1280, 720, fallbackBuf);
+    const auto st = ss2::GoldFrontEnd::computeStage(1280, 720);
+    // Center of SingleMissions overview diamond at stage (604, 396.5): sp3_rb olive vs fallback dark.
+    const int cx = int(st.x + 604.0 * st.scale), cy = int(st.y + 396.0 * st.scale);
+    const std::size_t off = (std::size_t(cy) * 1280u + std::size_t(cx)) * 4u;
+    check(withPlate[off + 1] > fallbackBuf[off + 1] + 20u,
+          "sp3_rb.pck fills overviewless mission diamond with olive plate");
+
+    fe.handleKey(SDLK_RETURN);  // Briefing
+    check(fe.state().screen() == ss2::FrontEnd::Screen::Briefing && fe.activeMusicTrack() == "briefing",
+          "Briefing switches menu music to briefing track");
+    fe.handleKey(SDLK_ESCAPE);
+    check(fe.activeMusicTrack() == "backwav", "Leaving Briefing restores backwav");
+    fe.handleKey(SDLK_RETURN);
+    fe.handleKey(SDLK_RETURN);  // Launch
+    check(fe.state().screen() == ss2::FrontEnd::Screen::Launch && fe.activeMusicTrack().empty(),
+          "Launching mission stops menu music");
+
+    std::filesystem::remove_all(synDir);
+}
+
 void testRetailGoldAssets(const std::filesystem::path& gameDir) {
     const auto menuSue = ss2::assets::resolveCaseInsensitivePath(gameDir, "menu_common.sue");
     check(std::filesystem::exists(menuSue), "menu_common.sue exists");
@@ -505,7 +801,11 @@ void testRetailGoldAssets(const std::filesystem::path& gameDir) {
         pckDims("speed_bt.pck", 2, 21, 13);
         pckDims("rombik.pck", 11, 25, 14);
         pckDims("colors_bt.pck", 36, 17, 17);
-        check(fe.hasRetailWidgets(), "retail ramka/speedbar/speed_bt/rombik/colors_bt widgets loaded");
+        pckDims("sp3_rb.pck", 1, 148, 74);
+        check(fe.hasRetailWidgets(), "retail ramka/speedbar/speed_bt/rombik/colors_bt/sp3_rb widgets loaded");
+        check(fe.hasMenuMusic() && fe.activeMusicTrack() == "backwav", "retail backwav and briefing tracks ready");
+        check(ss2::assets::readSueEntryRange(menuSue, "backwav", 16000u, 8192u).size() == 8192u,
+              "retail streamed backwav range read");
 
         const auto stage = ss2::GoldFrontEnd::computeStage(1280, 720);
         // Count differing pixels inside a stage-space rectangle.
@@ -930,7 +1230,12 @@ void testVulkanWindowOverlay(bool validate, const std::filesystem::path& gameDir
         check(!headlessPm.hasMenuCursor(), "headless GoldPostMissionScreen hasMenuCursor=false");
     }
     ss2::GoldFrontEnd fe(win, gameDir, 0);
-    check(fe.hasMenuCursor(), "live retail GoldFrontEnd loads 21-frame MENU_CUR.ANI/.COL cursor");
+    if (!gameDir.empty()) {
+        check(fe.hasMenuCursor(), "live retail GoldFrontEnd loads 21-frame MENU_CUR.ANI/.COL cursor");
+        check(fe.hasMenuMusic(), "live retail GoldFrontEnd indexed backwav and briefing tracks");
+    } else {
+        check(!fe.hasMenuCursor(), "empty gameDir GoldFrontEnd hasMenuCursor=false");
+    }
     fe.setMissions(makeSyntheticMissions(3));
     fe.setCampaigns(makeSyntheticCampaigns());
     fe.setMultiplayerMissions(makeSyntheticMissions(3));
@@ -991,7 +1296,11 @@ void testVulkanWindowOverlay(bool validate, const std::filesystem::path& gameDir
     winStats.hasNextCampaign = true;
     winStats.nextCampaignTitle = "2. Breakout";
     postStats.open(winStats, false);
-    check(postStats.hasMenuCursor(), "live retail GoldPostMissionScreen loads MENU_CUR.ANI/.COL cursor");
+    if (!gameDir.empty()) {
+        check(postStats.hasMenuCursor(), "live retail GoldPostMissionScreen loads MENU_CUR.ANI/.COL cursor");
+    } else {
+        check(!postStats.hasMenuCursor(), "empty gameDir GoldPostMissionScreen hasMenuCursor=false");
+    }
     postStats.draw(renderer);
     renderer.present(empty);
 
@@ -1004,12 +1313,40 @@ void testVulkanWindowOverlay(bool validate, const std::filesystem::path& gameDir
     winStats.starRating = 0;
     winStats.hasNextCampaign = false;
     postStats.open(winStats, false);
-    check(postStats.hasMenuCursor(), "live retail GoldPostMissionScreen loads MENU_CUR.ANI/.COL cursor");
+    if (!gameDir.empty()) {
+        check(postStats.hasMenuCursor(), "live retail GoldPostMissionScreen loads MENU_CUR.ANI/.COL cursor");
+    } else {
+        check(!postStats.hasMenuCursor(), "empty gameDir GoldPostMissionScreen hasMenuCursor=false");
+    }
     postStats.draw(renderer);
     renderer.present(empty);
 
     postStats.clear(renderer);
     renderer.present(empty);
+
+    // Asset-free windowed test of MENU_CUR.ANI/.COL cursor + backwav/briefing streaming over Vulkan.
+    {
+        const auto synDir = std::filesystem::temp_directory_path() / "ss2_gold_fe_syn_vulkan";
+        writeSyntheticMenuDir(synDir);
+        {
+            ss2::GoldFrontEnd synFe(win, synDir, 0);
+            check(synFe.hasMenuCursor(), "synthetic windowed GoldFrontEnd loads MENU_CUR.ANI/.COL");
+            check(synFe.hasMenuMusic() && synFe.activeMusicTrack() == "backwav",
+                  "synthetic windowed GoldFrontEnd activates backwav");
+            synFe.setMissions(makeSyntheticMissions(2));
+            synFe.draw(renderer);
+            renderer.present(empty);
+            synFe.handleKey(SDLK_S);
+            synFe.handleKey(SDLK_S);
+            synFe.handleKey(SDLK_RETURN);
+            check(synFe.activeMusicTrack() == "briefing",
+                  "synthetic windowed GoldFrontEnd switches to briefing music");
+            synFe.advance(std::chrono::milliseconds(50));
+            synFe.draw(renderer);
+            renderer.present(empty);
+        }
+        std::filesystem::remove_all(synDir);
+    }
 
     check(report.errors.load() == 0,
           "Zero Vulkan validation errors on GoldFrontEnd, GoldLoadingScreen, and GoldPostMissionScreen overlays");
@@ -1255,6 +1592,7 @@ int main(int argc, char** argv) try {
 
     testCoordinateMapping();
     testFallbackInteraction();
+    testSyntheticMenuSueWidgets();
     testLoadingScreenFallback();
     testPostMissionScreenFallback();
 

@@ -596,7 +596,7 @@ void GoldFrontEnd::renderMultiplayer(const RenderEnv& env) {
         if (const auto it = assets_->overviews.find(m.path); it != assets_->overviews.end()) {
             overview = it->second.get();
         }
-        drawDiamondOverview(cr, overview, 504.0, 344.0, 200.0, 104.0, true);
+        drawDiamondOverview(cr, assets_->overviewOrPlate(overview), 504.0, 344.0, 200.0, 104.0, true);
         std::string sizeStr = tr("Size:") + "  " + std::to_string(m.width) + "x" + std::to_string(m.height);
         if (m.scheme == 2) sizeStr += "  (Beach)";
         else if (m.width > 0) sizeStr += "  (Summer)";

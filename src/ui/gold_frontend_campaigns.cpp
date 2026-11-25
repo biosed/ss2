@@ -875,7 +875,7 @@ void GoldFrontEnd::renderCampaigns(const RenderEnv& env) {
             if (const auto it = assets_->overviews.find(pm.path); it != assets_->overviews.end()) {
                 overview = it->second.get();
             }
-            drawDiamondOverview(cr, overview, 482.0, 304.0, 224.0, 117.0, true);
+            drawDiamondOverview(cr, assets_->overviewOrPlate(overview), 482.0, 304.0, 224.0, 117.0, true);
 
             std::string sizeStr = tr("Size:") + "  " + std::to_string(pm.width) + "x" + std::to_string(pm.height);
             if (pm.scheme == 2) sizeStr += "  (Beach)";
@@ -986,7 +986,7 @@ void GoldFrontEnd::renderMissionBrowserScreen(const RenderEnv& env) {
             if (const auto it = assets_->overviews.find(m.path); it != assets_->overviews.end()) {
                 overview = it->second.get();
             }
-            drawDiamondOverview(cr, overview, 492.0, 338.0, 224.0, 117.0, true);
+            drawDiamondOverview(cr, assets_->overviewOrPlate(overview), 492.0, 338.0, 224.0, 117.0, true);
 
             std::string sizeStr = tr("Size:") + "  " + std::to_string(m.width) + "x" + std::to_string(m.height);
             if (m.scheme == 2) sizeStr += "  (Beach)";
@@ -1098,8 +1098,8 @@ void GoldFrontEnd::renderBriefing(const RenderEnv& env) {
         }
         cairo_set_source_rgb(cr, 8.0 / 255.0, 10.0 / 255.0, 6.0 / 255.0);
         cairo_paint(cr);
-        if (overview) {
-            drawSurfaceStretched(cr, overview, 12.0, 184.0,
+        if (auto* plateOrOverview = assets_->overviewOrPlate(overview)) {
+            drawSurfaceStretched(cr, plateOrOverview, 12.0, 184.0,
                                  double(assets::kBriefingOverlayWidth),
                                  double(assets::kBriefingOverlayHeight));
         }
@@ -1116,7 +1116,7 @@ void GoldFrontEnd::renderBriefing(const RenderEnv& env) {
             cairo_restore(cr);
         }
     } else {
-        drawDiamondOverview(cr, overview, 15.0, 187.0, 764.0, 380.0,
+        drawDiamondOverview(cr, assets_->overviewOrPlate(overview), 15.0, 187.0, 764.0, 380.0,
                             assets_->nbramkaFrame.surface == nullptr);
     }
 

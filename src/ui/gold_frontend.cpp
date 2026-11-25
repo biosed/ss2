@@ -406,9 +406,11 @@ GoldFrontEnd::GoldFrontEnd(SDL_Window* window, const std::filesystem::path& game
     loadAssets(fixedBgIndex);
     loadCreditsText();
     ensureFocusedValid();
+    syncMenuMusic();
 }
 
 GoldFrontEnd::~GoldFrontEnd() {
+    stopMenuMusic();
     if (assets_) {
         assets_->menuCursor.restore();
     }
@@ -427,9 +429,18 @@ bool GoldFrontEnd::hasRetailWidgets() const {
     for (const auto& f : assets_->ramka) {
         if (!f.surface) return false;
     }
-    return assets_->speedBar.surface && assets_->speedThumb[0].surface && assets_->speedThumb[1].surface &&
+    return assets_->diamondPlate.surface &&
+           assets_->speedBar.surface && assets_->speedThumb[0].surface && assets_->speedThumb[1].surface &&
            assets_->rombik[0].surface && assets_->rombik[1].surface &&
            assets_->colorSwatch[0].surface && assets_->colorSwatch[22].surface;
+}
+
+bool GoldFrontEnd::hasMenuMusic() const {
+    return assets_ && assets_->backwavBytes >= 4u && assets_->briefingMusicBytes >= 4u;
+}
+
+std::string_view GoldFrontEnd::activeMusicTrack() const {
+    return assets_ ? std::string_view(assets_->activeMusicEntry) : std::string_view{};
 }
 
 bool GoldFrontEnd::hasCreditsArt() const {
@@ -445,6 +456,7 @@ void GoldFrontEnd::loadAssets(std::optional<int> fixedBgIndex) {
     const auto menuSue = assets::resolveCaseInsensitivePath(gameDir_, "menu_common.sue");
     std::error_code ec;
     if (!std::filesystem::exists(menuSue, ec)) return;
+    assets_->menuSuePath = menuSue;
 
     int chosen = fixedBgIndex.value_or(-1);
     if (chosen < 0 || chosen > 68) {
@@ -470,6 +482,7 @@ void GoldFrontEnd::loadAssets(std::optional<int> fixedBgIndex) {
     assets_->briefingBg = loadBg("brfbk000.jpg");
 
     tryLoadPckSlot(menuSue, "nbramka_bk.pck", 0, true, assets_->nbramkaFrame);
+    tryLoadPckSlot(menuSue, "sp3_rb.pck", 0, true, assets_->diamondPlate);
     tryLoadPckSlot(menuSue, "CREDITS.PCK", 0, false, assets_->creditsBg);
     tryLoadPckSlot(menuSue, "rg_bt.pck", 1, false, assets_->ratingsDropdownBtn);
     try {
@@ -517,6 +530,9 @@ void GoldFrontEnd::loadAssets(std::optional<int> fixedBgIndex) {
         }
     } catch (...) {
     }
+
+    assets_->backwavBytes = assets::sueEntrySize(menuSue, "backwav").value_or(0u) & ~std::size_t(3u);
+    assets_->briefingMusicBytes = assets::sueEntrySize(menuSue, "briefing").value_or(0u) & ~std::size_t(3u);
 
     assets_->loadedMenuSue = assets_->mainBg != nullptr || assets_->briefingBg != nullptr;
     if (window_ != nullptr) {
@@ -793,6 +809,7 @@ void GoldFrontEnd::onScreenChanged(FrontEnd::Screen previous) {
         dirty_ = true;
     }
     syncNoticeFromState();
+    syncMenuMusic();
 }
 
 void GoldFrontEnd::ensureSelectionVisible() {
@@ -1351,6 +1368,7 @@ void GoldFrontEnd::handleEvent(const SDL_Event& event) {
 
 void GoldFrontEnd::advance(std::chrono::nanoseconds dt) {
     if (window_ && assets_) assets_->menuCursor.apply();
+    syncMenuMusic();
     if (noticeRemaining_.count() > 0) {
         if (dt >= noticeRemaining_) {
             noticeRemaining_ = {};
@@ -1373,6 +1391,116 @@ void GoldFrontEnd::advance(std::chrono::nanoseconds dt) {
             dirty_ = true;
         }
     }
+}
+
+void GoldFrontEnd::stopMenuMusic() {
+    if (!assets_) return;
+    assets_->activeMusicEntry.clear();
+    assets_->musicReadOffset = 0u;
+    if (assets_->musicAudioStream) {
+        SDL_ClearAudioStream(assets_->musicAudioStream);
+    }
+}
+
+void GoldFrontEnd::pumpMenuMusic() {
+    if (!assets_ || window_ == nullptr || assets_->activeMusicEntry.empty() ||
+        assets_->menuSuePath.empty()) {
+        return;
+    }
+    const std::size_t trackBytes = (assets_->activeMusicEntry == "briefing")
+        ? assets_->briefingMusicBytes
+        : assets_->backwavBytes;
+    if (trackBytes < 4u) return;
+
+    if (!SDL_WasInit(SDL_INIT_AUDIO)) {
+        if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) return;
+    }
+    constexpr SDL_AudioSpec kDstSpec{SDL_AUDIO_S16, 2, 48000};
+    constexpr SDL_AudioSpec kSrcSpec{SDL_AUDIO_S16, 2, 22050};
+    if (!assets_->musicAudioDev) {
+        assets_->musicAudioDev = SDL_OpenAudioDevice(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &kDstSpec);
+        if (!assets_->musicAudioDev) return;
+    }
+    if (!assets_->musicAudioStream) {
+        assets_->musicAudioStream = SDL_CreateAudioStream(&kSrcSpec, &kDstSpec);
+        if (!assets_->musicAudioStream ||
+            !SDL_BindAudioStream(assets_->musicAudioDev, assets_->musicAudioStream)) {
+            if (assets_->musicAudioStream) {
+                SDL_DestroyAudioStream(assets_->musicAudioStream);
+                assets_->musicAudioStream = nullptr;
+            }
+            return;
+        }
+    }
+
+    const UserSettings& cfg = (fe_.screen() == FrontEnd::Screen::Options) ? optionsDraft_ : settings_;
+    const bool voiceSpeaking = (assets_->activeMusicEntry == "briefing" &&
+                                assets_->briefAudioStream != nullptr &&
+                                !briefPaused_ &&
+                                SDL_GetAudioStreamQueued(assets_->briefAudioStream) > 0);
+    const float gain = std::clamp(cfg.musicVolume, 0.0f, 1.0f) * (voiceSpeaking ? 0.45f : 1.0f);
+    SDL_SetAudioStreamGain(assets_->musicAudioStream, gain);
+    SDL_ResumeAudioDevice(assets_->musicAudioDev);
+
+    constexpr int kLowWaterBytes = 96000;
+    constexpr int kHighWaterBytes = 144000;
+    constexpr std::size_t kSliceBytes = 65536u;
+    for (int iter = 0; iter < 3; ++iter) {
+        const int queued = SDL_GetAudioStreamQueued(assets_->musicAudioStream);
+        if (queued >= kHighWaterBytes || (iter > 0 && queued >= kLowWaterBytes)) break;
+        if (assets_->musicReadOffset >= trackBytes) assets_->musicReadOffset = 0u;
+        const std::size_t want = (std::min(kSliceBytes, trackBytes - assets_->musicReadOffset)) & ~std::size_t(3u);
+        if (want < 4u) {
+            assets_->musicReadOffset = 0u;
+            continue;
+        }
+        assets::Bytes pcm;
+        try {
+            pcm = assets::readSueEntryRange(assets_->menuSuePath, assets_->activeMusicEntry,
+                                            assets_->musicReadOffset, want);
+        } catch (...) {
+            stopMenuMusic();
+            return;
+        }
+        const std::size_t aligned = pcm.size() & ~std::size_t(3u);
+        if (aligned < 4u) {
+            assets_->musicReadOffset = 0u;
+            break;
+        }
+        (void)SDL_PutAudioStreamData(assets_->musicAudioStream, pcm.data(), static_cast<int>(aligned));
+        assets_->musicReadOffset = (assets_->musicReadOffset + aligned) % trackBytes;
+    }
+}
+
+void GoldFrontEnd::syncMenuMusic() {
+    if (!assets_) return;
+    const auto screen = fe_.screen();
+    const UserSettings& cfg = (screen == FrontEnd::Screen::Options) ? optionsDraft_ : settings_;
+    const bool terminal = (screen == FrontEnd::Screen::Launch ||
+                           screen == FrontEnd::Screen::LaunchReplay ||
+                           screen == FrontEnd::Screen::LaunchSave ||
+                           screen == FrontEnd::Screen::LaunchMultiplayer ||
+                           screen == FrontEnd::Screen::Quit);
+    std::string desired;
+    if (!terminal && !cfg.musicMuted && cfg.musicVolume > 0.001f) {
+        if (screen == FrontEnd::Screen::Briefing) {
+            if (assets_->briefingMusicBytes >= 4u) desired = "briefing";
+        } else if (assets_->backwavBytes >= 4u) {
+            desired = "backwav";
+        }
+    }
+    if (desired.empty()) {
+        stopMenuMusic();
+        return;
+    }
+    if (assets_->activeMusicEntry != desired) {
+        assets_->activeMusicEntry = desired;
+        assets_->musicReadOffset = 0u;
+        if (assets_->musicAudioStream) {
+            SDL_ClearAudioStream(assets_->musicAudioStream);
+        }
+    }
+    pumpMenuMusic();
 }
 
 void GoldFrontEnd::renderMainMenu(const RenderEnv& env) {

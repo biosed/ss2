@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cstring>
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -168,49 +169,78 @@ std::shared_ptr<const SueIndex> loadSueIndex(const std::filesystem::path& archiv
     return idx;
 }
 
-std::optional<Bytes> tryReadSueEntry(const std::filesystem::path& archive, std::string_view entry) {
-    std::ifstream file(archive, std::ios::binary);
-    if (!file) throw std::runtime_error("Cannot open SUE archive");
-    const auto header = read(file, 8);
+struct OpenedSue {
+    std::ifstream file;
+    size_t indexStart{};
+    std::shared_ptr<const SueIndex> idx;
+};
+
+OpenedSue openSueArchive(const std::filesystem::path& archive) {
+    OpenedSue out;
+    out.file.open(archive, std::ios::binary);
+    if (!out.file) throw std::runtime_error("Cannot open SUE archive");
+    const auto header = read(out.file, 8);
     if (u32(header, 0) != 0x53465a46) throw std::runtime_error("Missing FZFS signature");
-    const size_t indexStart = 8ull + u32(header, 4);
-    const auto idx = loadSueIndex(archive, file, indexStart);
+    out.indexStart = 8ull + u32(header, 4);
+    out.idx = loadSueIndex(archive, out.file, out.indexStart);
+    return out;
+}
 
-    std::optional<size_t> matchedPos;
+std::optional<size_t> findSueEntryPos(const SueIndex& idx, std::string_view entry) {
     const std::string key(entry);
-    if (const auto it = idx->exactPos.find(key); it != idx->exactPos.end()) {
-        matchedPos = it->second;
-    } else {
-        std::string lower = key;
-        for (char& ch : lower) ch = static_cast<char>(asciiLower(static_cast<unsigned char>(ch)));
-        if (const auto lit = idx->lowerPos.find(lower); lit != idx->lowerPos.end()) {
-            matchedPos = lit->second;
-        }
+    if (const auto it = idx.exactPos.find(key); it != idx.exactPos.end()) {
+        return it->second;
     }
-    if (!matchedPos) return std::nullopt;
+    std::string lower = key;
+    for (char& ch : lower) ch = static_cast<char>(asciiLower(static_cast<unsigned char>(ch)));
+    if (const auto lit = idx.lowerPos.find(lower); lit != idx.lowerPos.end()) {
+        return lit->second;
+    }
+    return std::nullopt;
+}
 
-    const auto info = slice(idx->items, *matchedPos, 20);
+Bytes readSueRangeImpl(OpenedSue& opened, size_t entryPos, size_t byteOffset, size_t maxBytes) {
+    const auto info = slice(opened.idx->items, entryPos, 20);
     const size_t kind = u32(info, 4), first = u32(info, 8), size = u32(info, 12);
     if (size > assetLimit) throw std::runtime_error("SUE entry exceeds reader limit");
-    if (kind == 2) return payload(file, first, size, indexStart);
-    if (kind != 8) throw std::runtime_error("Unsupported SUE storage type");
-    const size_t chunk = u32(info, 16);
-    if (!chunk) throw std::runtime_error("Zero SUE chunk size");
-    const size_t count = (size + chunk - 1) / chunk;
-    if (first >= idx->offsets.size() / 4 || count >= idx->offsets.size() / 4 - first)
-        throw std::runtime_error("Invalid SUE chunk range");
+    if (kind != 2 && kind != 8) throw std::runtime_error("Unsupported SUE storage type");
+    size_t chunk = 0;
+    if (kind == 8) {
+        chunk = u32(info, 16);
+        if (!chunk) throw std::runtime_error("Zero SUE chunk size");
+        const size_t count = (size + chunk - 1) / chunk;
+        if (first >= opened.idx->offsets.size() / 4 || count >= opened.idx->offsets.size() / 4 - first)
+            throw std::runtime_error("Invalid SUE chunk range");
+    }
+    if (byteOffset >= size || maxBytes == 0) return {};
+    const size_t want = std::min(maxBytes, size - byteOffset);
+    if (kind == 2) return payload(opened.file, first + byteOffset, want, opened.indexStart);
+
+    const size_t firstChunk = byteOffset / chunk;
+    const size_t lastChunk = (byteOffset + want - 1) / chunk;
     Bytes result;
-    result.reserve(size);
-    for (size_t i = 0; i < count; ++i) {
-        const size_t start = u32(idx->offsets, 4 * (first + i));
-        const size_t end = u32(idx->offsets, 4 * (first + i + 1));
-        const size_t expected = std::min(chunk, size - result.size());
+    result.reserve(want);
+    for (size_t i = firstChunk; i <= lastChunk; ++i) {
+        const size_t start = u32(opened.idx->offsets, 4 * (first + i));
+        const size_t end = u32(opened.idx->offsets, 4 * (first + i + 1));
+        const size_t chunkOff = i * chunk;
+        const size_t expected = std::min(chunk, size - chunkOff);
         if (end < start || end - start > compressBound(expected))
             throw std::runtime_error("Invalid SUE chunk length");
-        const auto decoded = inflateExact(payload(file, start, end - start, indexStart), expected);
-        result.insert(result.end(), decoded.begin(), decoded.end());
+        const auto decoded = inflateExact(payload(opened.file, start, end - start, opened.indexStart), expected);
+        const size_t sliceBegin = (byteOffset > chunkOff) ? (byteOffset - chunkOff) : 0;
+        const size_t sliceEnd = std::min(decoded.size(), (byteOffset + want) - chunkOff);
+        result.insert(result.end(), decoded.begin() + static_cast<std::ptrdiff_t>(sliceBegin),
+                      decoded.begin() + static_cast<std::ptrdiff_t>(sliceEnd));
     }
     return result;
+}
+
+std::optional<Bytes> tryReadSueEntry(const std::filesystem::path& archive, std::string_view entry) {
+    auto opened = openSueArchive(archive);
+    const auto matchedPos = findSueEntryPos(*opened.idx, entry);
+    if (!matchedPos) return std::nullopt;
+    return readSueRangeImpl(opened, *matchedPos, 0, std::numeric_limits<size_t>::max());
 }
 }
 
@@ -281,6 +311,28 @@ Bytes readSueEntryFallback(const std::vector<std::filesystem::path>& archives,
         if (auto bytes = tryReadSueEntry(resolved, entry)) return *bytes;
     }
     throw std::runtime_error("SUE entry not found in fallback archives: " + std::string(entry));
+}
+
+std::optional<std::size_t> sueEntrySize(const std::filesystem::path& archive, std::string_view entry) {
+    try {
+        const auto opened = openSueArchive(archive);
+        const auto matchedPos = findSueEntryPos(*opened.idx, entry);
+        if (!matchedPos) return std::nullopt;
+        const auto info = slice(opened.idx->items, *matchedPos, 20);
+        const size_t size = u32(info, 12);
+        if (size > assetLimit) return std::nullopt;
+        return size;
+    } catch (...) {
+        return std::nullopt;
+    }
+}
+
+Bytes readSueEntryRange(const std::filesystem::path& archive, std::string_view entry,
+                        std::size_t byteOffset, std::size_t maxBytes) {
+    auto opened = openSueArchive(archive);
+    const auto matchedPos = findSueEntryPos(*opened.idx, entry);
+    if (!matchedPos) throw std::runtime_error("SUE entry not found");
+    return readSueRangeImpl(opened, *matchedPos, byteOffset, maxBytes);
 }
 
 namespace {

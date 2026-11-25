@@ -1132,6 +1132,24 @@ void testSueAndPaths() {
           "readSueEntryFallback falls through to second archive");
     checkThrowsType<std::runtime_error>([&] { (void)readSueEntryFallback(chain, "missing/entry.bin"); },
                                         "readSueEntryFallback throws when entry absent in all archives");
+
+    // sueEntrySize & readSueEntryRange across stored (kind=2) and multi-chunk (kind=8) entries.
+    check(sueEntrySize(archiveA, "data/mixed.txt") == storedExact.size(), "sueEntrySize stored entry");
+    check(sueEntrySize(archiveA, "SPRITES/HERO.PCK") == chunkedPayload.size(), "sueEntrySize case-insensitive kind=8");
+    check(!sueEntrySize(archiveA, "does/not/exist").has_value(), "sueEntrySize missing entry returns nullopt");
+    check(!sueEntrySize(tmp.path / "missing.sue", "data/mixed.txt").has_value(),
+          "sueEntrySize missing archive returns nullopt");
+    check(readSueEntryRange(archiveA, "data/mixed.txt", 2, 4) ==
+              Bytes(storedExact.begin() + 2, storedExact.begin() + 6),
+          "readSueEntryRange kind=2 slice");
+    check(readSueEntryRange(archiveA, "sprites/hero.pck", 900, 1500) ==
+              Bytes(chunkedPayload.begin() + 900, chunkedPayload.begin() + 2400),
+          "readSueEntryRange kind=8 cross-chunk slice");
+    check(readSueEntryRange(archiveA, "sprites/hero.pck", 4950, 200) ==
+              Bytes(chunkedPayload.begin() + 4950, chunkedPayload.end()),
+          "readSueEntryRange kind=8 clamps at EOF");
+    check(readSueEntryRange(archiveA, "sprites/hero.pck", chunkedPayload.size(), 64).empty(),
+          "readSueEntryRange kind=8 past EOF returns empty");
 }
 
 void testOptionalRetailSweep() {

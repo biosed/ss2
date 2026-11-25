@@ -177,9 +177,11 @@ struct GoldFrontEnd::Assets {
 
     gold_ui::Surface mainBg = gold_ui::makeNullSurface();
     gold_ui::Surface briefingBg = gold_ui::makeNullSurface();
+    std::filesystem::path menuSuePath;
     gold_ui::PckSurface creditsBg;
     gold_ui::PckSurface ratingsDropdownBtn;
     gold_ui::PckSurface nbramkaFrame;
+    gold_ui::PckSurface diamondPlate;                 // sp3_rb.pck[0] 148x74 overviewless diamond
     gold_ui::RamkaFrames ramka;                       // ramka.pck[0..7] 5x5 9-slice
     gold_ui::PckSurface speedBar;                     // speedbar.pck[0] 124x11
     std::array<gold_ui::PckSurface, 2> speedThumb;    // speed_bt.pck[0..1] 21x13
@@ -194,10 +196,28 @@ struct GoldFrontEnd::Assets {
     gold_ui::Surface briefOverlay = gold_ui::makeNullSurface();
     SDL_AudioDeviceID briefAudioDev{0};
     SDL_AudioStream* briefAudioStream{nullptr};
+    std::size_t backwavBytes{0};
+    std::size_t briefingMusicBytes{0};
+    std::string activeMusicEntry;
+    std::size_t musicReadOffset{0};
+    SDL_AudioDeviceID musicAudioDev{0};
+    SDL_AudioStream* musicAudioStream{nullptr};
     MenuCursorAnimator menuCursor;
     bool loadedMenuSue{false};
 
+    cairo_surface_t* overviewOrPlate(cairo_surface_t* overview) const noexcept {
+        return overview ? overview : diamondPlate.surface.get();
+    }
+
     ~Assets() {
+        if (musicAudioStream) {
+            SDL_DestroyAudioStream(musicAudioStream);
+            musicAudioStream = nullptr;
+        }
+        if (musicAudioDev) {
+            SDL_CloseAudioDevice(musicAudioDev);
+            musicAudioDev = 0;
+        }
         if (briefAudioStream) {
             SDL_DestroyAudioStream(briefAudioStream);
             briefAudioStream = nullptr;

@@ -5,7 +5,9 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -568,6 +570,160 @@ int main(int argc, char** argv) {
             (void)vfx.step(6.0f);
             if (vfx.activeDecalCount() != 0u) {
                 throw std::runtime_error("Vehicle tread decal did not expire");
+            }
+
+            // Asset-free coverage of combat_vfx.hpp RFC-1950/1951 inflateZlibExact (btype 0/1/2 +
+            // malformed streams) and SueArchiveReader (kind=2 + multi-chunk kind=8) without SS2_PRIVATE_GAME.
+            {
+                using namespace ss2::combat_vfx_detail;
+                const auto makeStoredZlib = [](const std::vector<std::uint8_t>& raw) {
+                    if (raw.size() > 65535u) throw std::runtime_error("stored block > 64K");
+                    std::vector<std::uint8_t> z{0x78u, 0x01u, 0x01u};
+                    const auto len = static_cast<std::uint16_t>(raw.size());
+                    const auto nlen = static_cast<std::uint16_t>(len ^ 0xFFFFu);
+                    z.push_back(static_cast<std::uint8_t>(len & 0xFFu));
+                    z.push_back(static_cast<std::uint8_t>((len >> 8u) & 0xFFu));
+                    z.push_back(static_cast<std::uint8_t>(nlen & 0xFFu));
+                    z.push_back(static_cast<std::uint8_t>((nlen >> 8u) & 0xFFu));
+                    z.insert(z.end(), raw.begin(), raw.end());
+                    std::uint32_t s1 = 1u, s2 = 0u;
+                    for (std::uint8_t b : raw) {
+                        s1 = (s1 + b) % 65521u;
+                        s2 = (s2 + s1) % 65521u;
+                    }
+                    const std::uint32_t adler = (s2 << 16u) | s1;
+                    z.push_back(static_cast<std::uint8_t>((adler >> 24u) & 0xFFu));
+                    z.push_back(static_cast<std::uint8_t>((adler >> 16u) & 0xFFu));
+                    z.push_back(static_cast<std::uint8_t>((adler >> 8u) & 0xFFu));
+                    z.push_back(static_cast<std::uint8_t>(adler & 0xFFu));
+                    return z;
+                };
+
+                // btype=0 stored block
+                const std::vector<std::uint8_t> raw0{'S', 'S', '2', '_', 'Z', 'L', 'I', 'B', 0, 1, 2, 3};
+                const auto z0 = makeStoredZlib(raw0);
+                std::vector<std::uint8_t> out;
+                if (!inflateZlibExact(z0, raw0.size(), out) || out != raw0) {
+                    throw std::runtime_error("inflateZlibExact failed on btype=0 stored block");
+                }
+
+                // btype=1 fixed Huffman + LZ77 back-reference ("ABCD" * 8)
+                static constexpr std::array<std::uint8_t, 14> kZ1{
+                    0x78, 0x01, 0x73, 0x74, 0x72, 0x76, 0x71, 0xc4, 0x83, 0x01, 0x89, 0x20, 0x08, 0x51
+                };
+                if (!inflateZlibExact(kZ1, 32u, out) || out.size() != 32u ||
+                    std::memcmp(out.data(), "ABCDABCDABCDABCD", 16u) != 0) {
+                    throw std::runtime_error("inflateZlibExact failed on btype=1 fixed Huffman stream");
+                }
+
+                // btype=2 dynamic Huffman + LZ77 back-reference (656 bytes)
+                static constexpr std::array<std::uint8_t, 208> kZ2{
+                    0x78, 0x9c, 0xcd, 0x91, 0x81, 0x8d, 0x40, 0x31, 0x08, 0x42, 0x57, 0x60, 0x84, 0x37, 0x02, 0xfb,
+                    0x6f, 0x85, 0x2e, 0x70, 0xc1, 0xfe, 0xbb, 0x19, 0xae, 0x69, 0x6c, 0xa3, 0x15, 0x28, 0x22, 0xc9,
+                    0x8e, 0xd0, 0x6d, 0x44, 0x14, 0x4b, 0x23, 0x29, 0xc4, 0xac, 0x08, 0xc1, 0x7a, 0x8b, 0x86, 0x01,
+                    0x59, 0x5a, 0x70, 0x5e, 0x61, 0x22, 0x6b, 0x0e, 0x84, 0xb4, 0xd2, 0xa7, 0xa6, 0xb7, 0x8d, 0x6c,
+                    0x5a, 0x60, 0xca, 0xd3, 0x80, 0x7c, 0x55, 0x4d, 0x22, 0x65, 0x84, 0xec, 0xa6, 0x83, 0x78, 0xc8,
+                    0x7c, 0x64, 0xd7, 0x50, 0xb6, 0x29, 0x5b, 0x25, 0x62, 0xaf, 0xd0, 0xdd, 0x9b, 0x0e, 0xda, 0xec,
+                    0x61, 0x97, 0x50, 0x86, 0xd9, 0x0f, 0xa5, 0xa0, 0xd1, 0xea, 0x50, 0x4b, 0x0c, 0x4c, 0xd1, 0x6e,
+                    0xb3, 0xfb, 0xa7, 0xc1, 0xac, 0x15, 0x79, 0x8e, 0xb3, 0x8d, 0x7a, 0x7a, 0xe5, 0xaa, 0xa5, 0x32,
+                    0x4b, 0xd5, 0xa7, 0x6d, 0x90, 0x43, 0xb5, 0x6d, 0xee, 0xeb, 0xb9, 0x23, 0xe9, 0x0f, 0xce, 0x92,
+                    0x54, 0xe3, 0x32, 0xda, 0x8f, 0xbe, 0xde, 0x9e, 0x49, 0xf6, 0xe3, 0xaf, 0x75, 0xc5, 0x65, 0x3c,
+                    0x3c, 0xf7, 0xcb, 0xc3, 0xbc, 0x7c, 0x7c, 0x38, 0x7c, 0x76, 0xc9, 0x67, 0xd1, 0x99, 0xdc, 0xc1,
+                    0x2c, 0x13, 0xcc, 0xcd, 0xe8, 0xbc, 0xe6, 0x77, 0x3e, 0xe7, 0x64, 0x71, 0xbe, 0xe9, 0x38, 0xf3,
+                    0xca, 0xef, 0x2f, 0x8f, 0xea, 0x1d, 0x1f, 0xfe, 0xfc, 0x9f, 0xf8, 0x03, 0x3e, 0x23, 0xc5, 0x1d
+                };
+                if (!inflateZlibExact(kZ2, 656u, out) || out.size() != 656u) {
+                    throw std::runtime_error("inflateZlibExact failed on btype=2 dynamic Huffman stream");
+                }
+                static constexpr std::array<std::uint8_t, 6> kTailPat{0x10, 0x20, 0xF1, 0x10, 0x20, 0xF2};
+                for (std::size_t off = 512u; off < 656u; ++off) {
+                    if (out[off] != kTailPat[(off - 512u) % 6u]) {
+                        throw std::runtime_error("inflateZlibExact btype=2 decoded pattern mismatch");
+                    }
+                }
+
+                // Malformed streams: bad header FCHECK, wrong expectedSize, truncated stream.
+                auto badHdr = z0;
+                badHdr[1] ^= 0x01u;
+                if (inflateZlibExact(badHdr, raw0.size(), out) ||
+                    inflateZlibExact(z0, raw0.size() + 1u, out) ||
+                    inflateZlibExact(std::span<const std::uint8_t>(z0.data(), z0.size() - 5u), raw0.size(), out)) {
+                    throw std::runtime_error("inflateZlibExact accepted malformed zlib input");
+                }
+
+                // Synthetic game_common.sue with kind=8 multi-chunk entries for 8 VFX .ani/.col stems.
+                struct SynEntry {
+                    std::string name;
+                    std::vector<std::uint8_t> data;
+                };
+                std::vector<SynEntry> synEntries;
+                for (const char* stem : {"a_v50", "a_v36", "a_v30", "a_v24", "a_v16", "BOOMBOX1", "BOOMBOX2", "BOOMBOX3"}) {
+                    synEntries.push_back({std::string(stem) + ".ani", synAni});
+                    synEntries.push_back({std::string(stem) + ".col", synCol});
+                }
+
+                const auto tmpDir = std::filesystem::temp_directory_path() / "ss2_sprite_pass_syn_vfx";
+                std::filesystem::remove_all(tmpDir);
+                std::filesystem::create_directories(tmpDir);
+                const auto push32V = [](std::vector<std::uint8_t>& dst, std::uint32_t v) {
+                    dst.push_back(static_cast<std::uint8_t>(v & 0xFFu));
+                    dst.push_back(static_cast<std::uint8_t>((v >> 8u) & 0xFFu));
+                    dst.push_back(static_cast<std::uint8_t>((v >> 16u) & 0xFFu));
+                    dst.push_back(static_cast<std::uint8_t>((v >> 24u) & 0xFFu));
+                };
+                std::vector<std::uint8_t> dataSec, items, names;
+                std::vector<std::uint32_t> offsets;
+                constexpr std::uint32_t kSynChunk = 256u;
+                for (const auto& e : synEntries) {
+                    const auto nameOff = static_cast<std::uint32_t>(names.size());
+                    names.insert(names.end(), e.name.begin(), e.name.end());
+                    names.push_back(0u);
+                    const auto firstIdx = static_cast<std::uint32_t>(offsets.size());
+                    offsets.push_back(static_cast<std::uint32_t>(8u + dataSec.size()));
+                    for (std::size_t off = 0u; off < e.data.size(); off += kSynChunk) {
+                        const std::size_t n = std::min<std::size_t>(kSynChunk, e.data.size() - off);
+                        const auto comp = makeStoredZlib(
+                            std::vector<std::uint8_t>(e.data.begin() + static_cast<std::ptrdiff_t>(off),
+                                                       e.data.begin() + static_cast<std::ptrdiff_t>(off + n)));
+                        dataSec.insert(dataSec.end(), comp.begin(), comp.end());
+                        offsets.push_back(static_cast<std::uint32_t>(8u + dataSec.size()));
+                    }
+                    push32V(items, nameOff);
+                    push32V(items, 8u);
+                    push32V(items, firstIdx);
+                    push32V(items, static_cast<std::uint32_t>(e.data.size()));
+                    push32V(items, kSynChunk);
+                }
+                std::vector<std::uint8_t> offBytes;
+                for (std::uint32_t o : offsets) push32V(offBytes, o);
+                const auto appendTbl = [&](std::vector<std::uint8_t>& arc, const std::vector<std::uint8_t>& tbl,
+                                           std::uint32_t cnt, std::uint32_t width) {
+                    const auto comp = makeStoredZlib(tbl);
+                    push32V(arc, static_cast<std::uint32_t>(comp.size()));
+                    push32V(arc, cnt);
+                    push32V(arc, width);
+                    arc.insert(arc.end(), comp.begin(), comp.end());
+                };
+                std::vector<std::uint8_t> archive{'F', 'Z', 'F', 'S'};
+                push32V(archive, static_cast<std::uint32_t>(dataSec.size()));
+                archive.insert(archive.end(), dataSec.begin(), dataSec.end());
+                appendTbl(archive, items, static_cast<std::uint32_t>(synEntries.size()), 20u);
+                appendTbl(archive, names, static_cast<std::uint32_t>(names.size()), 1u);
+                appendTbl(archive, offBytes, static_cast<std::uint32_t>(offsets.size()), 4u);
+
+                std::ofstream outSue(tmpDir / "game_common.sue", std::ios::binary | std::ios::trunc);
+                outSue.write(reinterpret_cast<const char*>(archive.data()),
+                             static_cast<std::streamsize>(archive.size()));
+                outSue.close();
+
+                ss2::CombatVfxSystem synVfx;
+                if (!synVfx.load(tmpDir) || !synVfx.hasRetailAssets() ||
+                    synVfx.bank().clipFrameCount(ss2::CombatVfxClip::ExplosionHuge) != 1u ||
+                    synVfx.bank().clipFrameCount(ss2::CombatVfxClip::CrateBlast3) != 1u) {
+                    std::filesystem::remove_all(tmpDir);
+                    throw std::runtime_error("Synthetic game_common.sue CombatVfxSystem load failed");
+                }
+                std::filesystem::remove_all(tmpDir);
             }
 
             // Optional retail Gold 2.2 game_common.sue verification.

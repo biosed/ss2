@@ -112,8 +112,10 @@ public:
     bool hasMenuAssets() const;
     bool hasMenuCursor() const;
     bool hasCreditsArt() const;
-    // menu_common.sue ramka/speedbar/speed_bt/rombik/colors_bt widgets all decoded.
+    // menu_common.sue ramka/speedbar/speed_bt/rombik/colors_bt/sp3_rb widgets all decoded.
     bool hasRetailWidgets() const;
+    bool hasMenuMusic() const;
+    std::string_view activeMusicTrack() const;
     std::size_t creditsLineCount() const;
     bool hasBriefingMedia() const;
     std::size_t briefingPartCount() const;
@@ -148,6 +150,9 @@ private:
                            bool upHov, bool downHov, bool thumbActive) const;
     std::string hitTestStage(double sx, double sy) const;
     void activateId(const std::string& id);
+    void syncMenuMusic();
+    void pumpMenuMusic();
+    void stopMenuMusic();
     void renderMainMenu(const RenderEnv& env);
 
     // Single Player, Campaigns, Custom Campaigns, Single Missions, Briefing (gold_frontend_campaigns.cpp)

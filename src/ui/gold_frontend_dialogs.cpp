@@ -140,6 +140,7 @@ void GoldFrontEnd::setSettings(const UserSettings& settings) {
         }
     }
     dirty_ = true;
+    syncMenuMusic();
 }
 
 bool GoldFrontEnd::takeSettingsSaved() {
@@ -156,11 +157,13 @@ void GoldFrontEnd::commitOptionsEdit() {
     settings_ = optionsDraft_;
     fe_.setDifficulty(settings_.difficulty);
     settingsSaved_ = true;
+    syncMenuMusic();
 }
 
 void GoldFrontEnd::cancelOptionsEdit() {
     optionsDraft_ = settings_;
     ss2::setLanguage(optionsBackupLanguage_);
+    syncMenuMusic();
 }
 
 void GoldFrontEnd::adjustOption(const std::string& id, int delta) {
@@ -218,6 +221,7 @@ void GoldFrontEnd::adjustOption(const std::string& id, int delta) {
         optionsDraft_.skipIntro = !optionsDraft_.skipIntro;
     }
     dirty_ = true;
+    syncMenuMusic();
 }
 
 std::size_t GoldFrontEnd::ratingsRowCount() const {

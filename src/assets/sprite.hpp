@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <span>
 #include <string_view>
 #include <vector>
@@ -15,6 +16,9 @@ std::filesystem::path resolveCaseInsensitivePath(const std::filesystem::path& ba
 Bytes readSueEntry(const std::filesystem::path& archive, std::string_view entry);
 Bytes readSueEntryFallback(const std::vector<std::filesystem::path>& archives,
                            std::string_view entry);
+std::optional<std::size_t> sueEntrySize(const std::filesystem::path& archive, std::string_view entry);
+Bytes readSueEntryRange(const std::filesystem::path& archive, std::string_view entry,
+                        std::size_t byteOffset, std::size_t maxBytes);
 
 struct SpriteFrame {
     int x, y, width, height;
