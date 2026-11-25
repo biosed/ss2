@@ -97,10 +97,10 @@ jobs:
           PY
           ICD_WIN="$(cygpath -w "$PWD/build/vk-icd/lvp_icd.json")"
           VVL_WIN="$(cygpath -w "$PWD/build/vk-layers/VkLayer_khronos_validation.json")"
-          reg delete 'HKLM\SOFTWARE\Khronos\Vulkan\Drivers' /f 2>/dev/null || true
-          reg add 'HKLM\SOFTWARE\Khronos\Vulkan\Drivers' /v "$ICD_WIN" /t REG_DWORD /d 0 /f
-          reg delete 'HKLM\SOFTWARE\Khronos\Vulkan\ExplicitLayers' /f 2>/dev/null || true
-          reg add 'HKLM\SOFTWARE\Khronos\Vulkan\ExplicitLayers' /v "$VVL_WIN" /t REG_DWORD /d 0 /f
+          MSYS2_ARG_CONV_EXCL='*' reg delete 'HKLM\SOFTWARE\Khronos\Vulkan\Drivers' /f 2>/dev/null || true
+          MSYS2_ARG_CONV_EXCL='*' reg add 'HKLM\SOFTWARE\Khronos\Vulkan\Drivers' /v "$ICD_WIN" /t REG_DWORD /d 0 /f
+          MSYS2_ARG_CONV_EXCL='*' reg delete 'HKLM\SOFTWARE\Khronos\Vulkan\ExplicitLayers' /f 2>/dev/null || true
+          MSYS2_ARG_CONV_EXCL='*' reg add 'HKLM\SOFTWARE\Khronos\Vulkan\ExplicitLayers' /v "$VVL_WIN" /t REG_DWORD /d 0 /f
           export SDL_VIDEO_DRIVER=windows
           export SDL_AUDIODRIVER=dummy
           ctest --test-dir build -E '^missing_validation_layer$' --output-on-failure --no-tests=error 2>&1 | tee ctest.log
