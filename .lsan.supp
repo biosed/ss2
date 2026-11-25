@@ -1,0 +1,3 @@
+# Mesa lavapipe / LLVM JIT singletons from libvulkan_lvp.so unloaded via dlclose on vkDestroyInstance
+leak:<unknown module>
+leak:libvulkan_lvp

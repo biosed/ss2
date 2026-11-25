@@ -28,4 +28,5 @@ if ! compgen -G "/usr/share/vulkan/explicit_layer.d/$layer_json" >/dev/null &&
 fi
 
 export SDL_VIDEO_DRIVER=${SDL_VIDEO_DRIVER:-offscreen}
+export UBSAN_OPTIONS=${UBSAN_OPTIONS:-halt_on_error=1}
 exec ctest --test-dir "$build_dir" -j"$(nproc)" --output-on-failure --no-tests=error "$@"

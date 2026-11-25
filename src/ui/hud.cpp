@@ -631,7 +631,9 @@ void Hud::recordAirSortieTrail(std::uint32_t sortieId, int mapX, int mapY, unsig
     const float spacing = severe ? 11.0f : 18.0f;
     if (st.distAccum >= spacing || (stepDist == 0.0f && tookHit)) {
         st.distAccum = std::fmod(st.distAccum, spacing);
-        const std::uint32_t jitter = hashWeather(sortieId * 2654435761u ^ std::uint32_t(mapX * 73856093 ^ mapY * 19349663));
+        const std::uint32_t jitter = hashWeather(
+            sortieId * 2654435761u ^
+            ((static_cast<std::uint32_t>(mapX) * 73856093u) ^ (static_cast<std::uint32_t>(mapY) * 19349663u)));
         const float jx = (float(jitter & 0xFFu) / 255.0f - 0.5f) * 6.0f;
         const float jy = (float((jitter >> 8u) & 0xFFu) / 255.0f - 0.5f) * 4.0f;
         pushPuff(tailX + jx, tailY + jy, jx * 0.8f, -10.0f - (severe ? 4.0f : 0.0f),
@@ -645,7 +647,10 @@ void Hud::recordAirSortieTrail(std::uint32_t sortieId, int mapX, int mapY, unsig
 void Hud::recordAirCrashTrail(int mapX, int mapY) {
     if (!retail_) return;
     for (int k = 0; k < 6; ++k) {
-        const std::uint32_t h = hashWeather(std::uint32_t(mapX * 31 + mapY * 17 + k * 97));
+        const std::uint32_t h = hashWeather(
+            static_cast<std::uint32_t>(mapX) * 31u +
+            static_cast<std::uint32_t>(mapY) * 17u +
+            static_cast<std::uint32_t>(k) * 97u);
         const float ox = (float(h & 0xFFu) / 255.0f - 0.5f) * 22.0f;
         const float oy = (float((h >> 8u) & 0xFFu) / 255.0f - 0.5f) * 14.0f;
         if (retail_->puffs.size() >= 96u) retail_->puffs.erase(retail_->puffs.begin());

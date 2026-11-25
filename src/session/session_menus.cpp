@@ -667,7 +667,7 @@ void GameSession::doSaveSlot(int slot) {
         std::error_code relEc;
         const auto rel = !gameDir.empty() ? std::filesystem::relative(currentMissionPath, gameDir, relEc)
                                           : std::filesystem::path{};
-        meta.mission = (!relEc && !rel.empty() && !rel.native().starts_with(".."))
+        meta.mission = (!relEc && !rel.empty() && !rel.generic_string().starts_with(".."))
             ? rel.generic_string()
             : currentMissionPath.filename().string();
     } else {
