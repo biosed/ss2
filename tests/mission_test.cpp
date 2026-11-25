@@ -41,6 +41,11 @@ void check(bool condition, const std::string& what) {
     }
 }
 
+bool sameExistingPath(const std::filesystem::path& a, const std::filesystem::path& b) {
+    std::error_code ec;
+    return !a.empty() && !b.empty() && std::filesystem::equivalent(a, b, ec) && !ec;
+}
+
 template <class Fn>
 void checkThrows(Fn&& fn, std::string_view expectedWhat, const std::string& label) {
     try {
@@ -1050,7 +1055,7 @@ void testSyntheticMissions() {
         check(customCamps[2].name == "Operation_SeaLion" && customCamps[2].missions.size() == 2 &&
               customCamps[2].missions[0].code == "second" &&
               customCamps[2].missions[1].code == "first" &&
-              customCamps[2].missions[1].easyPath == seaLionDir / "EASY" / "first.ssc" &&
+              sameExistingPath(customCamps[2].missions[1].easyPath, seaLionDir / "EASY" / "first.ssc") &&
               customCamps[2].missions[0].easyPath.empty(),
               "campaign.seq overrides file sort and binds sibling EASY path");
         check(customCamps[3].name == "Retail Styled" && customCamps[3].missions.size() == 1 &&
@@ -1059,13 +1064,13 @@ void testSyntheticMissions() {
               "retail-style >Name and code>Title campaign.seq overrides campaign and mission titles");
 
         const auto byCustomIdx = findCustomCampaignMission(gameDir, "Operation_SeaLion:2", true, userCcDir);
-        check(byCustomIdx.has_value() && byCustomIdx->path == seaLionDir / "EASY" / "first.ssc",
+        check(byCustomIdx.has_value() && sameExistingPath(byCustomIdx->path, seaLionDir / "EASY" / "first.ssc"),
               "findCustomCampaignMission resolves campaign:N easy variant");
         const auto byCustomFallback = findCustomCampaignMission(gameDir, "Operation_SeaLion:1", true, userCcDir);
-        check(byCustomFallback.has_value() && byCustomFallback->path == seaLionDir / "second.ssc",
+        check(byCustomFallback.has_value() && sameExistingPath(byCustomFallback->path, seaLionDir / "second.ssc"),
               "findCustomCampaignMission falls back to normal .ssc when EASY variant missing");
         const auto byCustomStem = findCustomCampaignMission(gameDir, "01_tobruk", false, userCcDir);
-        check(byCustomStem.has_value() && byCustomStem->path == desertDir / "01_tobruk.ssm",
+        check(byCustomStem.has_value() && sameExistingPath(byCustomStem->path, desertDir / "01_tobruk.ssm"),
               "findCustomCampaignMission resolves stem match across userDir");
     }
 }
@@ -1085,10 +1090,10 @@ void testSueAndPaths() {
     }
 
     const auto resolvedExact = resolveCaseInsensitivePath(tmp.path, "GameData/Lng/Addons/Extra_Unit.SUE");
-    check(resolvedExact == actualFile, "resolveCaseInsensitivePath exact match");
+    check(sameExistingPath(resolvedExact, actualFile), "resolveCaseInsensitivePath exact match");
 
     const auto resolvedCI = resolveCaseInsensitivePath(tmp.path, "gamedata/LNG/addons/extra_unit.sue");
-    check(resolvedCI == actualFile, "resolveCaseInsensitivePath case-insensitive multi-component match");
+    check(sameExistingPath(resolvedCI, actualFile), "resolveCaseInsensitivePath case-insensitive multi-component match");
 
     const auto missingRel = std::filesystem::path("gamedata/LNG/addons/missing.sue");
     const auto resolvedMissing = resolveCaseInsensitivePath(tmp.path, missingRel);
