@@ -103,6 +103,7 @@ constexpr Entry table[] = {
     {"Mission Accomplished!", "Mission accomplie !", "¡Misión cumplida!"},
     // Menus
     {"Resume", "Reprendre", "Reanudar"},
+    {"Enhanced graphics", "Graphismes améliorés", "Gráficos mejorados"},
     {"Smooth terrain", "Terrain lissé", "Terreno suavizado"},
     {"Tracers and flashes", "Traçantes et éclairs de tir", "Trazadoras y fogonazos"},
     {"Music", "Musique", "Música"},

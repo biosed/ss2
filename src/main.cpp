@@ -678,6 +678,7 @@ int main(int argc, char** argv) try {
     std::string campaignQuery;
     int limit = 0;
     bool fourK = false, validate = false, timing = false, preferSoftwareRenderer = false;
+    bool cliClassicGfx = false;
     std::optional<bool> fullscreen;
     bool originalInfantry = false;
     bool autoEngage = true;
@@ -700,7 +701,7 @@ int main(int argc, char** argv) try {
     for (int i = 1; i < argc; ++i) {
         const std::string_view arg(argv[i]);
         if (arg == "--help") {
-            std::cout << "ss2 [--game-dir DIR] [--mod NAME|DIR|INI] [--mission FILE.ssm|NAME|INDEX] [--campaign QUERY] [--overview] [--list-missions] [--list-campaigns] [--list-multiplayer] [--list-mods] [--host PORT | --join HOST:PORT] [--mp-nation NATION] [--mp-players 2|3|4] [--mp-teams ffa|2v2|T0,T1,T2,T3] [--hd-pack DIR] [--original-infantry] [--no-auto-engage] [--difficulty easy|normal|hard] [--record FILE | --replay FILE | --watch-replay FILE | --load-save FILE] [--4k] [--fullscreen | --windowed] [--lang en|fr|es] [--frames N] [--no-movies] [--validate] [--timing]\n"
+            std::cout << "ss2 [--game-dir DIR] [--mod NAME|DIR|INI] [--mission FILE.ssm|NAME|INDEX] [--campaign QUERY] [--overview] [--list-missions] [--list-campaigns] [--list-multiplayer] [--list-mods] [--host PORT | --join HOST:PORT] [--mp-nation NATION] [--mp-players 2|3|4] [--mp-teams ffa|2v2|T0,T1,T2,T3] [--hd-pack DIR] [--original-infantry] [--no-auto-engage] [--classic-gfx] [--difficulty easy|normal|hard] [--record FILE | --replay FILE | --watch-replay FILE | --load-save FILE] [--4k] [--fullscreen | --windowed] [--lang en|fr|es] [--frames N] [--no-movies] [--validate] [--timing]\n"
                          "--game-dir opens Tutorial I (or --mission) from an extracted Gold 2.2 game directory.\n"
                          "--mod NAME|DIR|INI activates a mod (under mods/, Run/, switcher/, ~/.local/share/ss2/mods/, a directory, or a sudtest*.ini file; use 'vanilla' for unmodded).\n"
                          "--list-mods lists discovered mods in the game directory and user mods directory.\n"
@@ -723,8 +724,9 @@ int main(int argc, char** argv) try {
                          "--original-infantry uses the original infantry size. The default is 125%.\n"
                          "--no-auto-engage disables automatic firing on spotted enemies (manual attack orders only).\n"
                          "--software-renderer prefers a Vulkan CPU/software device (e.g. Mesa Lavapipe) over hardware GPUs.\n"
+                         "--classic-gfx disables enhanced Vulkan terrain grading, shadows, selection rings, and additive combat lighting.\n"
                          "--difficulty selects Easy, Normal (default), or Hard gameplay scaling.\n"
-                         "--hd-pack loads an optional 2x HD asset pack (tutorial1_2x.ss2hd) for --game-dir.\n"
+                         "--hd-pack loads an optional 4x/2x HD asset pack directory (or .ss2hd map) for --game-dir.\n"
                          "--lang sets the interface language (English, French or Spanish). The default follows LC_ALL, LC_MESSAGES or LANG. Mission text stays in English.\n";
             return 0;
         } else if (arg == "--game-dir" && i + 1 < argc) gameDir = ss2::pathFromUtf8(argv[++i]);
@@ -785,6 +787,7 @@ int main(int argc, char** argv) try {
         else if (arg == "--validate") validate = true;
         else if (arg == "--timing") timing = true;
         else if (arg == "--software-renderer") preferSoftwareRenderer = true;
+        else if (arg == "--classic-gfx") cliClassicGfx = true;
         else if (arg == "--frames" && i + 1 < argc) {
             const std::string_view n(argv[++i]);
             const auto [end, err] = std::from_chars(n.data(), n.data() + n.size(), limit);
@@ -855,6 +858,7 @@ int main(int argc, char** argv) try {
         return {};
     };
     ss2::UserSettings settings = persistSettings ? ss2::loadUserSettings(settingsPath) : ss2::UserSettings{};
+    if (cliClassicGfx) settings.enhancedGraphics = false;
     if (cliMod) {
         if (ss2::assets::equalsIgnoreCaseAscii(*cliMod, "none") ||
             ss2::assets::equalsIgnoreCaseAscii(*cliMod, "vanilla") ||
@@ -1013,13 +1017,8 @@ int main(int argc, char** argv) try {
         }
     }
     if (!hdPack.empty() && resolveGameDir().empty()) throw std::invalid_argument("--hd-pack requires --game-dir");
-    if (mission.empty() && !limit && !timing) {
-        if (gameDir.empty()) gameDir = resolveGameDir();
-        if (!originalInfantry && !gameDir.empty() && hdPack.empty() && !dataHome.empty()) {
-            auto installed = dataHome / "ss2/hd-pack";
-            if (std::filesystem::is_regular_file(installed / "tutorial1_ground_2x.ss2hd") &&
-                std::filesystem::is_directory(installed / "infantry-art")) hdPack = installed;
-        }
+    if (mission.empty() && !limit && !timing && gameDir.empty()) {
+        gameDir = resolveGameDir();
     }
     if ((!recordPath.empty() || parsedReplay || parsedSave) && gameDir.empty()) {
         gameDir = resolveGameDir();
@@ -1028,6 +1027,14 @@ int main(int argc, char** argv) try {
                                         : parsedReplay ? std::string("--replay")
                                                        : std::string("--load-save")) +
                                         " requires a game directory: pass --game-dir or set SS2_GAME_DIR");
+    }
+    if (!originalInfantry && !gameDir.empty() && hdPack.empty() && !limit && !timing &&
+        recordPath.empty() && !parsedReplay) {
+        if (const auto userHd = ss2::defaultHdPackDir(); ss2::hasInstalledHdPackAt(userHd)) {
+            hdPack = userHd;
+        } else if (ss2::hasInstalledHdPackAt(gameDir / "hd-pack")) {
+            hdPack = gameDir / "hd-pack";
+        }
     }
     if (parsedSave && mission.empty() && campaignQuery.empty()) {
         mission = resolveSaveMissionPath(

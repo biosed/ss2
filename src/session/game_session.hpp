@@ -263,6 +263,7 @@ struct GameSession {
     bool combatEffects;
     bool menuPausedClock = false;
     bool smoothTerrain;
+    bool enhancedGraphics;
     std::string currentObjective = "Follow Tutorial I orders";
     std::array<std::set<size_t>, 10> hudGroups;
     std::array<std::set<size_t>, 10> hudVehicleGroups;
@@ -391,6 +392,7 @@ struct GameSession {
     void initializeMission();
     void writeRecordingIfRequested();
     void persistNow();
+    void applyMapGraphics();
     float fogBrightnessAt(int mx, int my) const;
     bool ensureGpuInfantrySlot(const std::string& id);
     void syncGpuSprites();

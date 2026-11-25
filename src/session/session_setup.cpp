@@ -99,6 +99,7 @@ GameSession::GameSession(SDL_Window* win, ValidationReport* rep, int lim, bool t
       tooltip(window),
       combatEffects(settings.combatEffects),
       smoothTerrain(settings.smoothTerrain),
+      enhancedGraphics(settings.enhancedGraphics),
       briefing(window),
       orderNotice(window),
       moveCursor(SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_CROSSHAIR), SDL_DestroyCursor),
@@ -258,44 +259,50 @@ void GameSession::initializeMission() {
             }
         }
         if (isTutorial1 && !hdPack.empty()) {
-            auto groundPath = hdPack / "tutorial1_ground_2x.ss2hd";
-            cleanGround = std::filesystem::is_regular_file(groundPath);
-            if (!originalInfantry && std::filesystem::is_directory(hdPack / "infantry-art"))
-                infantryArt = hdPack / "infantry-art";
-            auto hd = ss2::assets::loadHdPackMap(cleanGround ? groundPath : hdPack);
-            if (hd.scale != 2) throw std::runtime_error("Tutorial I requires a 2x HD pack");
-            mapScale = 2;
-            hdImage = std::move(hd.image);
-            const auto worldDir = hdPack / "world-sprites-4x";
-            const auto manifestPath = worldDir / "manifest.txt";
-            if (cleanGround && std::filesystem::is_regular_file(manifestPath)) {
-                std::map<std::string, unsigned> worldSlots;
-                std::ifstream mf(manifestPath);
-                std::string line;
-                while (std::getline(mf, line)) {
-                    std::istringstream iss(line);
-                    std::string name;
-                    float dx, dy, dw, dh, u0, v0, u1, v1;
-                    int sy = 0;
-                    if (!(iss >> name >> dx >> dy >> dw >> dh >> u0 >> v0 >> u1 >> v1 >> sy)) continue;
-                    if (!worldSlots.contains(name)) {
-                        if (gpuNextSlot + 1u >= planeAtlasBase) continue;
-                        const auto ap = worldDir / (name + ".png");
-                        if (!std::filesystem::is_regular_file(ap)) continue;
-                        auto atlas = ss2::assets::loadPngRgba(ap);
-                        renderer.setSpriteAtlas(gpuNextSlot, atlas);
-                        worldSlots.emplace(name, gpuNextSlot++);
+            std::error_code hdEc;
+            const bool hdIsDir = std::filesystem::is_directory(hdPack, hdEc);
+            const auto groundPath = hdIsDir ? (hdPack / "tutorial1_ground_2x.ss2hd") : std::filesystem::path{};
+            const auto bakedPath = hdIsDir ? (hdPack / "tutorial1_2x.ss2hd") : hdPack;
+            cleanGround = !groundPath.empty() && std::filesystem::is_regular_file(groundPath, hdEc);
+            const bool hasTutorialHdMap = cleanGround || !hdIsDir || std::filesystem::is_regular_file(bakedPath, hdEc);
+            if (hasTutorialHdMap) {
+                if (cleanGround && !originalInfantry && std::filesystem::is_directory(hdPack / "infantry-art", hdEc))
+                    infantryArt = hdPack / "infantry-art";
+                auto hd = ss2::assets::loadHdPackMap(cleanGround ? groundPath : bakedPath);
+                if (hd.scale != 2) throw std::runtime_error("Tutorial I requires a 2x HD pack");
+                mapScale = 2;
+                hdImage = std::move(hd.image);
+                const auto worldDir = hdPack / "world-sprites-4x";
+                const auto manifestPath = worldDir / "manifest.txt";
+                if (cleanGround && std::filesystem::is_regular_file(manifestPath)) {
+                    std::map<std::string, unsigned> worldSlots;
+                    std::ifstream mf(manifestPath);
+                    std::string line;
+                    while (std::getline(mf, line)) {
+                        std::istringstream iss(line);
+                        std::string name;
+                        float dx, dy, dw, dh, u0, v0, u1, v1;
+                        int sy = 0;
+                        if (!(iss >> name >> dx >> dy >> dw >> dh >> u0 >> v0 >> u1 >> v1 >> sy)) continue;
+                        if (!worldSlots.contains(name)) {
+                            if (gpuNextSlot + 1u >= planeAtlasBase) continue;
+                            const auto ap = worldDir / (name + ".png");
+                            if (!std::filesystem::is_regular_file(ap)) continue;
+                            auto atlas = ss2::assets::loadPngRgba(ap);
+                            renderer.setSpriteAtlas(gpuNextSlot, atlas);
+                            worldSlots.emplace(name, gpuNextSlot++);
+                        }
+                        worldGpuSprites.push_back({
+                            {dx, dy, dw, dh, u0, v0, u1, v1, worldSlots.at(name), 1.0f, 1.0f},
+                            sy,
+                            static_cast<int>((dx + dw * 0.5f) * 0.5f),
+                            static_cast<int>((dy + dh * 0.5f) * 0.5f)
+                        });
                     }
-                    worldGpuSprites.push_back({
-                        {dx, dy, dw, dh, u0, v0, u1, v1, worldSlots.at(name), 1.0f, 1.0f},
-                        sy,
-                        static_cast<int>((dx + dw * 0.5f) * 0.5f),
-                        static_cast<int>((dy + dh * 0.5f) * 0.5f)
-                    });
-                }
-                if (!worldGpuSprites.empty()) {
-                    std::cout << "GPU 4x HD world sprites: " << worldGpuSprites.size()
-                              << " placements across " << worldSlots.size() << " atlases\n";
+                    if (!worldGpuSprites.empty()) {
+                        std::cout << "GPU 4x HD world sprites: " << worldGpuSprites.size()
+                                  << " placements across " << worldSlots.size() << " atlases\n";
+                    }
                 }
             }
         }
@@ -430,19 +437,26 @@ void GameSession::initializeMission() {
         hud->setWeather(data.weather, 0u);
         baseMinimap = downsampleOverview(composedMap, 512u, 256u);
         hud->setMinimap(baseMinimap);
-        if (!hdPack.empty() && std::filesystem::is_directory(hdPack / "hud-portraits")) {
-            for (const char* cls : {"aguner", "aofficer", "cmedic", "dflamer", "dguner", "dofficer", "dsmguner", "rsmguner"}) {
-                const auto pp = hdPack / "hud-portraits" / (std::string(cls) + ".png");
-                if (std::filesystem::is_regular_file(pp)) {
-                    const auto img = ss2::assets::loadPngRgba(pp);
-                    const std::string lbl = hudClassLabel(cls);
-                    hud->setPortrait(lbl, img);
-                    registeredPortraits.insert(lbl);
-                    const auto disp = hudDisplayName(cls);
-                    if (disp != lbl) {
-                        hud->setPortrait(disp, img);
-                        registeredPortraits.insert(disp);
-                    }
+        if (!hdPack.empty() && !originalInfantry && std::filesystem::is_directory(hdPack / "hud-portraits")) {
+            std::vector<std::filesystem::path> portraitFiles;
+            for (const auto& entry : std::filesystem::directory_iterator(hdPack / "hud-portraits")) {
+                if (!entry.is_regular_file()) continue;
+                std::string ext = entry.path().extension().string();
+                for (char& ch : ext) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+                if (ext == ".png") portraitFiles.push_back(entry.path());
+            }
+            std::ranges::sort(portraitFiles);
+            for (const auto& pp : portraitFiles) {
+                const std::string cls = pp.stem().string();
+                if (cls.empty()) continue;
+                const auto img = ss2::assets::loadPngRgba(pp);
+                const std::string lbl = hudClassLabel(cls);
+                hud->setPortrait(lbl, img);
+                registeredPortraits.insert(lbl);
+                const auto disp = hudDisplayName(cls);
+                if (disp != lbl) {
+                    hud->setPortrait(disp, img);
+                    registeredPortraits.insert(disp);
                 }
             }
         }
@@ -463,7 +477,7 @@ void GameSession::initializeMission() {
         if (isTutorial1 && mapScale == 2 && !smoothTerrain) {
             smoothTerrain = true;
         }
-        renderer.setMapFilterLinear(smoothTerrain);
+        applyMapGraphics();
         if (isTutorial1 && mapScale == 2) {
             for (auto& u : viewInfantry) u = scaleInfantry(u, mapScale);
             for (auto& v : viewVehicles) {
@@ -903,6 +917,21 @@ float GameSession::fogBrightnessAt(int mx, int my) const {
     return (f & static_cast<std::uint8_t>(0x10u << viewer)) ? 0.70f : 0.44f;
 }
 
+void GameSession::applyMapGraphics() {
+    renderer.setMapFilterLinear(smoothTerrain);
+    if (!enhancedGraphics) {
+        renderer.setMapGrade({});
+        return;
+    }
+    switch (mapScheme) {
+    case 0u: renderer.setMapGrade({true, 0.42f, 0.14f, 1.02f, 1.01f, 0.97f, 1.05f}); break; // Summer
+    case 1u: renderer.setMapGrade({true, 0.40f, 0.15f, 0.96f, 0.99f, 1.05f, 1.06f}); break; // Winter
+    case 2u: renderer.setMapGrade({true, 0.42f, 0.14f, 1.01f, 1.02f, 0.98f, 1.05f}); break; // Beach / Pacific
+    case 3u: renderer.setMapGrade({true, 0.38f, 0.15f, 1.04f, 1.00f, 0.93f, 1.05f}); break; // Desert
+    default: renderer.setMapGrade({true, 0.40f, 0.14f, 1.00f, 1.00f, 1.00f, 1.04f}); break;
+    }
+}
+
 bool GameSession::ensureGpuInfantrySlot(const std::string& id) {
     if (gpuAtlasSlots.contains(id)) return true;
     const auto logFallback = [&](const char* reason) {
@@ -997,6 +1026,8 @@ void GameSession::syncGpuSprites() {
     const auto now = std::chrono::steady_clock::now();
     const float elapsed = std::chrono::duration<float>(now - animStart).count();
     const auto& units = scene->units();
+    const float fMapScale = static_cast<float>(std::max(1, mapScale));
+    const float lightRadiusSq = (140.0f * fMapScale) * (140.0f * fMapScale);
     for (size_t idx = 0; idx < units.size(); ++idx) {
         const auto& u = units[idx];
         if (u.hp <= 0 || !u.visible || !gpuAtlasSlots.contains(u.id)) continue;
@@ -1011,26 +1042,71 @@ void GameSession::syncGpuSprites() {
             h *= (1.0f + 0.018f * breath);
             ox += 0.45f * std::sin(elapsed * 1.05f + static_cast<float>(idx) * 1.37f);
         }
+        bool firingNow = false;
         if (const auto it = recoilUntil.find(idx); it != recoilUntil.end() && now < it->second) {
             ox += recoilDx[col];
             oy += recoilDy[col];
+            firingNow = true;
         }
         const float animScale = static_cast<float>(mapScale) * 0.5f;
         ox *= animScale;
         oy *= animScale;
+        const float ux = static_cast<float>(u.x * mapScale);
+        const float uy = static_cast<float>(u.y * mapScale);
+        const float u0 = static_cast<float>(col) * cellPx;
+        const float v0 = static_cast<float>(row) * cellPx;
+        const float u1 = static_cast<float>(col + 1u) * cellPx;
+        const float v1 = static_cast<float>(row + 1u) * cellPx;
+        const unsigned slot = gpuAtlasSlots.at(u.id);
+        const float baseBright = fogBrightnessAt(u.x, u.y);
+        if (enhancedGraphics) {
+            const float shW = w * 1.05f;
+            const float shH = h * 0.42f;
+            items.push_back({
+                {
+                    ux - 0.5f * shW + 4.5f * fMapScale + ox,
+                    uy - footRatioY * shH + 1.5f * fMapScale + oy,
+                    shW, shH, u0, v0, u1, v1, slot, 0.0f, 0.30f * baseBright
+                },
+                u.y - 2
+            });
+        }
+        float lightBoost = 0.0f;
+        if (enhancedGraphics && combatEffects) {
+            if (firingNow) lightBoost = 0.26f;
+            for (const auto& vfx : activeVfx) {
+                if (lightBoost >= 0.42f) break;
+                if (vfx.kind != ActiveVfx::Kind::Explosion && vfx.kind != ActiveVfx::Kind::VehicleExplosion &&
+                    vfx.kind != ActiveVfx::Kind::Flamer && vfx.kind != ActiveVfx::Kind::CannonShell &&
+                    vfx.kind != ActiveVfx::Kind::Tracer) {
+                    continue;
+                }
+                const float dx = ux - vfx.x0;
+                const float dy = uy - vfx.y0;
+                const float distSq = dx * dx + dy * dy;
+                if (distSq < lightRadiusSq) {
+                    const float falloff = 1.0f - std::sqrt(distSq / lightRadiusSq);
+                    const float peak = (vfx.kind == ActiveVfx::Kind::VehicleExplosion || vfx.kind == ActiveVfx::Kind::Explosion)
+                        ? 0.42f : 0.28f;
+                    lightBoost = std::max(lightBoost, peak * falloff);
+                }
+            }
+            for (const auto& bw : burningWrecks) {
+                if (lightBoost >= 0.32f) break;
+                const float dx = ux - bw.x;
+                const float dy = uy - bw.y;
+                const float distSq = dx * dx + dy * dy;
+                if (distSq < lightRadiusSq) {
+                    const float falloff = 1.0f - std::sqrt(distSq / lightRadiusSq);
+                    lightBoost = std::max(lightBoost, 0.26f * falloff);
+                }
+            }
+        }
         items.push_back({
             {
-                static_cast<float>(u.x * mapScale) - 0.5f * w + ox,
-                static_cast<float>(u.y * mapScale) - footRatioY * h + oy,
-                w,
-                h,
-                static_cast<float>(col) * cellPx,
-                static_cast<float>(row) * cellPx,
-                static_cast<float>(col + 1u) * cellPx,
-                static_cast<float>(row + 1u) * cellPx,
-                gpuAtlasSlots.at(u.id),
-                fogBrightnessAt(u.x, u.y),
-                1.0f
+                ux - 0.5f * w + ox,
+                uy - footRatioY * h + oy,
+                w, h, u0, v0, u1, v1, slot, std::min(1.45f, baseBright + lightBoost), 1.0f
             },
             u.y
         });
@@ -1326,7 +1402,7 @@ std::string GameSession::hudClassLabel(const std::string& id) {
         std::string nation;
         switch (id[0]) {
         case 'a': nation = "US "; break;
-        case 'b': nation = "British "; break;
+        case 'b': case 'e': nation = "British "; break;
         case 'd': nation = "German "; break;
         case 'r': nation = "Soviet "; break;
         case 'j': nation = "Japanese "; break;
@@ -1386,10 +1462,19 @@ void GameSession::ensureUnitPortrait(const std::string& id, bool isVehicle) {
     const std::string disp = hudDisplayName(id);
     if (registeredPortraits.contains(disp)) return;
     std::optional<ss2::assets::MapImage> portrait;
-    if (isVehicle && vehicleScene) {
-        portrait = vehicleScene->renderUnitPortrait(id, 48u);
-    } else if (!isVehicle && scene) {
-        portrait = scene->renderUnitPortrait(id, 48u);
+    if (!isVehicle && !hdPack.empty() && !originalInfantry) {
+        const auto pp = hdPack / "hud-portraits" / (id + ".png");
+        std::error_code ec;
+        if (std::filesystem::is_regular_file(pp, ec)) {
+            portrait = ss2::assets::loadPngRgba(pp);
+        }
+    }
+    if (!portrait) {
+        if (isVehicle && vehicleScene) {
+            portrait = vehicleScene->renderUnitPortrait(id, 48u);
+        } else if (!isVehicle && scene) {
+            portrait = scene->renderUnitPortrait(id, 48u);
+        }
     }
     if (!portrait) return;
     hud->setPortrait(disp, *portrait);

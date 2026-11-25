@@ -44,6 +44,17 @@ struct MapBeam {
     float x0{}, y0{}, x1{}, y1{}, width{2};
     std::uint8_t r{255}, g{255}, b{255};
     float alpha0{1}, alpha1{1};
+    bool additive{false};
+};
+
+// Optional GPU terrain reconstruction (subpixel pixel-AA / 5-tap Catmull-Rom + CAS),
+// theater atmospheric color grading, and subtle viewport vignette. Disabled by default.
+struct MapGrade {
+    bool enabled = false;
+    float sharpness = 0.40f;
+    float vignette = 0.14f;
+    float rGain = 1.0f, gGain = 1.0f, bGain = 1.0f;
+    float contrast = 1.04f;
 };
 
 // A textured rectangle drawn above the terrain and below outlines, markers and panels.
@@ -84,6 +95,7 @@ public:
     // Terrain scaling filter. Nearest (the default) keeps pixel art crisp; linear smooths
     // a high-resolution map when zoomed in. Takes effect on the next frame.
     void setMapFilterLinear(bool linear);
+    void setMapGrade(const MapGrade& grade);
     void setPreferSoftwareRenderer(bool prefer);
     static void setPreferSoftwareRendererDefault(bool prefer);
     void setMarkers(std::vector<MapMarker>);

@@ -61,6 +61,7 @@ std::vector<MenuItem> GameSession::buildPauseItems() {
         items.push_back({"campaigns", ss2::tr("Campaigns"), "", true});
         items.push_back({"missions", ss2::tr("Missions"), "", true});
     }
+    items.push_back({"enhanced", ss2::tr("Enhanced graphics"), ss2::tr(enhancedGraphics ? "On" : "Off"), true});
     items.push_back({"smooth", ss2::tr("Smooth terrain"), ss2::tr(smoothTerrain ? "On" : "Off"), true});
     if (audio) {
         items.push_back({"music", ss2::tr("Music"), ss2::tr(audio->musicPlaying() ? "On" : "Muted"), true});

@@ -195,12 +195,13 @@ jobs:
           - **Full Retail Parity**: All 136 `.ssc`/`.ssm`/`.smm` missions (`0` unhandled CAOF opcodes), bit-identical visibility/combat/AI, progressive `dom.res` building & `MOST.RES` bridge destruction, Gold 2.2 front end, animated `I-BRF` briefings & voices, looping menu/in-game music, and persistent `SS2SAVE2` save/load.
           - **2–4 Player Lockstep Multiplayer**: Cross-architecture deterministic TCP Star Host-Relay (`x86_64`, `x86-64-v3`, `ARM64` GCC/Clang).
           - **Out-of-the-Box Mods**: `sudtest.ini` `[Data]`/`[Game]` VFS chains, unpacked/gzip folders (`mycommon\`), `Scheme1..N` (`Scheme3` `desc_scheme3.sue`/`lang_desc_scheme3.sue`), `addons/*.ssx`, `mods/`/`Run/` discovery, `--mod`/`--list-mods`, and live `Options -> Mod` switching.
-          - **Portable Linux & Optional HD Pack**: AppImage (`x86_64` & `ARM64`), Flatpak manifest (`packaging/io.github.biosed.ss2.yml`), and clean-room 17-class 4×/2× HD Infantry & HUD Portrait pack (`ss2-v0.1.0-hd-infantry-pack.zip`).
+          - **Portable Linux & Optional HD Pack**: AppImage (`x86_64` & `ARM64`), Flatpak manifest (`packaging/io.github.biosed.ss2.yml`), and clean-room 17-class 4×/2× HD Infantry & HUD Portrait pack (`ss2-__TAG__-hd-infantry-pack.zip`).
 
           ### Quick Start
           - **Windows**: Extract `ss2-*-windows-x86_64.zip` (self-contained with bundled `vulkan-1.dll` + dependencies) and either copy its contents into your *Sudden Strike II* folder or run `ss2.exe --game-dir "C:\path\to\Sudden Strike 2"`.
           - **Linux AppImage**: `chmod +x ss2-*-linux-*.AppImage && ./ss2-*-linux-*.AppImage --game-dir /path/to/game` (or extract `ss2-*-linux-*.tar.gz` and run `./bin/ss2`).
           EOF
+          sed -i "s/__TAG__/${TAG}/g" release-notes.md
           gh release create "$TAG" assets/* \
             --title "Sudden Strike II Native Engine $TAG" \
             --notes-file release-notes.md \

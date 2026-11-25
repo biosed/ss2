@@ -124,6 +124,7 @@ jobs:
           if (-not (Test-Path ".\dist\ss2-windows-x86_64\vulkan-1.dll")) { throw "Missing vulkan-1.dll" }
           $vi = (Get-Item ".\dist\ss2-windows-x86_64\ss2.exe").VersionInfo
           if ($vi.ProductName -ne "Sudden Strike II Native Engine") { throw "Unexpected ProductName: $($vi.ProductName)" }
+          if ($vi.FileVersion -ne "0.1.1.0") { throw "Unexpected FileVersion: $($vi.FileVersion)" }
           $helpOut = .\dist\ss2-windows-x86_64\ss2.exe --help
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $helpOut

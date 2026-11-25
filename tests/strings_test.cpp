@@ -114,6 +114,7 @@ int main() {
             us.musicVolume = 0.40f;
             us.musicMuted = true;
             us.smoothTerrain = true;
+            us.enhancedGraphics = false;
             us.combatEffects = false;
             us.speedPercent = 200;
             us.difficulty = 3;
@@ -125,7 +126,8 @@ int main() {
             check(parsed.language == Language::french, "settings language round-trip");
             check(std::abs(parsed.sfxVolume - 0.75f) < 0.01f, "settings sfxVolume round-trip");
             check(std::abs(parsed.musicVolume - 0.40f) < 0.01f, "settings musicVolume round-trip");
-            check(parsed.musicMuted && parsed.smoothTerrain && !parsed.combatEffects, "settings booleans round-trip");
+            check(parsed.musicMuted && parsed.smoothTerrain && !parsed.enhancedGraphics && !parsed.combatEffects,
+                  "settings booleans round-trip");
             check(parsed.speedPercent == 200 && parsed.difficulty == 3 && parsed.skipIntro,
                   "settings speed, difficulty & skipIntro round-trip");
             check(parsed.completedMissions.contains("022000") && parsed.completedMissions.contains("BARBAROSSA"),
@@ -194,6 +196,28 @@ int main() {
                   "deleteActiveProfile removes selected profile and restores remaining profile");
             check(!deleteActiveProfile(delCfg),
                   "deleteActiveProfile refuses to delete the last remaining profile");
+        }
+        {
+            const std::string oldXdg = std::getenv("XDG_DATA_HOME") ? std::getenv("XDG_DATA_HOME") : "";
+            const auto tmpRoot = std::filesystem::temp_directory_path() / "ss2_hd_pack_path_test";
+            std::error_code ec;
+            std::filesystem::remove_all(tmpRoot, ec);
+            setEnvVar("XDG_DATA_HOME", tmpRoot.string().c_str());
+            const auto hdRoot = defaultHdPackDir();
+            check(hdRoot == tmpRoot / "ss2" / "hd-pack",
+                  "defaultHdPackDir resolves directly under app data root without duplicate ss2 segment");
+            check(!hasInstalledHdPackAt(hdRoot), "hasInstalledHdPackAt rejects nonexistent directory");
+            std::filesystem::create_directories(hdRoot, ec);
+            check(!hasInstalledHdPackAt(hdRoot), "hasInstalledHdPackAt rejects empty hd-pack directory");
+            std::filesystem::create_directories(hdRoot / "infantry-art-4x", ec);
+            check(hasInstalledHdPackAt(hdRoot), "hasInstalledHdPackAt accepts clean-install 4x infantry pack");
+            std::filesystem::remove_all(hdRoot / "infantry-art-4x", ec);
+            std::filesystem::create_directories(hdRoot / "hud-portraits", ec);
+            check(hasInstalledHdPackAt(hdRoot), "hasInstalledHdPackAt accepts hud-portraits pack");
+            std::filesystem::remove_all(hdRoot / "hud-portraits", ec);
+            check(!hasInstalledHdPackAt(hdRoot), "hasInstalledHdPackAt rejects hd-pack once subdirectories removed");
+            std::filesystem::remove_all(tmpRoot, ec);
+            setEnvVar("XDG_DATA_HOME", oldXdg.empty() ? nullptr : oldXdg.c_str());
         }
     } catch (const std::exception& e) {
         std::cerr << e.what() << '\n';

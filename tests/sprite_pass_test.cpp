@@ -857,6 +857,53 @@ int main(int argc, char** argv) {
             renderer.setMap(solid(64, 48, ground));
         }
 
+        // Enhanced Graphics pipeline: MapGrade (Pixel-AA / 5-tap Catmull-Rom + CAS + vignette),
+        // 3-level mipmapped >=256px sprite atlases, overbright lighting, and additive glow beams.
+        {
+            renderer.setMap(solid(64, 48, ground));
+            renderer.setMapFilterLinear(false);
+            renderer.setMapGrade({true, 0.40f, 0.28f, 1.05f, 1.00f, 0.94f, 1.06f});
+            frame = capture();
+            const Rgb centerG = frame.at(128 + 32, 96 + 24);
+            const Rgb cornerG = frame.at(128 + 1, 96 + 1);
+            if (cornerG.r >= centerG.r)
+                throw std::runtime_error("MapGrade vignette did not darken viewport corner relative to center");
+
+            renderer.setMapFilterLinear(true);
+            frame = capture();
+            if (frame.at(128 + 1, 96 + 1).r >= frame.at(128 + 32, 96 + 24).r)
+                throw std::runtime_error("MapGrade Catmull-Rom mode vignette failed");
+            renderer.setMapFilterLinear(false);
+            renderer.setMapGrade({});
+            frame = capture();
+            expect(frame, 128 + 32, 96 + 24, ground, 0, "disabling MapGrade restores exact map color");
+
+            rejects([&] {
+                ss2::MapGrade bad{};
+                bad.sharpness = std::numeric_limits<float>::quiet_NaN();
+                renderer.setMapGrade(bad);
+            }, "MapGrade with NaN");
+
+            // >=256x256 atlas triggers 3-level mipmaps without validation errors, and brightness > 1.0 boosts lit texels.
+            renderer.setSpriteAtlas(8, solid(256, 256, {120, 100, 80}));
+            const float whole256[4] = {0.f, 0.f, 256.f, 256.f};
+            renderer.setSprites({sprite(16, 12, 16, 16, whole256, 8, 1.4f, 1.0f)});
+            frame = capture();
+            const Rgb lit = frame.at(128 + 24, 96 + 20);
+            if (lit.r <= 122 || lit.g <= 102 || lit.b <= 82)
+                throw std::runtime_error("Overbright dynamic sprite lighting did not brighten lit texels");
+            renderer.setSprites({});
+
+            // Additive MapBeam boosts underlying ground luminosity cleanly instead of darkening toward RGB.
+            renderer.setMap(solid(64, 48, ground));
+            renderer.setBeams({{32, 24, 32, 24, 16, 90, 70, 30, 0.85f, 0.85f, true}});
+            frame = capture();
+            const Rgb glowPx = frame.at(128 + 32, 96 + 24);
+            if (glowPx.r <= ground.r + 5 || glowPx.g <= ground.g + 4)
+                throw std::runtime_error("Additive glow beam failed to brighten ground pixels");
+            renderer.setBeams({});
+        }
+
         // Ordinary presentation still works with sprites set.
         for (int i = 0; i < 3; ++i) {
             bool shown = false;

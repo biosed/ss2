@@ -61,6 +61,7 @@ struct UserSettings {
     float musicVolume{0.28f};
     bool musicMuted{false};
     bool smoothTerrain{false};
+    bool enhancedGraphics{true};
     bool combatEffects{true};
     int speedPercent{100};
     int difficulty{2}; // 1 = Easy, 2 = Normal, 3 = Hard
@@ -168,6 +169,23 @@ inline std::filesystem::path defaultCampaignPoolsDir() {
 inline std::filesystem::path defaultModsDir() {
     const auto root = platformAppDataRoot();
     return root.empty() ? std::filesystem::path{} : (root / "mods");
+}
+
+inline std::filesystem::path defaultHdPackDir() {
+    const auto root = platformAppDataRoot();
+    return root.empty() ? std::filesystem::path{} : (root / "hd-pack");
+}
+
+inline bool hasInstalledHdPackAt(const std::filesystem::path& dir) {
+    std::error_code ec;
+    if (dir.empty() || !std::filesystem::is_directory(dir, ec) || ec) return false;
+    return std::filesystem::is_directory(dir / "infantry-art-4x", ec) ||
+           std::filesystem::is_directory(dir / "infantry-art", ec) ||
+           std::filesystem::is_directory(dir / "hud-portraits", ec) ||
+           std::filesystem::is_directory(dir / "audio-hd", ec) ||
+           std::filesystem::is_directory(dir / "movies-hd", ec) ||
+           std::filesystem::is_regular_file(dir / "tutorial1_ground_2x.ss2hd", ec) ||
+           std::filesystem::is_regular_file(dir / "tutorial1_2x.ss2hd", ec);
 }
 
 inline bool profileNameEquals(std::string_view a, std::string_view b) {
@@ -345,6 +363,7 @@ inline std::string serializeUserSettings(const UserSettings& input) {
     out << "music_volume=" << musPct << '\n';
     out << "music_muted=" << (s.musicMuted ? 1 : 0) << '\n';
     out << "smooth_terrain=" << (s.smoothTerrain ? 1 : 0) << '\n';
+    out << "enhanced_graphics=" << (s.enhancedGraphics ? 1 : 0) << '\n';
     out << "combat_effects=" << (s.combatEffects ? 1 : 0) << '\n';
     out << "speed_percent=" << speed << '\n';
     out << "difficulty=" << diff << '\n';
@@ -479,6 +498,9 @@ inline UserSettings parseUserSettings(std::string_view text) {
         } else if (key == "smooth_terrain") {
             bool b = false;
             if (parseBool(val, b)) s.smoothTerrain = b;
+        } else if (key == "enhanced_graphics") {
+            bool b = true;
+            if (parseBool(val, b)) s.enhancedGraphics = b;
         } else if (key == "combat_effects") {
             bool b = true;
             if (parseBool(val, b)) s.combatEffects = b;

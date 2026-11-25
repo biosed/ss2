@@ -286,11 +286,18 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
                 down.key.key = SDLK_DOWN;
                 menu.handle(down);
             }
+        } else if (mr.activated == "enhanced") {
+            enhancedGraphics = !enhancedGraphics;
+            settings.enhancedGraphics = enhancedGraphics;
+            persistNow();
+            applyMapGraphics();
+            syncGpuSprites();
+            menu.setItems(buildPauseItems());
         } else if (mr.activated == "smooth") {
             smoothTerrain = !smoothTerrain;
             settings.smoothTerrain = smoothTerrain;
             persistNow();
-            renderer.setMapFilterLinear(smoothTerrain);
+            applyMapGraphics();
             menu.setItems(buildPauseItems());
         } else if (mr.activated == "music" && audio) {
             settings.musicMuted = audio->toggleMusicMute();
