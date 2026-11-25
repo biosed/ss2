@@ -200,22 +200,33 @@ std::string GoldFrontEnd::briefingDisplayedText() const {
 }
 
 void GoldFrontEnd::stopBriefingVoice() {
-    if (assets_ && assets_->briefAudioStream) {
-        SDL_ClearAudioStream(assets_->briefAudioStream);
+    if (assets_) {
+        assets_->nextMusicPumpTickMs = 0u;
+        assets_->briefVoiceDucking = false;
+        if (assets_->briefAudioStream) {
+            SDL_ClearAudioStream(assets_->briefAudioStream);
+        }
     }
 }
 
 void GoldFrontEnd::setBriefingVoicePaused(bool paused) {
-    if (!assets_ || !assets_->briefAudioDev) return;
+    if (!assets_) return;
+    assets_->nextMusicPumpTickMs = 0u;
+    if (!assets_->briefAudioDev) return;
     if (paused) SDL_PauseAudioDevice(assets_->briefAudioDev);
     else SDL_ResumeAudioDevice(assets_->briefAudioDev);
 }
 
 void GoldFrontEnd::startBriefingVoice(const std::vector<std::int16_t>& pcm) {
     stopBriefingVoice();
-    if (!assets_ || !window_ || pcm.empty() || settings_.sfxVolume <= 0.001f) return;
+    if (!assets_ || !window_ || assets_->audioInitFailed || pcm.empty() || settings_.sfxVolume <= 0.001f) {
+        return;
+    }
     if (!SDL_WasInit(SDL_INIT_AUDIO)) {
-        if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) return;
+        if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) {
+            assets_->audioInitFailed = true;
+            return;
+        }
     }
     SDL_AudioSpec spec{};
     spec.format = SDL_AUDIO_S16;
@@ -223,7 +234,10 @@ void GoldFrontEnd::startBriefingVoice(const std::vector<std::int16_t>& pcm) {
     spec.freq = assets::kBriefingVoiceSampleRate;
     if (!assets_->briefAudioDev) {
         assets_->briefAudioDev = SDL_OpenAudioDevice(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec);
-        if (!assets_->briefAudioDev) return;
+        if (!assets_->briefAudioDev) {
+            assets_->audioInitFailed = true;
+            return;
+        }
     }
     if (!assets_->briefAudioStream) {
         assets_->briefAudioStream = SDL_CreateAudioStream(&spec, &spec);
@@ -233,6 +247,7 @@ void GoldFrontEnd::startBriefingVoice(const std::vector<std::int16_t>& pcm) {
                 SDL_DestroyAudioStream(assets_->briefAudioStream);
                 assets_->briefAudioStream = nullptr;
             }
+            assets_->audioInitFailed = true;
             return;
         }
     }
@@ -241,6 +256,7 @@ void GoldFrontEnd::startBriefingVoice(const std::vector<std::int16_t>& pcm) {
     SDL_ResumeAudioDevice(assets_->briefAudioDev);
     SDL_PutAudioStreamData(assets_->briefAudioStream, pcm.data(),
                            static_cast<int>(pcm.size() * sizeof(std::int16_t)));
+    assets_->nextMusicPumpTickMs = 0u;
 }
 
 void GoldFrontEnd::clearBriefingMedia() {
@@ -420,6 +436,12 @@ std::string GoldFrontEnd::hitTestMissionBrowser(double sx, double sy) const {
         kDifficultyButtonRect.contains(sx, sy)) {
         return "difficulty";
     }
+    if (descHasScrollbar_) {
+        if (RectD{748.0, 140.0, 16.0, kScrollArrowH}.contains(sx, sy)) return "desc_scroll_up";
+        if (RectD{748.0, 140.0 + 178.0 - kScrollArrowH, 16.0, kScrollArrowH}.contains(sx, sy)) {
+            return "desc_scroll_down";
+        }
+    }
     if (const auto id = hitTestButtons(kSingleMissionButtons, sx, sy); !id.empty()) return id;
     return hitTestActiveListAndScrollbar(sx, sy);
 }
@@ -431,6 +453,15 @@ std::string GoldFrontEnd::hitTestBriefing(double sx, double sy) const {
             ? hasBriefingMedia()
             : b.enabled;
         if (enabled && b.rect.contains(sx, sy)) return b.id;
+    }
+    if (briefHasScrollbar_) {
+        const double sbx = kBriefBoxX + kBriefBoxW - 20.0;
+        const double sby = kBriefBoxY + 4.0;
+        const double sbh = kBriefBoxH - 8.0;
+        if (RectD{sbx, sby, 16.0, kScrollArrowH}.contains(sx, sy)) return "brief_scroll_up";
+        if (RectD{sbx, sby + sbh - kScrollArrowH, 16.0, kScrollArrowH}.contains(sx, sy)) {
+            return "brief_scroll_down";
+        }
     }
     const std::size_t partCount = briefingPartCount();
     for (std::size_t s = 0; s < 4 && s < partCount; ++s) {
@@ -655,7 +686,7 @@ void GoldFrontEnd::handleBriefingKey(SDL_Keycode key) {
         briefScroll_ = std::max(0.0, briefScroll_ - 28.0);
         dirty_ = true;
     } else if (key == SDLK_DOWN) {
-        briefScroll_ += 28.0;
+        briefScroll_ = std::clamp(briefScroll_ + 28.0, 0.0, briefMaxScroll_);
         dirty_ = true;
     } else if (key == SDLK_0) {
         if (hasBriefingMedia()) activateId("brief_restart");
@@ -965,6 +996,12 @@ void GoldFrontEnd::renderMissionBrowserScreen(const RenderEnv& env) {
 
         if (selectedRow < rowCount) {
             const auto& m = rowAt(selectedRow);
+            const std::string descKey = std::to_string(int(fe_.screen())) + ":" + m.path + ":" +
+                                        std::to_string(m.description.size());
+            if (descKey != lastDescKey_) {
+                lastDescKey_ = descKey;
+                descScroll_ = 0.0;
+            }
             cairo_save(cr);
             cairo_set_source_rgba(cr, 10.0 / 255.0, 14.0 / 255.0, 7.0 / 255.0, 0.42);
             cairo_rectangle(cr, 438, 136, 330, 186);
@@ -972,13 +1009,61 @@ void GoldFrontEnd::renderMissionBrowserScreen(const RenderEnv& env) {
             cairo_restore(cr);
             {
                 const auto paras = assets::splitBriefingParagraphs(m.description);
-                const std::string& previewDesc = paras.empty() ? m.description : paras[0];
-                auto desc = makeTextLayout(pangoCtx, previewDesc, 13.5, false, 316.0);
-                pango_layout_set_height(desc.get(), int(172.0 * PANGO_SCALE));
-                pango_layout_set_ellipsize(desc.get(), PANGO_ELLIPSIZE_END);
-                cairo_move_to(cr, 445, 142);
+                std::string fullDesc;
+                for (const auto& p : paras) {
+                    if (!fullDesc.empty()) fullDesc += "\n\n";
+                    fullDesc += p;
+                }
+                if (fullDesc.empty()) fullDesc = m.description;
+
+                constexpr double kDescX = 445.0;
+                constexpr double kDescY = 142.0;
+                constexpr double kDescFullW = 316.0;
+                constexpr double kDescScrollTextW = 298.0;
+                constexpr double kDescH = 174.0;
+                constexpr double kDescSizes[] = {13.5, 12.2, 11.0, 10.0, 9.2};
+
+                Layout desc = makeTextLayout(pangoCtx, fullDesc, kDescSizes[0], false, kDescFullW);
+                int tw = 0, th = 0;
+                bool fits = false;
+                for (double pt : kDescSizes) {
+                    desc = makeTextLayout(pangoCtx, fullDesc, pt, false, kDescFullW);
+                    pango_layout_get_pixel_size(desc.get(), &tw, &th);
+                    if (double(th) <= kDescH) {
+                        fits = true;
+                        break;
+                    }
+                }
+                double clipW = kDescFullW;
+                if (!fits) {
+                    desc = makeTextLayout(pangoCtx, fullDesc, 10.5, false, kDescScrollTextW);
+                    pango_layout_get_pixel_size(desc.get(), &tw, &th);
+                    clipW = kDescScrollTextW;
+                    descMaxScroll_ = std::max(0.0, double(th) - kDescH);
+                    descHasScrollbar_ = descMaxScroll_ > 0.5;
+                    descScroll_ = std::clamp(descScroll_, 0.0, descMaxScroll_);
+                } else {
+                    descMaxScroll_ = 0.0;
+                    descHasScrollbar_ = false;
+                    descScroll_ = 0.0;
+                }
+
+                cairo_save(cr);
+                cairo_rectangle(cr, kDescX, kDescY, clipW, kDescH);
+                cairo_clip(cr);
+                cairo_move_to(cr, kDescX, kDescY - descScroll_);
                 cairo_set_source_rgb(cr, 238.0 / 255.0, 240.0 / 255.0, 228.0 / 255.0);
                 pango_cairo_show_layout(cr, desc.get());
+                cairo_restore(cr);
+
+                if (descHasScrollbar_) {
+                    drawGoldScrollbar(env, 748.0, 140.0, 16.0, 178.0,
+                                      int(std::lround(kDescH)), true,
+                                      std::size_t(std::max(1, th)),
+                                      int(std::lround(descScroll_)),
+                                      hoveredId_ == "desc_scroll_up",
+                                      hoveredId_ == "desc_scroll_down", false);
+                }
             }
 
             ensureOverviewLoaded(m.path);
@@ -995,6 +1080,11 @@ void GoldFrontEnd::renderMissionBrowserScreen(const RenderEnv& env) {
             if (m.highScore > 0) {
                 drawHeading(cr, pangoCtx, "Score: " + std::to_string(m.highScore), {464, 486, 280, 18}, 12.5);
             }
+        } else {
+            lastDescKey_.clear();
+            descMaxScroll_ = 0.0;
+            descHasScrollbar_ = false;
+            descScroll_ = 0.0;
         }
 
         if (showDifficulty) {
@@ -1056,19 +1146,50 @@ void GoldFrontEnd::renderBriefing(const RenderEnv& env) {
         const double padX = 14.0, padY = 10.0;
         const double innerW = kBriefBoxW - 2.0 * padX;
         const double innerH = kBriefBoxH - 2.0 * padY;
-        auto layout = makeTextLayout(pangoCtx, briefingDisplayedText(), 13.5, false, innerW);
+        const std::string text = briefingDisplayedText();
+        constexpr double kBriefSizes[] = {13.5, 12.5, 11.5, 10.5, 9.8};
+
+        Layout layout = makeTextLayout(pangoCtx, text, kBriefSizes[0], false, innerW);
         int tw = 0, th = 0;
-        pango_layout_get_pixel_size(layout.get(), &tw, &th);
-        const double maxScroll = std::max(0.0, th - innerH);
-        briefScroll_ = std::clamp(briefScroll_, 0.0, maxScroll);
+        bool fits = false;
+        for (double pt : kBriefSizes) {
+            layout = makeTextLayout(pangoCtx, text, pt, false, innerW);
+            pango_layout_get_pixel_size(layout.get(), &tw, &th);
+            if (double(th) <= innerH) {
+                fits = true;
+                break;
+            }
+        }
+        double clipW = innerW;
+        if (!fits) {
+            clipW = innerW - 20.0;
+            layout = makeTextLayout(pangoCtx, text, 11.2, false, clipW);
+            pango_layout_get_pixel_size(layout.get(), &tw, &th);
+            briefMaxScroll_ = std::max(0.0, double(th) - innerH);
+            briefHasScrollbar_ = briefMaxScroll_ > 0.5;
+            briefScroll_ = std::clamp(briefScroll_, 0.0, briefMaxScroll_);
+        } else {
+            briefMaxScroll_ = 0.0;
+            briefHasScrollbar_ = false;
+            briefScroll_ = 0.0;
+        }
 
         cairo_save(cr);
-        cairo_rectangle(cr, kBriefBoxX + padX, kBriefBoxY + padY, innerW, innerH);
+        cairo_rectangle(cr, kBriefBoxX + padX, kBriefBoxY + padY, clipW, innerH);
         cairo_clip(cr);
         cairo_move_to(cr, kBriefBoxX + padX, kBriefBoxY + padY - briefScroll_);
         cairo_set_source_rgb(cr, 245.0 / 255.0, 248.0 / 255.0, 240.0 / 255.0);
         pango_cairo_show_layout(cr, layout.get());
         cairo_restore(cr);
+
+        if (briefHasScrollbar_) {
+            drawGoldScrollbar(env, kBriefBoxX + kBriefBoxW - 20.0, kBriefBoxY + 4.0, 16.0, kBriefBoxH - 8.0,
+                              int(std::lround(innerH)), true,
+                              std::size_t(std::max(1, th)),
+                              int(std::lround(briefScroll_)),
+                              hoveredId_ == "brief_scroll_up",
+                              hoveredId_ == "brief_scroll_down", false);
+        }
     }
 
     const std::string overviewPath = fe_.launchPath();

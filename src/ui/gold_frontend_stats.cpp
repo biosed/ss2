@@ -1228,15 +1228,22 @@ void GoldPostMissionScreen::draw(VulkanWindow& renderer) {
     pw = std::max(1, pw);
     ph = std::max(1, ph);
 
+    int rw = pw;
+    int rh = ph;
+    if (rh > 1080) {
+        rw = std::max(1, static_cast<int>(std::lround(static_cast<double>(pw) * 1080.0 / static_cast<double>(ph))));
+        rh = 1080;
+    }
+
     if (!dirty_ && pw == lastPixelW_ && ph == lastPixelH_ &&
-        rgba_.size() == std::size_t(pw) * std::size_t(ph) * 4u) {
+        rgba_.size() == std::size_t(rw) * std::size_t(rh) * 4u) {
         return;
     }
-    renderToBuffer(pw, ph, rgba_);
+    renderToBuffer(rw, rh, rgba_);
     lastPixelW_ = pw;
     lastPixelH_ = ph;
     dirty_ = false;
-    renderer.setOverlay(static_cast<unsigned>(pw), static_cast<unsigned>(ph), rgba_, OverlaySlot::panel);
+    renderer.setOverlay(static_cast<unsigned>(rw), static_cast<unsigned>(rh), rgba_, OverlaySlot::panel, true);
 }
 
 void GoldPostMissionScreen::clear(VulkanWindow& renderer) {

@@ -75,7 +75,8 @@ void Briefing::layout() {
 
     const int footerGap = fontPx;
     const int footerHeight = 2 * footerPx;
-    const int room = std::max(1, pixelH * 3 / 4 - 2 * pad - footerGap - footerHeight);
+    const int availH = std::max(160, pixelH - pixelH / 5);
+    const int room = std::max(1, availH * 4 / 5 - 2 * pad - footerGap - footerHeight);
     std::vector<int> pageStarts{0};
     for (size_t i = 1; i < lineEnds.size(); ++i)
         if (lineEnds[i] - pageStarts.back() > room) pageStarts.push_back(lineEnds[i - 1]);
@@ -89,7 +90,7 @@ void Briefing::layout() {
     int footerW{}, footerH{};
     pango_layout_get_pixel_size(footer.get(), &footerW, &footerH);
     const int panelW = std::min(maxPanelW, std::max(bodyW, footerW) + 2 * pad);
-    const int panelH = std::min(pixelH, pad * 2 + bodyH + footerGap + footerH);
+    const int panelH = std::min(availH, pad * 2 + bodyH + footerGap + footerH);
     Surface panel(cairo_image_surface_create(CAIRO_FORMAT_ARGB32, std::max(1, panelW), panelH), cairo_surface_destroy);
     Context graphics(cairo_create(panel.get()), cairo_destroy);
     auto* cr = graphics.get();
@@ -114,7 +115,7 @@ void Briefing::layout() {
     width_ = unsigned(panelW);
     height_ = unsigned(panelH);
     left_ = (pixelW - panelW) / 2;
-    top_ = (pixelH - panelH) / 2;
+    top_ = std::max(0, (availH - panelH) / 2);
     rgba_.resize(std::size_t(panelW) * panelH * 4);
     cairo_surface_flush(panel.get());
     if (!SDL_ConvertPixels(panelW, panelH, SDL_PIXELFORMAT_ARGB8888, cairo_image_surface_get_data(panel.get()),

@@ -498,17 +498,34 @@ std::optional<FrontEndResult> runFrontEnd(SDL_Window* window, ss2::ValidationRep
 
     const ss2::Snapshot empty{};
     std::uint64_t lastTick = SDL_GetTicksNS();
+    int framesToPresent = 3;
     for (;;) {
         SDL_Event event;
-        while (SDL_PollEvent(&event)) {
-            if (event.type == SDL_EVENT_QUIT) return std::nullopt;
-            renderer.handleEvent(event);
-            goldFe.handleEvent(event);
+        if (framesToPresent <= 0) {
+            if (SDL_WaitEventTimeout(&event, 16)) {
+                framesToPresent = 2;
+                if (event.type == SDL_EVENT_QUIT) return std::nullopt;
+                renderer.handleEvent(event);
+                goldFe.handleEvent(event);
+                while (SDL_PollEvent(&event)) {
+                    if (event.type == SDL_EVENT_QUIT) return std::nullopt;
+                    renderer.handleEvent(event);
+                    goldFe.handleEvent(event);
+                }
+            }
+        } else {
+            while (SDL_PollEvent(&event)) {
+                framesToPresent = 2;
+                if (event.type == SDL_EVENT_QUIT) return std::nullopt;
+                renderer.handleEvent(event);
+                goldFe.handleEvent(event);
+            }
         }
 
         const std::uint64_t now = SDL_GetTicksNS();
         goldFe.advance(std::chrono::nanoseconds(now - lastTick));
         lastTick = now;
+        if (goldFe.isDirty()) framesToPresent = std::max(framesToPresent, 2);
 
         if (goldFe.takeSettingsSaved()) {
             const bool modChanged = (settings.activeMod != goldFe.settings().activeMod);
@@ -657,8 +674,14 @@ std::optional<FrontEndResult> runFrontEnd(SDL_Window* window, ss2::ValidationRep
         }
         if (screen == ss2::FrontEnd::Screen::Quit) return std::nullopt;
 
-        goldFe.draw(renderer);
-        if (!renderer.present(empty)) SDL_Delay(5);
+        if (framesToPresent > 0 || goldFe.isDirty()) {
+            goldFe.draw(renderer);
+            if (renderer.present(empty)) {
+                framesToPresent = std::max(0, framesToPresent - 1);
+            } else {
+                SDL_Delay(5);
+            }
+        }
     }
 }
 }

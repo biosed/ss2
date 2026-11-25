@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <memory>
 #include <random>
 #include <stdexcept>
@@ -1101,6 +1102,26 @@ void GoldFrontEnd::activateId(const std::string& id) {
     if (id == "ratings_scroll_down") { scrollRatingsBy(1); return; }
     if (id == "ratings_scroll_page_up") { scrollRatingsBy(-kVisibleRatingsRows); return; }
     if (id == "ratings_scroll_page_down") { scrollRatingsBy(kVisibleRatingsRows); return; }
+    if (id == "desc_scroll_up") {
+        descScroll_ = std::max(0.0, descScroll_ - 24.0);
+        dirty_ = true;
+        return;
+    }
+    if (id == "desc_scroll_down") {
+        descScroll_ = std::clamp(descScroll_ + 24.0, 0.0, descMaxScroll_);
+        dirty_ = true;
+        return;
+    }
+    if (id == "brief_scroll_up") {
+        briefScroll_ = std::max(0.0, briefScroll_ - 28.0);
+        dirty_ = true;
+        return;
+    }
+    if (id == "brief_scroll_down") {
+        briefScroll_ = std::clamp(briefScroll_ + 28.0, 0.0, briefMaxScroll_);
+        dirty_ = true;
+        return;
+    }
     if (id == "credits_toggle_pause") {
         creditsPaused_ = !creditsPaused_;
         dirty_ = true;
@@ -1341,9 +1362,25 @@ void GoldFrontEnd::handleMouseWheel(float dy) {
          fe_.screen() == FrontEnd::Screen::LoadGame ||
          fe_.screen() == FrontEnd::Screen::Multiplayer) &&
         dy != 0.0f) {
+        if ((fe_.screen() == FrontEnd::Screen::SingleMissions ||
+             fe_.screen() == FrontEnd::Screen::CampaignMissions) &&
+            descHasScrollbar_) {
+            float mx = 0.0f, my = 0.0f;
+            SDL_GetMouseState(&mx, &my);
+            int winW = 0, winH = 0, pw = 0, ph = 0;
+            if (window_ && SDL_GetWindowSize(window_, &winW, &winH) &&
+                SDL_GetWindowSizeInPixels(window_, &pw, &ph) && winW > 0 && winH > 0) {
+                const auto pt = windowToStage(mx, my, winW, winH, pw > 0 ? pw : lastPixelW_, ph > 0 ? ph : lastPixelH_);
+                if (pt.inside && gold_ui::RectD{438.0, 136.0, 330.0, 186.0}.contains(pt.x, pt.y)) {
+                    descScroll_ = std::clamp(descScroll_ - double(dy) * 24.0, 0.0, descMaxScroll_);
+                    dirty_ = true;
+                    return;
+                }
+            }
+        }
         scrollBy(dy > 0 ? -3 : 3);
     } else if (fe_.screen() == FrontEnd::Screen::Briefing && dy != 0.0f) {
-        briefScroll_ = std::max(0.0, briefScroll_ - double(dy) * 28.0);
+        briefScroll_ = std::clamp(briefScroll_ - double(dy) * 28.0, 0.0, briefMaxScroll_);
         dirty_ = true;
     } else if (fe_.screen() == FrontEnd::Screen::Ratings && dy != 0.0f) {
         scrollRatingsBy(dy > 0 ? -3 : 3);
@@ -1467,14 +1504,17 @@ void GoldFrontEnd::stopMenuMusic() {
     if (!assets_) return;
     assets_->activeMusicEntry.clear();
     assets_->musicReadOffset = 0u;
+    assets_->lastMusicGain = -1.0f;
+    assets_->nextMusicPumpTickMs = 0u;
+    assets_->briefVoiceDucking = false;
     if (assets_->musicAudioStream) {
         SDL_ClearAudioStream(assets_->musicAudioStream);
     }
 }
 
 void GoldFrontEnd::pumpMenuMusic() {
-    if (!assets_ || window_ == nullptr || assets_->activeMusicEntry.empty() ||
-        assets_->menuArchives.empty()) {
+    if (!assets_ || window_ == nullptr || assets_->audioInitFailed ||
+        assets_->activeMusicEntry.empty() || assets_->menuArchives.empty()) {
         return;
     }
     const std::size_t trackBytes = (assets_->activeMusicEntry == "briefing")
@@ -1483,13 +1523,20 @@ void GoldFrontEnd::pumpMenuMusic() {
     if (trackBytes < 4u) return;
 
     if (!SDL_WasInit(SDL_INIT_AUDIO)) {
-        if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) return;
+        if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) {
+            assets_->audioInitFailed = true;
+            return;
+        }
     }
     constexpr SDL_AudioSpec kDstSpec{SDL_AUDIO_S16, 2, 48000};
     constexpr SDL_AudioSpec kSrcSpec{SDL_AUDIO_S16, 2, 22050};
     if (!assets_->musicAudioDev) {
         assets_->musicAudioDev = SDL_OpenAudioDevice(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &kDstSpec);
-        if (!assets_->musicAudioDev) return;
+        if (!assets_->musicAudioDev) {
+            assets_->audioInitFailed = true;
+            return;
+        }
+        assets_->musicDeviceResumed = false;
     }
     if (!assets_->musicAudioStream) {
         assets_->musicAudioStream = SDL_CreateAudioStream(&kSrcSpec, &kDstSpec);
@@ -1499,46 +1546,69 @@ void GoldFrontEnd::pumpMenuMusic() {
                 SDL_DestroyAudioStream(assets_->musicAudioStream);
                 assets_->musicAudioStream = nullptr;
             }
+            assets_->audioInitFailed = true;
             return;
         }
+        assets_->lastMusicGain = -1.0f;
+    }
+    if (!assets_->musicDeviceResumed) {
+        SDL_ResumeAudioDevice(assets_->musicAudioDev);
+        assets_->musicDeviceResumed = true;
     }
 
+    const std::uint64_t nowMs = SDL_GetTicks();
     const UserSettings& cfg = (fe_.screen() == FrontEnd::Screen::Options) ? optionsDraft_ : settings_;
-    const bool voiceSpeaking = (assets_->activeMusicEntry == "briefing" &&
-                                assets_->briefAudioStream != nullptr &&
-                                !briefPaused_ &&
-                                SDL_GetAudioStreamQueued(assets_->briefAudioStream) > 0);
-    const float gain = std::clamp(cfg.musicVolume, 0.0f, 1.0f) * (voiceSpeaking ? 0.45f : 1.0f);
-    SDL_SetAudioStreamGain(assets_->musicAudioStream, gain);
-    SDL_ResumeAudioDevice(assets_->musicAudioDev);
+    if (assets_->activeMusicEntry != "briefing" || !assets_->briefAudioStream || briefPaused_) {
+        assets_->briefVoiceDucking = false;
+    } else if (nowMs >= assets_->nextMusicPumpTickMs || assets_->lastMusicGain < 0.0f) {
+        assets_->briefVoiceDucking = (SDL_GetAudioStreamQueued(assets_->briefAudioStream) > 0);
+    }
+    const float gain = std::clamp(cfg.musicVolume, 0.0f, 1.0f) * (assets_->briefVoiceDucking ? 0.45f : 1.0f);
+    if (assets_->lastMusicGain < 0.0f || std::abs(gain - assets_->lastMusicGain) > 0.001f) {
+        SDL_SetAudioStreamGain(assets_->musicAudioStream, gain);
+        assets_->lastMusicGain = gain;
+    }
 
-    constexpr int kLowWaterBytes = 96000;
-    constexpr int kHighWaterBytes = 144000;
-    constexpr std::size_t kSliceBytes = 65536u;
-    for (int iter = 0; iter < 3; ++iter) {
-        const int queued = SDL_GetAudioStreamQueued(assets_->musicAudioStream);
-        if (queued >= kHighWaterBytes || (iter > 0 && queued >= kLowWaterBytes)) break;
-        if (assets_->musicReadOffset >= trackBytes) assets_->musicReadOffset = 0u;
-        const std::size_t want = (std::min(kSliceBytes, trackBytes - assets_->musicReadOffset)) & ~std::size_t(3u);
-        if (want < 4u) {
-            assets_->musicReadOffset = 0u;
-            continue;
-        }
-        assets::Bytes pcm;
+    if (nowMs < assets_->nextMusicPumpTickMs) return;
+    assets_->nextMusicPumpTickMs = nowMs + 200u;
+
+    if (assets_->cachedMusicEntry != assets_->activeMusicEntry) {
+        assets_->cachedMusicPcm.clear();
+        assets_->cachedMusicEntry.clear();
         try {
-            pcm = assets::readSueChainRange(assets_->menuArchives, assets_->activeMusicEntry,
-                                            assets_->musicReadOffset, want);
+            if (auto full = assets::tryReadSueEntryChain(assets_->menuArchives, assets_->activeMusicEntry)) {
+                const std::size_t alignedSize = full->size() & ~std::size_t(3u);
+                full->resize(alignedSize);
+                assets_->cachedMusicPcm = std::move(*full);
+                assets_->cachedMusicEntry = assets_->activeMusicEntry;
+            }
         } catch (...) {
             stopMenuMusic();
             return;
         }
-        const std::size_t aligned = pcm.size() & ~std::size_t(3u);
-        if (aligned < 4u) {
-            assets_->musicReadOffset = 0u;
-            break;
+        if (assets_->cachedMusicPcm.size() < 4u) {
+            stopMenuMusic();
+            return;
         }
-        (void)SDL_PutAudioStreamData(assets_->musicAudioStream, pcm.data(), static_cast<int>(aligned));
-        assets_->musicReadOffset = (assets_->musicReadOffset + aligned) % trackBytes;
+    }
+
+    const std::size_t pcmBytes = assets_->cachedMusicPcm.size();
+    constexpr int kLowWaterBytes = 96000;
+    constexpr int kHighWaterBytes = 160000;
+    constexpr std::size_t kSliceBytes = 65536u;
+    for (int iter = 0; iter < 3; ++iter) {
+        const int queued = SDL_GetAudioStreamQueued(assets_->musicAudioStream);
+        if (queued >= kHighWaterBytes || (iter > 0 && queued >= kLowWaterBytes)) break;
+        if (assets_->musicReadOffset >= pcmBytes) assets_->musicReadOffset = 0u;
+        const std::size_t want = (std::min(kSliceBytes, pcmBytes - assets_->musicReadOffset)) & ~std::size_t(3u);
+        if (want < 4u) {
+            assets_->musicReadOffset = 0u;
+            continue;
+        }
+        (void)SDL_PutAudioStreamData(assets_->musicAudioStream,
+                                     assets_->cachedMusicPcm.data() + assets_->musicReadOffset,
+                                     static_cast<int>(want));
+        assets_->musicReadOffset = (assets_->musicReadOffset + want) % pcmBytes;
     }
 }
 
@@ -1566,6 +1636,9 @@ void GoldFrontEnd::syncMenuMusic() {
     if (assets_->activeMusicEntry != desired) {
         assets_->activeMusicEntry = desired;
         assets_->musicReadOffset = 0u;
+        assets_->lastMusicGain = -1.0f;
+        assets_->nextMusicPumpTickMs = 0u;
+        assets_->briefVoiceDucking = false;
         if (assets_->musicAudioStream) {
             SDL_ClearAudioStream(assets_->musicAudioStream);
         }
@@ -1589,14 +1662,67 @@ void GoldFrontEnd::renderToBuffer(int pixelW, int pixelH, std::vector<std::uint8
     const int pw = std::max(1, pixelW);
     const int ph = std::max(1, pixelH);
 
-    Surface canvas(cairo_image_surface_create(CAIRO_FORMAT_ARGB32, pw, ph), cairo_surface_destroy);
-    Context crGuard(cairo_create(canvas.get()), cairo_destroy);
-    cairo_t* cr = crGuard.get();
-
-    cairo_set_source_rgb(cr, 10.0 / 255.0, 12.0 / 255.0, 10.0 / 255.0);
-    cairo_paint(cr);
-
     const GoldStageRect stage = computeStage(pw, ph);
+    const auto screen = fe_.screen();
+
+    auto* canvasPtr = assets_->renderCanvas.get();
+    if (!canvasPtr || assets_->renderCanvasW != pw || assets_->renderCanvasH != ph) {
+        assets_->renderCanvas.reset(cairo_image_surface_create(CAIRO_FORMAT_ARGB32, pw, ph));
+        assets_->renderCanvasW = pw;
+        assets_->renderCanvasH = ph;
+        canvasPtr = assets_->renderCanvas.get();
+    }
+    if (!canvasPtr || cairo_surface_status(canvasPtr) != CAIRO_STATUS_SUCCESS) {
+        throw std::runtime_error("Failed to allocate GoldFrontEnd Cairo surface");
+    }
+
+    auto blitCachedBackdrop = [&](bool isBriefing) -> bool {
+        auto& bgSurf = isBriefing ? assets_->briefingBg : assets_->mainBg;
+        if (!bgSurf) return false;
+        auto& cached = isBriefing ? assets_->cachedBriefBackdrop : assets_->cachedMainBackdrop;
+        int& cw = isBriefing ? assets_->cachedBriefW : assets_->cachedMainW;
+        int& ch = isBriefing ? assets_->cachedBriefH : assets_->cachedMainH;
+        if (!cached || cw != pw || ch != ph) {
+            cached.reset(cairo_image_surface_create(CAIRO_FORMAT_ARGB32, pw, ph));
+            cw = pw;
+            ch = ph;
+            gold_ui::Context bcr(cairo_create(cached.get()), cairo_destroy);
+            cairo_set_source_rgb(bcr.get(), 10.0 / 255.0, 12.0 / 255.0, 10.0 / 255.0);
+            cairo_paint(bcr.get());
+            cairo_translate(bcr.get(), stage.x, stage.y);
+            cairo_scale(bcr.get(), stage.scale, stage.scale);
+            cairo_rectangle(bcr.get(), 0, 0, kStageW, kStageH);
+            cairo_clip(bcr.get());
+            drawSurfaceStretched(bcr.get(), bgSurf.get(), 0, 0, kStageW, kStageH);
+            cairo_surface_flush(cached.get());
+        }
+        const int srcStride = cairo_image_surface_get_stride(cached.get());
+        const int dstStride = cairo_image_surface_get_stride(canvasPtr);
+        const auto* srcBytes = cairo_image_surface_get_data(cached.get());
+        auto* dstBytes = cairo_image_surface_get_data(canvasPtr);
+        if (srcStride == dstStride) {
+            std::memcpy(dstBytes, srcBytes, std::size_t(dstStride) * ph);
+        } else {
+            const int rowBytes = std::min(srcStride, dstStride);
+            for (int y = 0; y < ph; ++y) {
+                std::memcpy(dstBytes + std::size_t(y) * dstStride,
+                            srcBytes + std::size_t(y) * srcStride, std::size_t(rowBytes));
+            }
+        }
+        cairo_surface_mark_dirty(canvasPtr);
+        return true;
+    };
+
+    const bool useBriefBg = (screen == FrontEnd::Screen::Briefing);
+    const bool drewCachedBg = (screen != FrontEnd::Screen::Credits) ? blitCachedBackdrop(useBriefBg) : false;
+
+    Context crGuard(cairo_create(canvasPtr), cairo_destroy);
+    cairo_t* cr = crGuard.get();
+    if (!drewCachedBg) {
+        cairo_set_source_rgb(cr, 10.0 / 255.0, 12.0 / 255.0, 10.0 / 255.0);
+        cairo_paint(cr);
+    }
+
     cairo_save(cr);
     cairo_translate(cr, stage.x, stage.y);
     cairo_scale(cr, stage.scale, stage.scale);
@@ -1605,7 +1731,6 @@ void GoldFrontEnd::renderToBuffer(int pixelW, int pixelH, std::vector<std::uint8
 
     auto* pangoCtx = assets_->fontCtx.get();
     const RenderEnv env{cr, pangoCtx};
-    const auto screen = fe_.screen();
     const RamkaScope ramkaScope(&assets_->ramka);
 
     if (screen == FrontEnd::Screen::Credits) {
@@ -1613,8 +1738,7 @@ void GoldFrontEnd::renderToBuffer(int pixelW, int pixelH, std::vector<std::uint8
     } else if (screen == FrontEnd::Screen::Briefing) {
         renderBriefing(env);
     } else {
-        if (assets_->mainBg) drawSurfaceStretched(cr, assets_->mainBg.get(), 0, 0, kStageW, kStageH);
-        else drawFallbackBackdrop(cr, false);
+        if (!drewCachedBg && !assets_->mainBg) drawFallbackBackdrop(cr, false);
 
         switch (screen) {
             case FrontEnd::Screen::MainMenu:
@@ -1670,11 +1794,11 @@ void GoldFrontEnd::renderToBuffer(int pixelW, int pixelH, std::vector<std::uint8
     if (cairo_status(cr) != CAIRO_STATUS_SUCCESS) {
         throw std::runtime_error(cairo_status_to_string(cairo_status(cr)));
     }
-    cairo_surface_flush(canvas.get());
+    cairo_surface_flush(canvasPtr);
     outRgba.resize(std::size_t(pw) * ph * 4);
     if (!SDL_ConvertPixels(pw, ph, SDL_PIXELFORMAT_ARGB8888,
-                           cairo_image_surface_get_data(canvas.get()),
-                           cairo_image_surface_get_stride(canvas.get()),
+                           cairo_image_surface_get_data(canvasPtr),
+                           cairo_image_surface_get_stride(canvasPtr),
                            SDL_PIXELFORMAT_RGBA32, outRgba.data(), pw * 4)) {
         throw std::runtime_error(SDL_GetError());
     }
@@ -1697,8 +1821,14 @@ void GoldFrontEnd::draw(VulkanWindow& renderer) {
     lastPixelW_ = pw;
     lastPixelH_ = ph;
     dirty_ = false;
-    renderToBuffer(pw, ph, rgba_);
-    renderer.setOverlay(unsigned(pw), unsigned(ph), rgba_, OverlaySlot::panel);
+    int rw = pw;
+    int rh = ph;
+    if (rh > 1080) {
+        rw = std::max(1, static_cast<int>(std::lround(static_cast<double>(pw) * 1080.0 / static_cast<double>(ph))));
+        rh = 1080;
+    }
+    renderToBuffer(rw, rh, rgba_);
+    renderer.setOverlay(unsigned(rw), unsigned(rh), rgba_, OverlaySlot::panel, true);
 }
 
 }  // namespace ss2

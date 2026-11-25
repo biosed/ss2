@@ -203,6 +203,54 @@ void testFallbackInteraction() {
     fe.handleMouseDown(695.0, 500.0, 1);  // Start on Briefing
     check(fe.state().screen() == ss2::FrontEnd::Screen::Launch, "Briefing Start reaches Launch");
 
+    // Long Attack-style (~600 char) and overflowing (~1800 char) briefing layout + scrollbar checks.
+    {
+        ss2::GoldFrontEnd lfe(nullptr, {});
+        const std::string attackBrief =
+            "In the Netherlands, the Resistance hid the British and American forces that survived the "
+            "failure of the Arnheim operation. In the last months, strong German patrols searched the "
+            "surroundings of the Malibaan in Utrecht, searching for these soldiers. They could be "
+            "evacuated with help of the Resistance from Utrecht to an allied harbor, from where the "
+            "troops could be evacuated safely by sea. Goal of this action is not only to bring back "
+            "the forces to England, but at first to destroy the Gestapo quarter in the Malibaan of "
+            "Utrecht and to kill the German commanding general.";
+        std::string ultraLongBrief = attackBrief;
+        for (int rep = 0; rep < 3; ++rep) {
+            ultraLongBrief += "\n\nSector report " + std::to_string(rep + 1) + ": " + attackBrief;
+        }
+        lfe.setMissions({
+            {"Attack [Total Victory]", "/nonexistent/attack.ssm",
+             attackBrief, "384x384 Summer", 384u, 384u, 1u, false, 0},
+            {"Ultra Long Briefing", "/nonexistent/ultra.ssm",
+             ultraLongBrief, "512x512 Summer", 512u, 512u, 1u, false, 0},
+        });
+        lfe.handleMouseDown(188.0, 128.0, 1);  // SinglePlayer
+        lfe.handleMouseDown(186.0, 263.0, 1);  // SingleMissions
+        std::vector<std::uint8_t> b1, b2;
+        lfe.renderToBuffer(1280, 720, b1);
+        check(b1.size() == 1280u * 720u * 4u, "Attack-length description renders at 720p");
+        lfe.renderToBuffer(3840, 2160, b1);
+        check(b1.size() == 3840u * 2160u * 4u, "Attack-length description renders at 4K");
+
+        // Select row 1 (ultraLongBrief) -> scroll arrow down changes description panel pixels.
+        lfe.handleMouseDown(120.0, 168.0, 1);
+        lfe.renderToBuffer(1280, 720, b1);
+        lfe.handleMouseDown(756.0, 309.0, 1);  // desc_scroll_down {748, 300, 16, 18}
+        lfe.renderToBuffer(1280, 720, b2);
+        check(b1 != b2, "Ultra-long description down-scroll updates rendered pixels");
+
+        // Open Briefing for ultraLongBrief -> SDLK_DOWN and scrollbar arrow change rendered pixels.
+        lfe.handleMouseDown(188.0, 529.0, 1);
+        check(lfe.state().screen() == ss2::FrontEnd::Screen::Briefing, "ultra-long Briefing opened");
+        lfe.renderToBuffer(1280, 720, b1);
+        lfe.handleKey(SDLK_DOWN);
+        lfe.renderToBuffer(1280, 720, b2);
+        check(b1 != b2, "Ultra-long Briefing key scroll updates rendered pixels");
+        lfe.handleMouseDown(746.0, 31.0, 1);   // brief_scroll_up arrow {738, 22, 16, 18}
+        lfe.renderToBuffer(1280, 720, b1);
+        check(b1 != b2, "Ultra-long Briefing scrollbar up-arrow updates rendered pixels");
+    }
+
     // Synthetic Campaigns navigation: SinglePlayer -> Campaigns -> German -> Mission 2 -> Difficulty Easy -> Launch
     ss2::GoldFrontEnd cfe(nullptr, {});
     cfe.setCampaigns(makeSyntheticCampaigns());

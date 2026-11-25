@@ -116,7 +116,7 @@ public:
     bool surfaceIsSrgb() const;
     // An opaque RGBA8 panel drawn centred over everything else, clipped to the window.
     void setOverlay(unsigned width, unsigned height, std::span<const std::uint8_t> rgba,
-                    OverlaySlot = OverlaySlot::panel);
+                    OverlaySlot = OverlaySlot::panel, bool stretchFullscreen = false);
     void clearOverlay(OverlaySlot = OverlaySlot::panel);
     // Top-left corner, in window pixels, for a slot that has no fixed place (tooltip).
     void moveOverlay(OverlaySlot, int left, int top);

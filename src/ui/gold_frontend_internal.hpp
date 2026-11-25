@@ -179,6 +179,15 @@ struct GoldFrontEnd::Assets {
 
     gold_ui::Surface mainBg = gold_ui::makeNullSurface();
     gold_ui::Surface briefingBg = gold_ui::makeNullSurface();
+    gold_ui::Surface renderCanvas = gold_ui::makeNullSurface();
+    int renderCanvasW{0};
+    int renderCanvasH{0};
+    gold_ui::Surface cachedMainBackdrop = gold_ui::makeNullSurface();
+    int cachedMainW{0};
+    int cachedMainH{0};
+    gold_ui::Surface cachedBriefBackdrop = gold_ui::makeNullSurface();
+    int cachedBriefW{0};
+    int cachedBriefH{0};
     std::vector<std::filesystem::path> menuArchives;
     std::filesystem::path menuSuePath;
     std::string backwavEntry{"backwav"};
@@ -206,6 +215,13 @@ struct GoldFrontEnd::Assets {
     std::size_t musicReadOffset{0};
     SDL_AudioDeviceID musicAudioDev{0};
     SDL_AudioStream* musicAudioStream{nullptr};
+    std::string cachedMusicEntry;
+    assets::Bytes cachedMusicPcm;
+    float lastMusicGain{-1.0f};
+    bool musicDeviceResumed{false};
+    bool audioInitFailed{false};
+    std::uint64_t nextMusicPumpTickMs{0};
+    bool briefVoiceDucking{false};
     MenuCursorAnimator menuCursor;
     LanScanner lanScanner;
     bool lanScannerActive{false};

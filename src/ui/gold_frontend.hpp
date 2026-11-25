@@ -127,6 +127,7 @@ public:
     bool briefingPaused() const { return briefPaused_; }
     std::string briefingDisplayedText() const;
     std::string activeNotice() const { return noticeText_; }
+    bool isDirty() const noexcept { return dirty_; }
 
 private:
     struct Assets;
@@ -242,6 +243,12 @@ private:
     int scrollOffset_{0};
     int ratingsScroll_{0};
     double briefScroll_{0.0};
+    double descScroll_{0.0};
+    double descMaxScroll_{0.0};
+    std::string lastDescKey_;
+    bool descHasScrollbar_{false};
+    double briefMaxScroll_{0.0};
+    bool briefHasScrollbar_{false};
     std::string briefMediaPath_;
     int briefActivePart_{0};
     std::size_t briefLoopPart_{0};
