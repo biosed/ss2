@@ -22,13 +22,6 @@ jobs:
         shell: msys2 {0}
     steps:
       - uses: actions/checkout@v4
-      - name: Resolve release tag
-        run: |
-          TAG="${GITHUB_REF_NAME}"
-          if [ -n "${{ inputs.tag }}" ]; then
-            TAG="${{ inputs.tag }}"
-          fi
-          echo "RELEASE_TAG=${TAG}" >> "$GITHUB_ENV"
       - uses: msys2/setup-msys2@v2
         with:
           msystem: UCRT64
@@ -49,7 +42,25 @@ jobs:
             libvorbis:p
             vulkan-headers:p
             vulkan-loader:p
+      - name: Resolve release tag
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if [ -n "${{ inputs.tag }}" ]; then
+            TAG="${{ inputs.tag }}"
+          fi
+          echo "RELEASE_TAG=${TAG}" >> "$GITHUB_ENV"
+      - name: Compute ccache cache epoch (UTC day)
+        run: echo "DATE_EPOCH=$(date -u -d 'today 00:00' +%s)" >> "$GITHUB_ENV"
+      - name: Restore ccache cache
+        uses: actions/cache/restore@v4
+        with:
+          path: D:\a\_temp\ss2-ccache
+          key: ccache-win64-ucrt64-${{ env.DATE_EPOCH }}
+          restore-keys: |
+            ccache-win64-ucrt64-
       - name: Configure & build Release
+        env:
+          CCACHE_DIR: /d/a/_temp/ss2-ccache
         run: |
           cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
@@ -112,6 +123,15 @@ jobs:
             TAG="${{ inputs.tag }}"
           fi
           echo "RELEASE_TAG=${TAG}" >> "$GITHUB_ENV"
+      - name: Compute ccache cache epoch (UTC day)
+        run: echo "DATE_EPOCH=$(date -u -d 'today 00:00' +%s)" >> "$GITHUB_ENV"
+      - name: Restore ccache cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-${{ matrix.icd }}-g++-Release-${{ env.DATE_EPOCH }}
+          restore-keys: |
+            ccache-${{ matrix.icd }}-g++-Release-
       - name: Configure & build Release
         run: >
           cmake -S . -B build -G Ninja
