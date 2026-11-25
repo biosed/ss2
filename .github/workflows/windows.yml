@@ -76,7 +76,7 @@ jobs:
           key: ccache-win64-ucrt64-${{ env.DATE_EPOCH }}
       - name: Test
         run: |
-          export SDL_VIDEO_DRIVER=offscreen
+          export SDL_VIDEO_DRIVER=windows
           export SDL_AUDIODRIVER=dummy
           export VK_DRIVER_FILES="$(cygpath -w /ucrt64/share/vulkan/icd.d/lvp_icd.x86_64.json)"
           export VK_ADD_LAYER_PATH="$(cygpath -w /ucrt64/share/vulkan/explicit_layer.d)"
