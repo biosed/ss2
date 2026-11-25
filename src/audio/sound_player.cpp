@@ -2,6 +2,9 @@
 #include <SDL3/SDL_loadso.h>
 #include <algorithm>
 #include <array>
+#include <climits>
+#include <cstdint>
+#include <cstdio>
 #include <iostream>
 
 namespace ss2 {
@@ -14,15 +17,40 @@ struct VorbisInfo {
     long rate;
 };
 
+struct OvCallbacks {
+    std::size_t (*read_func)(void* ptr, std::size_t size, std::size_t nmemb, void* datasource);
+    int (*seek_func)(void* datasource, std::int64_t offset, int whence);
+    int (*close_func)(void* datasource);
+    long (*tell_func)(void* datasource);
+};
+
 using OvFopenFn = int (*)(const char*, void*);
+using OvOpenCallbacksFn = int (*)(void*, void*, const char*, long, OvCallbacks);
 using OvInfoFn = VorbisInfo* (*)(void*, int);
 using OvReadFn = long (*)(void*, char*, int, int, int, int, int*);
 using OvClearFn = int (*)(void*);
+
+#ifdef _WIN32
+std::size_t vfRead(void* ptr, std::size_t size, std::size_t nmemb, void* ds) {
+    return std::fread(ptr, size, nmemb, static_cast<std::FILE*>(ds));
+}
+int vfSeek(void* ds, std::int64_t offset, int whence) {
+    return _fseeki64(static_cast<std::FILE*>(ds), offset, whence);
+}
+int vfClose(void* ds) {
+    return std::fclose(static_cast<std::FILE*>(ds));
+}
+long vfTell(void* ds) {
+    const __int64 pos = _ftelli64(static_cast<std::FILE*>(ds));
+    return (pos < 0 || pos > LONG_MAX) ? -1L : static_cast<long>(pos);
+}
+#endif
 } // namespace
 
 struct SoundPlayer::MusicState {
     SDL_SharedObject* lib{nullptr};
     OvFopenFn ov_fopen{nullptr};
+    OvOpenCallbacksFn ov_open_callbacks{nullptr};
     OvInfoFn ov_info{nullptr};
     OvReadFn ov_read{nullptr};
     OvClearFn ov_clear{nullptr};
@@ -44,6 +72,24 @@ struct SoundPlayer::MusicState {
         }
         if (stream) SDL_DestroyAudioStream(stream);
         if (lib) SDL_UnloadObject(lib);
+    }
+
+    bool openTrack(const std::filesystem::path& path) {
+#ifdef _WIN32
+        if (ov_open_callbacks) {
+            std::FILE* f = _wfopen(path.c_str(), L"rb");
+            if (!f) return false;
+            const OvCallbacks cb{vfRead, vfSeek, vfClose, vfTell};
+            if (ov_open_callbacks(f, vfStorage.data(), nullptr, 0, cb) != 0) {
+                std::fclose(f);
+                return false;
+            }
+            return true;
+        }
+#endif
+        if (!ov_fopen) return false;
+        const std::string pathStr = path.string();
+        return ov_fopen(pathStr.c_str(), vfStorage.data()) == 0;
     }
 };
 
@@ -226,8 +272,7 @@ bool SoundPlayer::openMusicTrack(std::size_t index) {
     }
     music_->trackIndex = index % music_->playlist.size();
     const auto& path = music_->playlist[music_->trackIndex];
-    const std::string pathStr = path.string();
-    if (music_->ov_fopen(pathStr.c_str(), music_->vfStorage.data()) != 0) return false;
+    if (!music_->openTrack(path)) return false;
     music_->vfOpen = true;
     const auto* info = music_->ov_info(music_->vfStorage.data(), -1);
     if (!info || info->channels < 1 || info->channels > 2 || info->rate < 8000) {
@@ -262,28 +307,34 @@ bool SoundPlayer::startMusic(const std::filesystem::path& musicDir, float gain) 
 
     auto st = std::make_unique<MusicState>();
 #ifdef _WIN32
+    if (const char* base = SDL_GetBasePath(); base && *base) {
+        const auto u8 = (std::filesystem::path(std::u8string_view(reinterpret_cast<const char8_t*>(base))) /
+                         "libvorbisfile-3.dll").u8string();
+        const std::string baseDll(reinterpret_cast<const char*>(u8.data()), u8.size());
+        st->lib = SDL_LoadObject(baseDll.c_str());
+    }
     constexpr const char* kVorbisLibs[] = {"libvorbisfile-3.dll", "vorbisfile.dll", "libvorbisfile.dll"};
 #else
     constexpr const char* kVorbisLibs[] = {"libvorbisfile.so.3", "libvorbisfile.so"};
 #endif
     for (const char* libName : kVorbisLibs) {
-        st->lib = SDL_LoadObject(libName);
         if (st->lib) break;
+        st->lib = SDL_LoadObject(libName);
     }
     if (!st->lib) return false;
 
     st->ov_fopen = reinterpret_cast<OvFopenFn>(SDL_LoadFunction(st->lib, "ov_fopen"));
+    st->ov_open_callbacks = reinterpret_cast<OvOpenCallbacksFn>(SDL_LoadFunction(st->lib, "ov_open_callbacks"));
     st->ov_info = reinterpret_cast<OvInfoFn>(SDL_LoadFunction(st->lib, "ov_info"));
     st->ov_read = reinterpret_cast<OvReadFn>(SDL_LoadFunction(st->lib, "ov_read"));
     st->ov_clear = reinterpret_cast<OvClearFn>(SDL_LoadFunction(st->lib, "ov_clear"));
-    if (!st->ov_fopen || !st->ov_info || !st->ov_read || !st->ov_clear) return false;
+    if ((!st->ov_fopen && !st->ov_open_callbacks) || !st->ov_info || !st->ov_read || !st->ov_clear) return false;
 
     // Keep only the tracks the Ogg Vorbis decoder can open, so a next-track
     // press never lands on a file the decoder rejects.
     std::vector<std::filesystem::path> playable;
     for (const auto& path : tracks) {
-        const std::string pathStr = path.string();
-        if (st->ov_fopen(pathStr.c_str(), st->vfStorage.data()) != 0) continue;
+        if (!st->openTrack(path)) continue;
         const auto* info = st->ov_info(st->vfStorage.data(), -1);
         const bool ok = info && info->channels >= 1 && info->channels <= 2 && info->rate >= 8000;
         st->ov_clear(st->vfStorage.data());

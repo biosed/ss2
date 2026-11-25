@@ -1,5 +1,6 @@
 #include "assets/placement.hpp"
 #include "assets/mission.hpp"
+#include "assets/sprite.hpp"
 #include <algorithm>
 #include <array>
 #include <charconv>
@@ -31,7 +32,13 @@ std::uint32_t u32(View bytes, std::size_t at) {
 } // namespace
 
 std::vector<Placement> readTutorialPlacements(const std::filesystem::path& gameDir) {
-    const auto path = gameDir / "maps.src/map.020/mis.000/mapunits";
+    const auto path = resolveCaseInsensitivePath(gameDir, "maps.src/map.020/mis.000/mapunits");
+    std::error_code ec;
+    if (path.empty() || !std::filesystem::is_regular_file(path, ec)) {
+        const auto tut = resolveTutorialMissionPath(gameDir);
+        if (!tut.empty()) return readMissionPlacements(tut);
+        throw std::runtime_error("Cannot read Tutorial I unit list (neither maps.src/map.020 nor --- TUTORIAL I ---.SSM)");
+    }
     if (std::filesystem::file_size(path) > (1u << 20)) throw std::runtime_error("Unit list exceeds size limit");
     std::ifstream input(path);
     if (!input) throw std::runtime_error("Cannot read Tutorial I unit list");

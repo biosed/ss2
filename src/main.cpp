@@ -26,8 +26,91 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <shellapi.h>
+#endif
 
 namespace {
+#ifdef _WIN32
+std::string wideToUtf8(const wchar_t* wstr) {
+    if (!wstr || !*wstr) return {};
+    const int needed = WideCharToMultiByte(CP_UTF8, 0, wstr, -1, nullptr, 0, nullptr, nullptr);
+    if (needed <= 1) return {};
+    std::string out(static_cast<std::size_t>(needed - 1), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, wstr, -1, out.data(), needed, nullptr, nullptr);
+    return out;
+}
+
+std::vector<std::string> getUtf8CommandLineArgs() {
+    std::vector<std::string> out;
+    int wargc = 0;
+    LPWSTR* wargv = CommandLineToArgvW(GetCommandLineW(), &wargc);
+    if (!wargv) return out;
+    out.reserve(static_cast<std::size_t>(wargc));
+    for (int i = 0; i < wargc; ++i) {
+        out.push_back(wideToUtf8(wargv[i]));
+    }
+    LocalFree(wargv);
+    return out;
+}
+
+void discoverWindowsSoftwareVulkanIcd(const std::filesystem::path& dataHome, bool preferSoftware) {
+    std::vector<std::filesystem::path> dirs;
+    if (const char* base = SDL_GetBasePath(); base && *base) {
+        const auto baseDir = ss2::pathFromUtf8(base);
+        dirs.push_back(baseDir);
+        dirs.push_back(baseDir / "mesa");
+    }
+    if (!dataHome.empty()) {
+        dirs.push_back(dataHome / "vulkan");
+    }
+    std::filesystem::path foundIcd;
+    std::error_code ec;
+    for (const auto& dir : dirs) {
+        if (dir.empty() || !std::filesystem::is_directory(dir, ec) || ec) continue;
+        for (const char* name : {"lvp_icd.json", "lvp_icd.x86_64.json"}) {
+            const auto cand = dir / name;
+            if (std::filesystem::is_regular_file(cand, ec)) {
+                foundIcd = cand;
+                break;
+            }
+        }
+        if (!foundIcd.empty()) break;
+        const auto lvpDll = dir / "vulkan_lvp.dll";
+        if (std::filesystem::is_regular_file(lvpDll, ec)) {
+            const auto icdOut = dir / "lvp_icd.json";
+            std::ofstream out(icdOut, std::ios::binary | std::ios::trunc);
+            if (out) {
+                out << "{\n  \"file_format_version\": \"1.0.0\",\n  \"ICD\": {\n"
+                    << "    \"library_path\": \".\\\\vulkan_lvp.dll\",\n    \"api_version\": \"1.3.0\"\n  }\n}\n";
+                out.close();
+                if (out) foundIcd = icdOut;
+            }
+            if (!foundIcd.empty()) break;
+        }
+    }
+    if (foundIcd.empty()) return;
+    const std::wstring wicd = foundIcd.wstring();
+    if (preferSoftware) {
+        _wputenv_s(L"VK_DRIVER_FILES", wicd.c_str());
+        _wputenv_s(L"VK_ICD_FILENAMES", wicd.c_str());
+    } else {
+        std::wstring combined = wicd;
+        if (const wchar_t* prev = _wgetenv(L"VK_ADD_DRIVER_FILES"); prev && *prev) {
+            combined = std::wstring(prev) + L";" + wicd;
+        }
+        _wputenv_s(L"VK_ADD_DRIVER_FILES", combined.c_str());
+    }
+}
+#endif
+
 struct SDLSession {
     SDLSession() {
         if (!SDL_Init(SDL_INIT_VIDEO)) throw std::runtime_error(SDL_GetError());
@@ -579,10 +662,22 @@ std::optional<FrontEndResult> runFrontEnd(SDL_Window* window, ss2::ValidationRep
 }
 
 int main(int argc, char** argv) try {
+#ifdef _WIN32
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
+    const std::vector<std::string> winUtf8Args = getUtf8CommandLineArgs();
+    std::vector<char*> winArgPtrs;
+    if (!winUtf8Args.empty()) {
+        winArgPtrs.reserve(winUtf8Args.size());
+        for (const auto& s : winUtf8Args) winArgPtrs.push_back(const_cast<char*>(s.c_str()));
+        argc = static_cast<int>(winArgPtrs.size());
+        argv = winArgPtrs.data();
+    }
+#endif
     std::filesystem::path gameDir, mission, hdPack, recordPath, replayPath, loadSavePath;
     std::string campaignQuery;
     int limit = 0;
-    bool fourK = false, validate = false, timing = false;
+    bool fourK = false, validate = false, timing = false, preferSoftwareRenderer = false;
     std::optional<bool> fullscreen;
     bool originalInfantry = false;
     bool autoEngage = true;
@@ -627,24 +722,25 @@ int main(int argc, char** argv) try {
                          "--no-movies skips the opening logo and intro Bink movies.\n"
                          "--original-infantry uses the original infantry size. The default is 125%.\n"
                          "--no-auto-engage disables automatic firing on spotted enemies (manual attack orders only).\n"
+                         "--software-renderer prefers a Vulkan CPU/software device (e.g. Mesa Lavapipe) over hardware GPUs.\n"
                          "--difficulty selects Easy, Normal (default), or Hard gameplay scaling.\n"
                          "--hd-pack loads an optional 2x HD asset pack (tutorial1_2x.ss2hd) for --game-dir.\n"
                          "--lang sets the interface language (English, French or Spanish). The default follows LC_ALL, LC_MESSAGES or LANG. Mission text stays in English.\n";
             return 0;
-        } else if (arg == "--game-dir" && i + 1 < argc) gameDir = argv[++i];
+        } else if (arg == "--game-dir" && i + 1 < argc) gameDir = ss2::pathFromUtf8(argv[++i]);
         else if (arg == "--mod" && i + 1 < argc) cliMod = argv[++i];
-        else if (arg == "--hd-pack" && i + 1 < argc) hdPack = argv[++i];
-        else if (arg == "--mission" && i + 1 < argc) mission = argv[++i];
+        else if (arg == "--hd-pack" && i + 1 < argc) hdPack = ss2::pathFromUtf8(argv[++i]);
+        else if (arg == "--mission" && i + 1 < argc) mission = ss2::pathFromUtf8(argv[++i]);
         else if (arg == "--campaign" && i + 1 < argc) campaignQuery = argv[++i];
-        else if (arg == "--record" && i + 1 < argc) recordPath = argv[++i];
+        else if (arg == "--record" && i + 1 < argc) recordPath = ss2::pathFromUtf8(argv[++i]);
         else if (arg == "--replay" && i + 1 < argc) {
             if (!replayPath.empty()) throw std::invalid_argument("Choose either --replay or --watch-replay");
-            replayPath = argv[++i];
+            replayPath = ss2::pathFromUtf8(argv[++i]);
         } else if (arg == "--watch-replay" && i + 1 < argc) {
             if (!replayPath.empty()) throw std::invalid_argument("Choose either --replay or --watch-replay");
-            replayPath = argv[++i];
+            replayPath = ss2::pathFromUtf8(argv[++i]);
             watchReplay = true;
-        } else if (arg == "--load-save" && i + 1 < argc) loadSavePath = argv[++i];
+        } else if (arg == "--load-save" && i + 1 < argc) loadSavePath = ss2::pathFromUtf8(argv[++i]);
         else if (arg == "--list-missions") listMissions = true;
         else if (arg == "--list-campaigns") listCampaigns = true;
         else if (arg == "--list-multiplayer") listMultiplayer = true;
@@ -688,6 +784,7 @@ int main(int argc, char** argv) try {
         }
         else if (arg == "--validate") validate = true;
         else if (arg == "--timing") timing = true;
+        else if (arg == "--software-renderer") preferSoftwareRenderer = true;
         else if (arg == "--frames" && i + 1 < argc) {
             const std::string_view n(argv[++i]);
             const auto [end, err] = std::from_chars(n.data(), n.data() + n.size(), limit);
@@ -745,11 +842,13 @@ int main(int argc, char** argv) try {
                                  !settingsPath.empty();
     const auto resolveGameDir = [&]() -> std::filesystem::path {
         if (!gameDir.empty()) return gameDir;
-        if (const char* configured = std::getenv("SS2_GAME_DIR"); configured && *configured) return configured;
+        if (const auto configured = ss2::getenvPath("SS2_GAME_DIR", L"SS2_GAME_DIR"); !configured.empty()) {
+            return configured;
+        }
         if (!dataHome.empty() && std::filesystem::is_directory(dataHome / "game")) return dataHome / "game";
         if (persistSettings) {
             if (const char* base = SDL_GetBasePath(); base && *base) {
-                const std::filesystem::path baseDir(base);
+                const auto baseDir = ss2::pathFromUtf8(base);
                 if (hasGameDataAt(baseDir)) return baseDir;
             }
         }
@@ -951,7 +1050,15 @@ int main(int argc, char** argv) try {
     if (parsedReplay) {
         if (parsedReplay->difficulty) settings.difficulty = *parsedReplay->difficulty;
         if (parsedReplay->autoEngage) autoEngage = *parsedReplay->autoEngage;
+        if (!watchReplay && limit == 0 && !timing && !validate && !overviewOnly && !mpRequested) {
+            return ss2::verifyReplayHeadless(
+                gameDir, mission, originalInfantry, settings.difficulty, autoEngage, *parsedReplay);
+        }
     }
+    ss2::VulkanWindow::setPreferSoftwareRendererDefault(preferSoftwareRenderer);
+#ifdef _WIN32
+    discoverWindowsSoftwareVulkanIcd(dataHome, preferSoftwareRenderer);
+#endif
     SDLSession sdl;
     if (!noMovies && !settings.skipIntro && !gameDir.empty() && !limit && !timing && !overviewOnly &&
         !parsedReplay && !parsedSave && !mpRequested)
@@ -1078,6 +1185,23 @@ int main(int argc, char** argv) try {
     }
     return result;
 } catch (const std::exception& e) {
-    std::cerr << "ss2: " << e.what() << '\n';
+    std::string msg = e.what();
+#ifdef _WIN32
+    if (msg.find("VK_KHR_surface") != std::string::npos ||
+        msg.find("Need Vulkan 1.3") != std::string::npos ||
+        msg.find("vulkan-1.dll") != std::string::npos) {
+        msg += "\n\nHint: Ensure Vulkan 1.3 GPU drivers are installed, or place Mesa Lavapipe "
+               "(vulkan_lvp.dll + lvp_icd.json) next to ss2.exe or in %LOCALAPPDATA%\\ss2\\vulkan "
+               "and run with --software-renderer (if running elevated as Administrator, register "
+               "lvp_icd.json under HKLM\\SOFTWARE\\Khronos\\Vulkan\\Drivers).";
+    }
+    std::cerr << "ss2: " << msg << '\n';
+    DWORD pids[2]{};
+    if (GetConsoleProcessList(pids, 2) == 1 && !_wgetenv(L"SS2_NO_ERROR_BOX") && !_wgetenv(L"CI")) {
+        (void)SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Sudden Strike II", msg.c_str(), nullptr);
+    }
+#else
+    std::cerr << "ss2: " << msg << '\n';
+#endif
     return 1;
 }

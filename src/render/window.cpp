@@ -18,6 +18,7 @@
 
 namespace ss2 {
 namespace {
+bool gPreferSoftwareRenderer = false;
 constexpr auto transfer = vk::ImageUsageFlagBits::eTransferDst;
 constexpr auto attachment = vk::ImageUsageFlagBits::eColorAttachment;
 struct SpriteVertex { float x, y, u, v, brightness, alpha; };
@@ -102,6 +103,7 @@ struct VulkanWindow::Impl {
     double centerX{}, centerY{}, scale = 1.0;
     vk::Format surfaceFormat{};
     bool transformReady = false;
+    bool preferSoftware = gPreferSoftwareRenderer;
     bool mapLinear = false;
     vk::Format mapFormat{};
     // Sprite pass. Views follow the swapchain; the pipeline follows the surface format.
@@ -227,8 +229,16 @@ struct VulkanWindow::Impl {
                     candidate.getSurfaceFormatsKHR(*surface).empty()) break;
                 if (!candidate.getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan13Features>()
                          .get<vk::PhysicalDeviceVulkan13Features>().dynamicRendering) break;
-                const int score = props.deviceType == vk::PhysicalDeviceType::eDiscreteGpu ? 2 :
-                                  props.deviceType == vk::PhysicalDeviceType::eIntegratedGpu ? 1 : 0;
+                int score = 0;
+                if (preferSoftware) {
+                    score = props.deviceType == vk::PhysicalDeviceType::eCpu ? 3 :
+                            props.deviceType == vk::PhysicalDeviceType::eDiscreteGpu ? 2 :
+                            props.deviceType == vk::PhysicalDeviceType::eIntegratedGpu ? 1 : 0;
+                } else {
+                    score = props.deviceType == vk::PhysicalDeviceType::eDiscreteGpu ? 3 :
+                            props.deviceType == vk::PhysicalDeviceType::eIntegratedGpu ? 2 :
+                            props.deviceType == vk::PhysicalDeviceType::eVirtualGpu ? 1 : 0;
+                }
                 if (score > best) {
                     best = score;
                     gpu = candidate;
@@ -1299,7 +1309,27 @@ struct VulkanWindow::Impl {
         } catch (const vk::OutOfDateKHRError&) {
             dirty = true;
             return false;
+        } catch (const vk::SurfaceLostKHRError&) {
+            recoverLostSurface();
+            return false;
         }
+    }
+
+    void recoverLostSurface() {
+        device->waitIdle();
+        views.clear();
+        chain.reset();
+        rendered.clear();
+        // VUID-vkDestroySurfaceKHR-surface-01266: swapchain must be destroyed before surface.
+        surface.reset();
+        VkSurfaceKHR handle{};
+        if (!SDL_Vulkan_CreateSurface(window, *instance, nullptr, &handle))
+            throw std::runtime_error(SDL_GetError());
+        surface = vk::UniqueSurfaceKHR(handle, *instance);
+        if (!SDL_Vulkan_GetPresentationSupport(*instance, gpu, family) ||
+            !gpu.getSurfaceSupportKHR(family, *surface))
+            throw std::runtime_error("Recreated Vulkan surface is not presentable on active queue");
+        dirty = true;
     }
 
     assets::MapImage captureFrame() {
@@ -1399,6 +1429,8 @@ void VulkanWindow::setBars(std::vector<MapBar> list) {
     impl_->bars = std::move(list);
 }
 void VulkanWindow::setMapFilterLinear(bool linear) { impl_->mapLinear = linear; }
+void VulkanWindow::setPreferSoftwareRenderer(bool prefer) { impl_->preferSoftware = prefer; }
+void VulkanWindow::setPreferSoftwareRendererDefault(bool prefer) { gPreferSoftwareRenderer = prefer; }
 void VulkanWindow::setSpriteAtlas(unsigned slot, const assets::MapImage& atlas) { impl_->setSpriteAtlas(slot, atlas); }
 void VulkanWindow::setSprites(std::vector<Sprite> list) {
     for (const auto& s : list) {

@@ -462,20 +462,23 @@ std::filesystem::path normalizeNativeTarget(std::string_view raw) {
 }
 
 std::filesystem::path defaultUserModsRoot() {
-    if (const char* xdg = std::getenv("XDG_DATA_HOME"); xdg && *xdg) {
+#ifdef _WIN32
+    if (const wchar_t* xdg = _wgetenv(L"XDG_DATA_HOME"); xdg && *xdg) {
         return std::filesystem::path(xdg) / "ss2" / "mods";
     }
-#ifdef _WIN32
-    if (const char* localAppData = std::getenv("LOCALAPPDATA"); localAppData && *localAppData) {
+    if (const wchar_t* localAppData = _wgetenv(L"LOCALAPPDATA"); localAppData && *localAppData) {
         return std::filesystem::path(localAppData) / "ss2" / "mods";
     }
-    if (const char* appData = std::getenv("APPDATA"); appData && *appData) {
+    if (const wchar_t* appData = _wgetenv(L"APPDATA"); appData && *appData) {
         return std::filesystem::path(appData) / "ss2" / "mods";
     }
-    if (const char* profile = std::getenv("USERPROFILE"); profile && *profile) {
+    if (const wchar_t* profile = _wgetenv(L"USERPROFILE"); profile && *profile) {
         return std::filesystem::path(profile) / "AppData" / "Local" / "ss2" / "mods";
     }
 #else
+    if (const char* xdg = std::getenv("XDG_DATA_HOME"); xdg && *xdg) {
+        return std::filesystem::path(xdg) / "ss2" / "mods";
+    }
     if (const char* home = std::getenv("HOME"); home && *home) {
         return std::filesystem::path(home) / ".local" / "share" / "ss2" / "mods";
     }

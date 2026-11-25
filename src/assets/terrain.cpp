@@ -230,10 +230,20 @@ MapImage decodeTerrain(View info, View rhombs, View rhombsRes, View rhombsPl) {
 }
 
 MapImage loadTutorialTerrain(const std::filesystem::path& gameDir, unsigned scheme) {
-    const auto info = readBoundedFile(resolveCaseInsensitivePath(gameDir, "maps.src/map.020/info"), maxInfoBytes);
-    const auto rhombs = readBoundedFile(resolveCaseInsensitivePath(gameDir, "maps.src/map.020/rhombs"), maxRhombsBytes);
-    const auto [rhombsRes, rhombsPl] = readSchemeTerrainAssets(gameDir, scheme);
-    return decodeTerrain(info, rhombs, rhombsRes, rhombsPl);
+    const auto infoPath = resolveCaseInsensitivePath(gameDir, "maps.src/map.020/info");
+    const auto rhombsPath = resolveCaseInsensitivePath(gameDir, "maps.src/map.020/rhombs");
+    std::error_code ec1, ec2;
+    if (!infoPath.empty() && !rhombsPath.empty() &&
+        std::filesystem::is_regular_file(infoPath, ec1) &&
+        std::filesystem::is_regular_file(rhombsPath, ec2)) {
+        const auto info = readBoundedFile(infoPath, maxInfoBytes);
+        const auto rhombs = readBoundedFile(rhombsPath, maxRhombsBytes);
+        const auto [rhombsRes, rhombsPl] = readSchemeTerrainAssets(gameDir, scheme);
+        return decodeTerrain(info, rhombs, rhombsRes, rhombsPl);
+    }
+    const auto tut = resolveTutorialMissionPath(gameDir);
+    if (!tut.empty()) return loadMissionTerrain(gameDir, tut);
+    throw std::runtime_error("Cannot find Tutorial I terrain (neither maps.src/map.020 nor --- TUTORIAL I ---.SSM)");
 }
 
 MapImage loadMissionTerrain(const std::filesystem::path& gameDir, const std::filesystem::path& missionPath) {

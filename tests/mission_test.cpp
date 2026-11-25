@@ -2830,6 +2830,76 @@ void testModVfsAndAddons() {
     const auto* baseOff = baseCat->find("officer");
     check(baseOff && baseOff->health == 100 && baseCat->buildingName(0u) == "Base Hut",
           "setActiveMod(\"vanilla\") restores base UnitCatalog stats");
+
+    // Verify retail GOG/CD Tutorial I fallback when maps.src/map.020 is absent.
+    {
+        const TempDir tutOnly("ss2_test_tut1_ssm_fallback");
+        const auto singleDir = tutOnly.path / "maps" / "single";
+        std::filesystem::create_directories(singleDir);
+        MissionSpec spec{};
+        spec.rawDescription = "Fallback Tut";
+        SupportSpec sup{};
+        sup.unames = {"rguner", "bt7"};
+        auto raw = buildSyntheticMissionBytes(spec, &sup);
+        Bytes iUnits;
+        appendU32(iUnits, 2u);
+        auto appendTopUnit = [&](std::uint16_t unameIdx, std::uint16_t u, std::uint16_t v) {
+            iUnits.push_back(1);
+            iUnits.push_back(100);
+            iUnits.push_back(100);
+            iUnits.push_back(0);
+            iUnits.push_back(0);
+            iUnits.push_back(50);
+            appendU16(iUnits, unameIdx);
+            appendU16(iUnits, 0);
+            iUnits.push_back(0);
+            iUnits.push_back(0);
+            appendU16(iUnits, u);
+            appendU16(iUnits, v);
+            iUnits.push_back(0);
+            iUnits.push_back(0);
+        };
+        appendTopUnit(0u, 16u, 16u);
+        appendTopUnit(1u, 32u, 32u);
+        appendRecord(raw, "I-UNITS", iUnits);
+        writeGzipFile(singleDir / "--- TUTORIAL I ---.SSM", raw);
+
+        check(resolveTutorialMissionPath(tutOnly.path) == singleDir / "--- TUTORIAL I ---.SSM",
+              "resolveTutorialMissionPath locates --- TUTORIAL I ---.SSM without maps.src");
+        const auto tutUnits = readTutorialPlacements(tutOnly.path);
+        check(tutUnits.size() == 2u && tutUnits[0].id == "rguner" && tutUnits[1].id == "bt7",
+              "readTutorialPlacements falls back to --- TUTORIAL I ---.SSM when maps.src/map.020 is absent");
+    }
+
+    if (const char* retailEnv = std::getenv("SS2_PRIVATE_GAME"); retailEnv && *retailEnv) {
+        const std::filesystem::path retailDir(retailEnv);
+        const auto tutSsm = resolveTutorialMissionPath(retailDir);
+        if (!tutSsm.empty() && std::filesystem::is_regular_file(retailDir / "maps.src/map.020/info")) {
+            const TempDir gogSim("ss2_test_gog_tut1_only");
+            std::filesystem::create_directories(gogSim.path / "maps" / "single");
+            std::filesystem::copy_file(tutSsm, gogSim.path / "maps" / "single" / "--- TUTORIAL I ---.SSM");
+            for (const char* f : {"sudtest.ini", "desc_common.sue", "game_common.sue", "game_scheme1.sue", "lang.sue"}) {
+                const auto src = resolveCaseInsensitivePath(retailDir, f);
+                if (!src.empty()) std::filesystem::create_symlink(src, gogSim.path / src.filename());
+            }
+            const auto devMap = loadTutorialTerrain(retailDir);
+            const auto gogMap = loadTutorialTerrain(gogSim.path);
+            check(gogMap.width == devMap.width && gogMap.height == devMap.height,
+                  "loadTutorialTerrain matches dimensions via --- TUTORIAL I ---.SSM without maps.src");
+            std::vector<BuildingPlacement> devB, gogB;
+            std::vector<BridgePlacement> devBr, gogBr;
+            auto devCanvas = devMap;
+            auto gogCanvas = gogMap;
+            const auto devObj = drawTutorialScenery(devCanvas, retailDir, nullptr, 0, &devB, &devBr);
+            const auto gogObj = drawTutorialScenery(gogCanvas, gogSim.path, nullptr, 0, &gogB, &gogBr);
+            check(devObj > 1000u && gogObj > 1000u && !gogB.empty() && gogBr.size() == devBr.size(),
+                  "drawTutorialScenery without maps.src decodes Tutorial I scenery, buildings, and bridges");
+            const auto devPl = readTutorialPlacements(retailDir);
+            const auto gogPl = readTutorialPlacements(gogSim.path);
+            check(devPl.size() == gogPl.size() && gogPl.size() > 50u,
+                  "readTutorialPlacements without maps.src matches retail Tutorial I unit count");
+        }
+    }
 }
 
 } // namespace

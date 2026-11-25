@@ -652,6 +652,12 @@ std::size_t drawTutorialScenery(MapImage& map, const std::filesystem::path& game
                                 std::vector<BuildingPlacement>* buildings,
                                 std::vector<BridgePlacement>* bridges) {
     const auto path = resolveCaseInsensitivePath(gameDir, "maps.src/map.020/objects");
+    std::error_code ec;
+    if (path.empty() || !std::filesystem::is_regular_file(path, ec)) {
+        const auto tut = resolveTutorialMissionPath(gameDir);
+        if (!tut.empty()) return drawMissionScenery(map, gameDir, tut, depth, buildings, bridges);
+        throw std::runtime_error("Cannot open tutorial scenery (neither maps.src/map.020/objects nor --- TUTORIAL I ---.SSM)");
+    }
     if (std::filesystem::file_size(path) > (16u << 20)) throw std::runtime_error("Scenery list exceeds limit");
     std::ifstream input(path);
     if (!input) throw std::runtime_error("Cannot open tutorial scenery");

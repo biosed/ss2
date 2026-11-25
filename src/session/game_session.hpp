@@ -72,6 +72,10 @@ int runGameSession(SDL_Window* window, ValidationReport* report, int limit, bool
                    std::map<unsigned, std::vector<assets::ReinforcementUnit>>* campaignPools = nullptr,
                    bool liveReplay = false);
 
+int verifyReplayHeadless(const std::filesystem::path& gameDir, const std::filesystem::path& mission,
+                         bool originalInfantry, int difficulty, bool autoEngage,
+                         const cmd::ReplayFile& replayFile);
+
 class FrameSample {
     using Clock = std::chrono::steady_clock;
     const Clock::time_point warmupEnd_ = Clock::now() + std::chrono::seconds(1);

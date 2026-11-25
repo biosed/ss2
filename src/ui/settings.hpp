@@ -16,8 +16,36 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#ifdef _WIN32
+#include <wchar.h>
+#endif
 
 namespace ss2 {
+
+inline std::filesystem::path pathFromUtf8(std::string_view utf8) {
+    return std::filesystem::path(
+        std::u8string_view(reinterpret_cast<const char8_t*>(utf8.data()), utf8.size()));
+}
+
+inline std::string pathToUtf8(const std::filesystem::path& path) {
+    const auto u8 = path.u8string();
+    return std::string(reinterpret_cast<const char*>(u8.data()), u8.size());
+}
+
+inline std::filesystem::path getenvPath(const char* name, const wchar_t* wname) {
+#ifdef _WIN32
+    (void)name;
+    if (const wchar_t* val = _wgetenv(wname); val && *val) {
+        return std::filesystem::path(val);
+    }
+#else
+    (void)wname;
+    if (const char* val = std::getenv(name); val && *val) {
+        return std::filesystem::path(val);
+    }
+#endif
+    return {};
+}
 
 struct PlayerProfile {
     std::string name;
@@ -72,41 +100,41 @@ inline std::string normalizeMissionKey(std::string_view raw) {
 }
 
 inline std::filesystem::path platformAppConfigRoot() {
-    if (const char* xdg = std::getenv("XDG_CONFIG_HOME"); xdg && *xdg) {
-        return std::filesystem::path(xdg) / "ss2";
+    if (const auto xdg = getenvPath("XDG_CONFIG_HOME", L"XDG_CONFIG_HOME"); !xdg.empty()) {
+        return xdg / "ss2";
     }
 #ifdef _WIN32
-    if (const char* appData = std::getenv("APPDATA"); appData && *appData) {
-        return std::filesystem::path(appData) / "ss2";
+    if (const auto appData = getenvPath("APPDATA", L"APPDATA"); !appData.empty()) {
+        return appData / "ss2";
     }
-    if (const char* profile = std::getenv("USERPROFILE"); profile && *profile) {
-        return std::filesystem::path(profile) / "AppData" / "Roaming" / "ss2";
+    if (const auto profile = getenvPath("USERPROFILE", L"USERPROFILE"); !profile.empty()) {
+        return profile / "AppData" / "Roaming" / "ss2";
     }
 #else
-    if (const char* home = std::getenv("HOME"); home && *home) {
-        return std::filesystem::path(home) / ".config" / "ss2";
+    if (const auto home = getenvPath("HOME", L"HOME"); !home.empty()) {
+        return home / ".config" / "ss2";
     }
 #endif
     return {};
 }
 
 inline std::filesystem::path platformAppDataRoot() {
-    if (const char* xdg = std::getenv("XDG_DATA_HOME"); xdg && *xdg) {
-        return std::filesystem::path(xdg) / "ss2";
+    if (const auto xdg = getenvPath("XDG_DATA_HOME", L"XDG_DATA_HOME"); !xdg.empty()) {
+        return xdg / "ss2";
     }
 #ifdef _WIN32
-    if (const char* localAppData = std::getenv("LOCALAPPDATA"); localAppData && *localAppData) {
-        return std::filesystem::path(localAppData) / "ss2";
+    if (const auto localAppData = getenvPath("LOCALAPPDATA", L"LOCALAPPDATA"); !localAppData.empty()) {
+        return localAppData / "ss2";
     }
-    if (const char* appData = std::getenv("APPDATA"); appData && *appData) {
-        return std::filesystem::path(appData) / "ss2";
+    if (const auto appData = getenvPath("APPDATA", L"APPDATA"); !appData.empty()) {
+        return appData / "ss2";
     }
-    if (const char* profile = std::getenv("USERPROFILE"); profile && *profile) {
-        return std::filesystem::path(profile) / "AppData" / "Local" / "ss2";
+    if (const auto profile = getenvPath("USERPROFILE", L"USERPROFILE"); !profile.empty()) {
+        return profile / "AppData" / "Local" / "ss2";
     }
 #else
-    if (const char* home = std::getenv("HOME"); home && *home) {
-        return std::filesystem::path(home) / ".local" / "share" / "ss2";
+    if (const auto home = getenvPath("HOME", L"HOME"); !home.empty()) {
+        return home / ".local" / "share" / "ss2";
     }
 #endif
     return {};

@@ -43,6 +43,21 @@ if(NOT "${rep_out}" MATCHES "Replay verified: [0-9]+ commands, tick [0-9]+, stat
   message(FATAL_ERROR "--replay did not print verification line:\n${rep_out}")
 endif()
 
+# Headless batch --replay without --frames or a Vulkan window/display driver.
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" -E env SDL_VIDEO_DRIVER=dummy
+          "${PROGRAM}" --game-dir "${GAME_DIR}"
+          --replay "${rep_file}" --no-movies
+  RESULT_VARIABLE hless_rc
+  OUTPUT_VARIABLE hless_out
+  ERROR_VARIABLE hless_err)
+if(NOT hless_rc EQUAL 0)
+  message(FATAL_ERROR "Headless --replay exited with ${hless_rc}:\n${hless_out}\n${hless_err}")
+endif()
+if(NOT "${hless_out}" MATCHES "Replay verified: [0-9]+ commands, tick [0-9]+, stateHash 0x[0-9a-f]+")
+  message(FATAL_ERROR "Headless --replay did not print verification line:\n${hless_out}")
+endif()
+
 # Flip the final hex digit of # end_state_hash: and require --replay to reject it.
 file(READ "${rep_file}" rep_text)
 if("${rep_text}" MATCHES "# end_state_hash: 0x[0-9a-f]+0\n")

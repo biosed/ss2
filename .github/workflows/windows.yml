@@ -122,8 +122,12 @@ jobs:
         run: |
           $env:PATH = "C:\Windows\System32;C:\Windows"
           if (-not (Test-Path ".\dist\ss2-windows-x86_64\vulkan-1.dll")) { throw "Missing vulkan-1.dll" }
-          .\dist\ss2-windows-x86_64\ss2.exe --help
+          $vi = (Get-Item ".\dist\ss2-windows-x86_64\ss2.exe").VersionInfo
+          if ($vi.ProductName -ne "Sudden Strike II Native Engine") { throw "Unexpected ProductName: $($vi.ProductName)" }
+          $helpOut = .\dist\ss2-windows-x86_64\ss2.exe --help
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $helpOut
+          if (-not ($helpOut -match "--software-renderer")) { throw "--software-renderer missing from --help" }
       - name: Upload Windows build artifact
         uses: actions/upload-artifact@v4
         with:

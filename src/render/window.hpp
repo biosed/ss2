@@ -84,6 +84,8 @@ public:
     // Terrain scaling filter. Nearest (the default) keeps pixel art crisp; linear smooths
     // a high-resolution map when zoomed in. Takes effect on the next frame.
     void setMapFilterLinear(bool linear);
+    void setPreferSoftwareRenderer(bool prefer);
+    static void setPreferSoftwareRendererDefault(bool prefer);
     void setMarkers(std::vector<MapMarker>);
     // Sprite atlases: RGBA8 with straight (non-premultiplied) alpha, sampled with
     // linear filtering. Replacing a slot is allowed at any time. Slots [16,24) are

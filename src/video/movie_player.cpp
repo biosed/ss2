@@ -44,7 +44,9 @@ struct Streams {
 
 bool openMovie(const std::filesystem::path& file, Streams& s) {
     AVFormatContext* raw = nullptr;
-    if (avformat_open_input(&raw, file.string().c_str(), nullptr, nullptr) < 0) return false;
+    const auto u8 = file.u8string();
+    const std::string utf8Path(reinterpret_cast<const char*>(u8.data()), u8.size());
+    if (avformat_open_input(&raw, utf8Path.c_str(), nullptr, nullptr) < 0) return false;
     s.fmt.reset(raw);
     if (avformat_find_stream_info(s.fmt.get(), nullptr) < 0) return false;
     s.video = av_find_best_stream(s.fmt.get(), AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
@@ -339,16 +341,18 @@ bool playMovie(const std::filesystem::path& file, bool fullscreen, bool allowSki
 
 namespace {
 std::filesystem::path defaultHdPackDir() {
-    if (const char* xdg = std::getenv("XDG_DATA_HOME"); xdg && *xdg)
-        return std::filesystem::path(xdg) / "ss2/hd-pack";
 #ifdef _WIN32
-    if (const char* localAppData = std::getenv("LOCALAPPDATA"); localAppData && *localAppData)
+    if (const wchar_t* xdg = _wgetenv(L"XDG_DATA_HOME"); xdg && *xdg)
+        return std::filesystem::path(xdg) / "ss2/hd-pack";
+    if (const wchar_t* localAppData = _wgetenv(L"LOCALAPPDATA"); localAppData && *localAppData)
         return std::filesystem::path(localAppData) / "ss2/hd-pack";
-    if (const char* appData = std::getenv("APPDATA"); appData && *appData)
+    if (const wchar_t* appData = _wgetenv(L"APPDATA"); appData && *appData)
         return std::filesystem::path(appData) / "ss2/hd-pack";
-    if (const char* profile = std::getenv("USERPROFILE"); profile && *profile)
+    if (const wchar_t* profile = _wgetenv(L"USERPROFILE"); profile && *profile)
         return std::filesystem::path(profile) / "AppData/Local/ss2/hd-pack";
 #else
+    if (const char* xdg = std::getenv("XDG_DATA_HOME"); xdg && *xdg)
+        return std::filesystem::path(xdg) / "ss2/hd-pack";
     if (const char* home = std::getenv("HOME"); home && *home)
         return std::filesystem::path(home) / ".local/share/ss2/hd-pack";
 #endif

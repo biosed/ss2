@@ -789,6 +789,101 @@ int runGameSession(SDL_Window* window, ValidationReport* report, int limit, bool
     return session.run();
 }
 
+int verifyReplayHeadless(const std::filesystem::path& gameDir, const std::filesystem::path& mission,
+                         bool originalInfantry, int difficulty, bool autoEngage,
+                         const cmd::ReplayFile& replayFile) {
+    const auto missionPath = mission.empty()
+        ? ss2::assets::resolveTutorialMissionPath(gameDir)
+        : mission;
+    const bool isTutorial1 = mission.empty() ||
+        ss2::assets::equalsIgnoreCaseAscii(missionPath.filename().string(), "--- TUTORIAL I ---.SSM");
+    auto data = ss2::assets::readMissionData(missionPath);
+    const auto unitCatalog = ss2::assets::UnitCatalog::load(gameDir, data.scheme);
+    auto map = isTutorial1
+        ? ss2::assets::loadTutorialTerrain(gameDir)
+        : ss2::assets::loadMissionTerrain(gameDir, missionPath);
+    ss2::assets::SceneryDepth depth(map.width, map.height);
+    std::vector<ss2::assets::BuildingPlacement> missionBuildings;
+    std::vector<ss2::assets::BridgePlacement> missionBridges;
+    if (isTutorial1) {
+        (void)ss2::assets::drawTutorialScenery(map, gameDir, &depth, 0, &missionBuildings, &missionBridges);
+    } else {
+        (void)ss2::assets::drawMissionScenery(map, gameDir, missionPath, &depth, &missionBuildings, &missionBridges);
+    }
+    const auto placements = isTutorial1
+        ? ss2::assets::readTutorialPlacements(gameDir)
+        : ss2::assets::readMissionPlacements(missionPath);
+    ss2::assets::VehicleScene vehicleScene(gameDir, placements);
+    const auto& vehicleUnits = vehicleScene.vehicles();
+    std::vector<ss2::assets::Placement> vehicles;
+    vehicles.reserve(vehicleUnits.size());
+    for (const auto& v : vehicleUnits) {
+        vehicles.push_back({v.id, v.x, v.y, int(v.hullDir), v.hp, v.ammo, v.group, v.owner});
+    }
+    ss2::assets::InfantryScene scene(std::move(map), gameDir, placements, originalInfantry, {}, {}, false,
+                                     std::move(depth), nullptr, data.width, data.height);
+    std::vector<std::pair<std::size_t, std::size_t>> preloadedRiders;
+    {
+        std::size_t pCursor = 0;
+        for (std::size_t vIdx = 0; vIdx < vehicleUnits.size(); ++vIdx) {
+            const auto& vu = vehicleUnits[vIdx];
+            while (pCursor < placements.size() &&
+                   (placements[pCursor].id != vu.id || placements[pCursor].x != vu.x ||
+                    placements[pCursor].y != vu.y || placements[pCursor].owner != vu.owner)) {
+                ++pCursor;
+            }
+            if (pCursor >= placements.size()) break;
+            for (const auto& pax : placements[pCursor].passengers) {
+                if (pax.isCrew) continue;
+                ss2::assets::Placement rp{pax.id, vu.x, vu.y, 0, pax.hp, pax.ammo, pax.group, vu.owner, {}, pax.expa};
+                if (auto spawned = scene.spawn(rp)) {
+                    preloadedRiders.emplace_back(spawned->first, vIdx);
+                }
+            }
+            ++pCursor;
+        }
+    }
+    ss2::FogGrid fog(data.width, data.height, data.flags);
+    fog.applyMapPerimeterFlags();
+    (void)fog.loadCirc64FromGame(gameDir);
+    auto navigation = ss2::InfantryPathGrid::fromSubCellMasks(data.width, data.height,
+                                                              std::move(data.flags), std::move(data.obstacles));
+    const auto missionPlayerTeams = data.playerTeams;
+    const auto initMines = data.mines;
+    ss2::TutorialUnits soldiers(std::move(navigation), scene.units(), vehicles, std::move(fog),
+                                std::clamp(difficulty, 1, 3), autoEngage, vehicleUnits, unitCatalog);
+    soldiers.setPlayerTeams(missionPlayerTeams);
+    soldiers.setMines(initMines);
+    soldiers.setBuildings(std::move(missionBuildings));
+    soldiers.setBridges(std::move(missionBridges));
+    soldiers.setAirSupport(data.airSupport, data.paratrooperGroup, data.paratrooperRoster);
+    for (const auto& [sIdx, vIdx] : preloadedRiders) {
+        (void)soldiers.embarkImmediate(sIdx, vIdx);
+    }
+    std::map<unsigned, std::vector<assets::ReinforcementUnit>> initialSavedPools;
+    for (const auto& [poolIdx, wave] : replayFile.initialSavedPools) {
+        if (!wave.empty()) initialSavedPools.emplace(poolIdx, wave);
+    }
+    ss2::MissionRunner simulation(ss2::MissionRunner::ManualClock{}, std::move(data), std::move(soldiers),
+                                  initialSavedPools);
+    if (!simulation.replay(replayFile.commands, replayFile.endTick)) {
+        throw std::runtime_error("Replay log failed before reaching end_tick " +
+                                 std::to_string(replayFile.endTick));
+    }
+    const auto actualHash = simulation.stateHash();
+    if (replayFile.endStateHash && actualHash != *replayFile.endStateHash) {
+        std::ostringstream oss;
+        oss << "Replay stateHash mismatch at tick " << simulation.simTick()
+            << ": expected 0x" << std::hex << *replayFile.endStateHash
+            << ", got 0x" << actualHash;
+        throw std::runtime_error(oss.str());
+    }
+    std::cout << "Replay verified: " << replayFile.commands.size()
+              << " commands, tick " << simulation.simTick()
+              << ", stateHash 0x" << std::hex << actualHash << std::dec << '\n';
+    return 0;
+}
+
 void GameSession::persistNow() {
     if (persistSettings) {
         (void)ss2::saveUserSettings(ss2::defaultSettingsPath(), settings);

@@ -153,6 +153,7 @@ MapImage decodeJpeg(std::span<const std::uint8_t> data);
 MapImage readMissionOverview(const std::filesystem::path& mission);
 std::vector<MissionSummary> listSinglePlayerMissions(const std::filesystem::path& gameDir);
 std::optional<MissionSummary> findSinglePlayerMission(const std::filesystem::path& gameDir, std::string_view query);
+std::filesystem::path resolveTutorialMissionPath(const std::filesystem::path& gameDir);
 std::vector<MissionSummary> listMultiplayerMissions(const std::filesystem::path& gameDir);
 std::optional<MissionSummary> findMultiplayerMission(const std::filesystem::path& gameDir, std::string_view query);
 std::vector<CampaignSummary> listCampaigns(const std::filesystem::path& gameDir);

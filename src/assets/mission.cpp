@@ -1075,6 +1075,18 @@ std::optional<MissionSummary> findSinglePlayerMission(const std::filesystem::pat
     return findMissionInList(listSinglePlayerMissions(gameDir), query);
 }
 
+std::filesystem::path resolveTutorialMissionPath(const std::filesystem::path& gameDir) {
+    if (gameDir.empty()) return {};
+    std::error_code ec;
+    for (const auto& dir : resolveSingleMapDirs(gameDir)) {
+        const auto p = resolveCaseInsensitivePath(dir, "--- TUTORIAL I ---.SSM");
+        if (!p.empty() && std::filesystem::is_regular_file(p, ec)) return p;
+    }
+    const auto direct = resolveCaseInsensitivePath(gameDir, "maps/single/--- TUTORIAL I ---.SSM");
+    if (!direct.empty() && std::filesystem::is_regular_file(direct, ec)) return direct;
+    return {};
+}
+
 std::vector<MissionSummary> listMultiplayerMissions(const std::filesystem::path& gameDir) {
     std::vector<std::filesystem::path> files;
     const auto mpDirs = resolveMultiMapDirs(gameDir);
