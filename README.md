@@ -4,7 +4,7 @@ A native C++20 / SDL3 / Vulkan 1.3 reimplementation of *Sudden Strike II (Gold 2
 
 The engine runs all 136 retail `.ssc`/`.ssm`/`.smm` missions (`0` unhandled CAOF opcodes), bit-exact retail visibility, combat, group AI, progressive `dom.res` building and `MOST.RES` bridge destruction, the Gold 2.2 front end, 2–4 player deterministic TCP lockstep multiplayer, 2× HD asset packs, and out-of-the-box community mods.
 
-[![Sudden Strike II Native Engine — 1080p Gameplay Showcase](docs/gameplay-preview.webp)](https://github.com/biosed/ss2/releases/download/v0.1.0/ss2-v0.1.0-gameplay-1080p.mp4)
+[![Sudden Strike II Native Engine — Gameplay Showcase Preview (896×504 WebP — click for full 1080p MP4 trailer)](docs/gameplay-preview.webp)](https://github.com/biosed/ss2/releases/download/v0.1.0/ss2-v0.1.0-gameplay-1080p.mp4)
 
 > **Watch the full 1080p gameplay trailer with stereo game audio:** [`ss2-v0.1.0-gameplay-1080p.mp4` (`1920×1080` H.264 + AAC on Release `v0.1.0`)](https://github.com/biosed/ss2/releases/download/v0.1.0/ss2-v0.1.0-gameplay-1080p.mp4)
 
@@ -35,7 +35,7 @@ Opening cinematics (`movies/logo1.BIK`, `movies/intro.BIK`, or HD `movies-hd/*.m
 - **2–4 Player Lockstep Multiplayer**: Deterministic Star Host-Relay over TCP (`--host PORT`, `--join HOST:PORT`, `--mp-players`, `--mp-teams`, `--mp-nation`, `--list-multiplayer`), FFA / `2v2` / custom teams, Zeppelin capture economy, allied (`Shift+Enter` / `/a `) & global (`Enter`) chat, and `Alt+LeftClick` tactical flare beacons. Cross-ISA bit-for-bit simulation determinism is verified across ARM64 GCC, ARM64 Clang, x86-64, and x86-64-v3 (`-ffp-contract=off`).
 - **Out-of-the-Box Mods**: Supports `sudtest.ini` `[Data]` `;`-chains (`Common=`, `Menu=`, `Game=`, `Sounds=`, `Movies=`, `BackWav=`, `Addons=`, `Scheme1..N=`) and `[Game]` keys (`TurnDelay`, prefixes), `Scheme3` `desc_scheme3.sue` / `lang_desc_scheme3.sue`, unpacked raw or RFC-1952 gzip folder mounts (`mycommon\`), `FZFS` and standalone `addons/*.ssx` mission packs, and automatic discovery under `<gameDir>/mods/*`, `<gameDir>/Run/*` (MultiModSwitcher layout), `<gameDir>/switcher/*`, `<gameDir>/sudtest_*.ini`, and user `mods/`. Switch mods live in `Options -> Mod` or via `--list-mods` / `--mod NAME|DIR|INI`.
 - **Localization**: Full EN / FR / ES interface auto-detected from locale (`LC_ALL`, `LC_MESSAGES`, `LANG`), `--lang en|fr|es`, or `Options`.
-- **Optional 2× HD Pack**: Pass `--hd-pack DIR` or place `infantry-art/`, `audio-hd/`, `movies-hd/` under `~/.local/share/ss2/hd-pack` (`%LOCALAPPDATA%\ss2\hd-pack` on Windows). Pass `--original-infantry` for vanilla sizing.
+- **Optional 2×/4× HD Pack**: Download `ss2-v0.1.0-hd-infantry-pack.zip` from [Release `v0.1.0`](https://github.com/biosed/ss2/releases/tag/v0.1.0) (clean-room 17-class 4×/2× infantry sprites & `96×96` HUD portraits covering US, German, British, Soviet, Japanese infantry + Sniper), extract it into `~/.local/share/ss2/hd-pack` (`%LOCALAPPDATA%\ss2\hd-pack` on Windows), or pass `--hd-pack DIR` (`--original-infantry` keeps vanilla sizing). Also supports `audio-hd/` and `movies-hd/`.
 
 ### In-game controls
 
@@ -70,6 +70,8 @@ cmake --install build --prefix "$HOME/.local"
 ```
 
 Desktop files installed by `cmake --install`: `bin/ss2`, `share/applications/io.github.biosed.ss2.desktop`, `share/icons/hicolor/scalable/apps/io.github.biosed.ss2.svg`, and `share/metainfo/io.github.biosed.ss2.metainfo.xml`.
+
+Prebuilt portable `.AppImage` (`x86_64` and `arm64`) and `.tar.gz` binaries are published on [Release `v0.1.0`](https://github.com/biosed/ss2/releases/tag/v0.1.0); you can also package locally from a build tree via `./tools/package-appimage.sh build ss2.AppImage` or build a sandboxed Flatpak from [packaging/io.github.biosed.ss2.yml](packaging/io.github.biosed.ss2.yml) (`org.freedesktop.Platform` `24.08`).
 
 ### Windows (x86-64 via MSYS2 UCRT64)
 
@@ -111,11 +113,13 @@ tools/ctest-validation.sh build-sanitize
 
 | Configuration | Tests | Notes |
 | --- | --- | --- |
-| Default / Windows (`--preset release`) | 33 | Sim determinism, `combat_parity`, `visibility_parity`, `tutorial_vm`, `lockstep` TCP, SUE/mission/addon/mod VFS, `save_file`, frontend/strings/movie, CLI |
-| `-DSS2_TEST_WINDOW=ON -DSS2_TEST_VALIDATION=ON` (`--preset validation`) | 45 | Adds 12 Vulkan window/WSI/UI/VFX validation tests (Linux CI matrix in `.github/workflows/linux.yml` inside `fedora:45`, plus `cross-isa-determinism`) |
+| Default (`--preset release`) | 33 | Sim determinism, `combat_parity`, `visibility_parity`, `tutorial_vm`, `lockstep` TCP, SUE/mission/addon/mod VFS, `save_file`, frontend/strings/movie, CLI |
+| `-DSS2_TEST_WINDOW=ON -DSS2_TEST_VALIDATION=ON` (`--preset validation` / Windows CI) | 45 Linux / 43 Windows | Adds Vulkan window/WSI/UI/VFX validation tests (Linux CI matrix in `.github/workflows/linux.yml` inside `fedora:45`, plus `cross-isa-determinism`; Windows CI in `.github/workflows/windows.yml` runs 43 tests with `VK_LAYER_KHRONOS_validation` on Mesa Lavapipe — `vulkan_wsi_recovery` is POSIX-only) |
 | `-DSS2_PRIVATE_GAME=DIR` (with window+validation) | 59 | Adds 12 retail trace/VM/scene/sound/movie tests plus `gold_cli_record_replay` & `gold_session_input` |
 
 **Hardware acceptance (passed)**: Native x86-64 Fedora 44 container on Bazzite 45 (AMD BC-250 / RADV GFX1013, 3840×2160@120 Hz Wayland): `59/59` validation CTests, `8/8` live Wayland WSI tests, zero Vulkan validation errors, steady `p50=8.33 ms` frame pacing, and bit-identical simulation hashes with ARM64. See [docs/validation.md](docs/validation.md).
+
+**Windows verification status**: Verified in MSYS2 UCRT64 CI (`43/43` tests passing including 10 Win32 `VK_KHR_win32_surface` + `VK_LAYER_KHRONOS_validation` swapchain/UI/frontend tests on Mesa Lavapipe, plus Winsock2 TCP lockstep) and on a clean AWS Windows Server 2022 Datacenter Spot VM (`ss2-v0.1.0-windows-x86_64.zip` with bundled `vulkan-1.dll`, Mesa Lavapipe CPU Vulkan, `Track02.ogg`, and bit-exact cross-OS `stateHash` replay parity). Physical consumer Windows desktop GPU hardware (NVIDIA/AMD/Intel WDDM drivers) has not yet been tested directly.
 
 ## Repository layout
 
@@ -130,6 +134,6 @@ tools/ctest-validation.sh build-sanitize
 | `src/render/` | Vulkan 1.3 device selection, swapchain lifecycle, sprite/terrain shaders, validation reporting |
 | `src/ui/` | Gold 2.2 front end, `Options -> Mod`, `I-BRF` briefings, tactical HUD, tooltips, EN/FR/ES strings |
 | `src/video/` | FFmpeg `.BIK`/`.MKV` decoder and SDL3 opening cinematic player |
-| `packaging/` | Freedesktop `.desktop`, vector icon, and AppStream metadata for Linux desktop/Bazzite installs |
-| `.github/workflows/` | `linux.yml` (`fedora:45` x86-64/ARM64 Release+ASan/UBSan + `cross-isa-determinism`) & `windows.yml` (MSYS2 UCRT64 + standalone zip) |
+| `packaging/` | Freedesktop `.desktop`, vector icon, AppStream metadata, and Flatpak manifest ([`io.github.biosed.ss2.yml`](packaging/io.github.biosed.ss2.yml)); see also [`tools/package-appimage.sh`](tools/package-appimage.sh) |
+| `.github/workflows/` | `linux.yml` (`fedora:45` x86-64/ARM64 Release+ASan/UBSan + `cross-isa-determinism`), `windows.yml` (MSYS2 UCRT64 + 43 Vulkan/unit tests), and `release.yml` (Windows zip + Linux `.tar.gz`/`.AppImage`) |
 | `docs/` | Reverse engineering (`gog-13718-pe.tsv`), source audit, determinism audit, implementation plan, and validation record |
