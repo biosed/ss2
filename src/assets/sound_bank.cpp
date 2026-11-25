@@ -27,6 +27,19 @@ std::string normalizeName(std::string_view raw) {
     return out;
 }
 
+std::map<std::string, std::vector<std::uint32_t>>::const_iterator findGroupEntry(
+    const std::map<std::string, std::vector<std::uint32_t>>& groups,
+    std::string_view group) {
+    const std::string norm = normalizeName(group);
+    if (norm.empty()) return groups.end();
+    if (const auto it = groups.find(norm); it != groups.end()) return it;
+    if (norm[0] != '$' && norm[0] != '@') {
+        if (const auto it = groups.find("$" + norm); it != groups.end()) return it;
+        if (const auto it = groups.find("@" + norm); it != groups.end()) return it;
+    }
+    return groups.end();
+}
+
 std::string_view trimView(std::string_view s) {
     while (!s.empty() &&
            (s.front() == ' ' || s.front() == '\t' || s.front() == '\r' || s.front() == '\n')) {
@@ -422,12 +435,12 @@ SoundBank SoundBank::fromMemory(std::span<const std::uint8_t> hdr, std::span<con
 }
 
 std::size_t SoundBank::variantCount(const std::string& group) const {
-    const auto it = groups_.find(normalizeName(group));
+    const auto it = findGroupEntry(groups_, group);
     return it == groups_.end() ? 0 : it->second.size();
 }
 
 const SoundClip* SoundBank::clip(const std::string& group, std::size_t variant) const {
-    const auto it = groups_.find(normalizeName(group));
+    const auto it = findGroupEntry(groups_, group);
     if (it == groups_.end() || it->second.empty()) return nullptr;
     const std::uint32_t idx = it->second[variant % it->second.size()];
     if (idx >= clips_.size()) return nullptr;
@@ -436,7 +449,7 @@ const SoundClip* SoundBank::clip(const std::string& group, std::size_t variant) 
 
 bool SoundBank::hasPlayableGroup(std::string_view group) const {
     if (group.empty()) return false;
-    const auto it = groups_.find(normalizeName(group));
+    const auto it = findGroupEntry(groups_, group);
     if (it == groups_.end() || it->second.empty()) return false;
     for (const std::uint32_t idx : it->second) {
         if (idx < clips_.size() && !clips_[idx].pcm.empty()) return true;

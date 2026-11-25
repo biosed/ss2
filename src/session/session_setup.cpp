@@ -236,13 +236,49 @@ void GameSession::initializeMission() {
         ss2::assets::MapImage hdImage;
         std::filesystem::path infantryArt;
         bool cleanGround = false;
+        std::set<std::string> preloadRosterIds;
+        {
+            auto collectId = [&](const std::string& id) {
+                if (!id.empty()) preloadRosterIds.insert(id);
+            };
+            auto collectWave = [&](const std::vector<ss2::assets::ReinforcementUnit>& wave) {
+                for (const auto& ru : wave) {
+                    collectId(ru.id);
+                    for (const auto& pax : ru.passengers) {
+                        if (!pax.isCrew) collectId(pax.id);
+                    }
+                }
+            };
+            for (const auto& wave : data.reinforcements) collectWave(wave);
+            for (const auto& roster : data.paratrooperRoster) {
+                for (const auto& pe : roster) collectId(pe.unitId);
+            }
+            if (campaignUnitPools) {
+                for (const auto& [poolIdx, wave] : *campaignUnitPools) {
+                    (void)poolIdx;
+                    collectWave(wave);
+                }
+            }
+            if (replayFile) {
+                for (const auto& [poolIdx, wave] : replayFile->initialSavedPools) {
+                    (void)poolIdx;
+                    collectWave(wave);
+                }
+            }
+        }
+        std::set<std::string> vehicleIds;
+        for (const auto& v : vehicleUnits) vehicleIds.insert(v.id);
         if (!hdPack.empty() && !originalInfantry) {
             gpuArtDir = hdPack / "infantry-art-4x";
             if (std::filesystem::is_directory(gpuArtDir)) {
-                std::set<std::string> vehicleIds;
-                for (const auto& v : vehicleUnits) vehicleIds.insert(v.id);
                 for (const auto& p : placements) {
                     if (!vehicleIds.contains(p.id)) ensureGpuInfantrySlot(p.id);
+                }
+                for (const auto& rid : preloadRosterIds) {
+                    const auto* sp = unitCatalog ? unitCatalog->find(rid) : nullptr;
+                    if (!vehicleIds.contains(rid) && !(sp && sp->isVehicle)) {
+                        (void)ensureGpuInfantrySlot(rid);
+                    }
                 }
                 if (!gpuAtlasSlots.empty()) {
                     std::cout << "GPU 4x HD infantry: " << gpuAtlasSlots.size() << " classes (";
@@ -270,10 +306,28 @@ void GameSession::initializeMission() {
             for (const auto& v : vehicleUnits) {
                 (void)ensureGpuVehicleSlot(v.id);
             }
+            for (const auto& rid : preloadRosterIds) {
+                const auto* sp = unitCatalog ? unitCatalog->find(rid) : nullptr;
+                if (vehicleIds.contains(rid) || (sp && sp->isVehicle)) {
+                    (void)ensureGpuVehicleSlot(rid);
+                }
+            }
             if (!gpuVehicleIds.empty()) {
                 vehicleScene->setGpuRenderedIds(&gpuVehicleIds);
                 std::cout << "GPU vehicles: " << gpuHdVehicles.size() << " 4x HD + "
                           << gpuPckVehicleSlots.size() << " 2x EPX classes\n";
+            }
+        }
+        for (const auto& ownerSlots : data.airSupport) {
+            for (const auto& slot : ownerSlots) {
+                if (slot.planeId.empty()) continue;
+                if (ensureAircraftAtlas(slot.planeId)) {
+                    const unsigned pSlot = planeAtlas.acquire(slot.planeId);
+                    if (pSlot != planeAtlas.overflowSlot() && !boundPlaneSlots.contains(pSlot)) {
+                        renderer.setSpriteAtlas(pSlot, gpuAircraftAtlases.at(slot.planeId).atlas);
+                        boundPlaneSlots[pSlot] = slot.planeId;
+                    }
+                }
             }
         }
         if (isTutorial1 && !hdPack.empty()) {
@@ -303,7 +357,7 @@ void GameSession::initializeMission() {
                         int sy = 0;
                         if (!(iss >> name >> dx >> dy >> dw >> dh >> u0 >> v0 >> u1 >> v1 >> sy)) continue;
                         if (!worldSlots.contains(name)) {
-                            if (gpuNextSlot + 1u >= planeAtlasBase) continue;
+                            if (gpuNextSlot >= planeAtlasBase - 2u) continue;
                             const auto ap = worldDir / (name + ".png");
                             if (!std::filesystem::is_regular_file(ap)) continue;
                             auto atlas = ss2::assets::loadPngRgba(ap);
@@ -453,7 +507,7 @@ void GameSession::initializeMission() {
         hud.emplace(window);
         hud->loadRetailAssets(gameDir);
         hud->setWeather(data.weather, 0u);
-        baseMinimap = downsampleOverview(composedMap, 512u, 256u);
+        baseMinimap = downsampleOverview(composedMap, 768u, 384u);
         hud->setMinimap(baseMinimap);
         if (!hdPack.empty() && !originalInfantry && std::filesystem::is_directory(hdPack / "hud-portraits")) {
             std::vector<std::filesystem::path> portraitFiles;
@@ -972,11 +1026,16 @@ void GameSession::applyMapGraphics() {
 
 bool GameSession::ensureGpuInfantrySlot(const std::string& id) {
     if (gpuAtlasSlots.contains(id)) return true;
+    if (unitCatalog) {
+        if (const auto* sp = unitCatalog->find(id); sp && sp->isVehicle) return false;
+    }
     const auto logFallback = [&](const char* reason) {
         if (!gpuArtDir.empty() && gpuFallbackIds.insert(id).second)
             std::cout << "GPU 4x HD infantry fallback Gold: " << id << " (" << reason << ")\n";
     };
-    const unsigned maxInfSlot = combatVfx.atlasSlot().has_value() ? planeAtlasBase : (planeAtlasBase - 1u);
+    const unsigned reserved = (hud && hud->airVfxAtlasSlot().has_value() ? 0u : 1u) +
+                              (combatVfx.atlasSlot().has_value() ? 0u : 1u);
+    const unsigned maxInfSlot = planeAtlasBase - reserved;
     if (gpuArtDir.empty() || gpuNextSlot >= maxInfSlot) {
         logFallback("slot budget full");
         return false;
@@ -1002,8 +1061,15 @@ bool GameSession::ensureGpuVehicleSlot(const std::string& id) {
     if (gpuVehicleIds.contains(id)) return true;
     const auto* sp = unitCatalog ? unitCatalog->find(id) : nullptr;
     if ((sp && sp->isSupplyCrate()) || id == "ammo.box" || id == "spare.parts") return false;
-    const unsigned maxWorldSlot = combatVfx.atlasSlot().has_value() ? planeAtlasBase : (planeAtlasBase - 1u);
-    if (gpuNextSlot >= maxWorldSlot) return false;
+    const unsigned reserved = (hud && hud->airVfxAtlasSlot().has_value() ? 0u : 1u) +
+                              (combatVfx.atlasSlot().has_value() ? 0u : 1u);
+    const unsigned maxWorldSlot = planeAtlasBase - reserved;
+    if (gpuNextSlot >= maxWorldSlot) {
+        if (gpuFallbackIds.insert("veh:" + id).second) {
+            std::cout << "GPU vehicle slot cap reached (" << maxWorldSlot << "): " << id << " using fallback\n";
+        }
+        return false;
+    }
     if (!gpuVehicleArtDir.empty()) {
         const auto path = gpuVehicleArtDir / (id + ".png");
         std::error_code ec;
@@ -1034,6 +1100,8 @@ bool GameSession::ensureGpuVehicleSlot(const std::string& id) {
         gpuPckVehicleSlots.emplace(id, gpuNextSlot++);
         gpuPckVehicleAtlases.emplace(id, std::move(*pckAtlas));
         gpuVehicleIds.insert(id);
+        if (gpuPreloadLogged)
+            std::cout << "GPU 2x EPX vehicle lazy slot: " << id << " (slot " << (gpuNextSlot - 1) << ")\n";
         return true;
     }
     return false;
@@ -1064,6 +1132,68 @@ void GameSession::syncGpuSprites() {
         return;
     }
     planesClearedNeeded = !livePlanes.empty() || hasAirTrails || hasCombatVfx;
+    const float fMapScale = static_cast<float>(std::max(1, mapScale));
+    bool cullViewport = false;
+    float cullMinX = 0.0f, cullMaxX = 0.0f, cullMinY = 0.0f, cullMaxY = 0.0f;
+    {
+        int winW = 0, winH = 0;
+        if (window && SDL_GetWindowSize(window, &winW, &winH) && winW > 0 && winH > 0) {
+            const auto [vx0, vy0] = renderer.mapPosition(0.0f, 0.0f);
+            const auto [vx1, vy1] = renderer.mapPosition(static_cast<float>(winW), static_cast<float>(winH));
+            const double spanX = std::abs(vx1 - vx0);
+            const double spanY = std::abs(vy1 - vy0);
+            if (std::isfinite(vx0) && std::isfinite(vy0) && std::isfinite(vx1) && std::isfinite(vy1) &&
+                spanX > 16.0 && spanY > 16.0) {
+                const float pad = 160.0f * fMapScale;
+                cullMinX = static_cast<float>(std::min(vx0, vx1)) - pad;
+                cullMaxX = static_cast<float>(std::max(vx0, vx1)) + pad;
+                cullMinY = static_cast<float>(std::min(vy0, vy1)) - pad;
+                cullMaxY = static_cast<float>(std::max(vy0, vy1)) + pad;
+                cullViewport = true;
+            }
+        }
+    }
+    const auto inFrustumRect = [&](float x, float y, float w, float h) noexcept {
+        if (!cullViewport) return true;
+        return (x + w) >= cullMinX && x <= cullMaxX && (y + h) >= cullMinY && y <= cullMaxY;
+    };
+    const float lightRadiusSq = (140.0f * fMapScale) * (140.0f * fMapScale);
+    const bool hasDynamicLights = enhancedGraphics && combatEffects && (!activeVfx.empty() || !burningWrecks.empty());
+    const auto explosionLightAt = [&](float wx, float wy, float maxCap, bool includeTracer, bool includeWrecks) {
+        if (!hasDynamicLights) return 0.0f;
+        float boost = 0.0f;
+        for (const auto& vfx : activeVfx) {
+            if (boost >= maxCap) break;
+            if (vfx.kind != ActiveVfx::Kind::Explosion && vfx.kind != ActiveVfx::Kind::VehicleExplosion &&
+                vfx.kind != ActiveVfx::Kind::Flamer && vfx.kind != ActiveVfx::Kind::CannonShell &&
+                (!includeTracer || vfx.kind != ActiveVfx::Kind::Tracer)) {
+                continue;
+            }
+            const float dx = wx - vfx.x0;
+            const float dy = wy - vfx.y0;
+            const float distSq = dx * dx + dy * dy;
+            if (distSq < lightRadiusSq) {
+                const float falloff = 1.0f - std::sqrt(distSq / lightRadiusSq);
+                const float peak = (vfx.kind == ActiveVfx::Kind::VehicleExplosion || vfx.kind == ActiveVfx::Kind::Explosion)
+                    ? maxCap : std::min(maxCap, 0.28f);
+                boost = std::max(boost, peak * falloff);
+            }
+        }
+        if (includeWrecks) {
+            for (const auto& bw : burningWrecks) {
+                if (boost >= 0.32f) break;
+                const float dx = wx - bw.x;
+                const float dy = wy - bw.y;
+                const float distSq = dx * dx + dy * dy;
+                if (distSq < lightRadiusSq) {
+                    const float falloff = 1.0f - std::sqrt(distSq / lightRadiusSq);
+                    boost = std::max(boost, 0.26f * falloff);
+                }
+            }
+        }
+        return boost;
+    };
+
     struct DrawItem {
         ss2::Sprite sprite;
         int sortY;
@@ -1071,8 +1201,12 @@ void GameSession::syncGpuSprites() {
     std::vector<DrawItem> items;
     items.reserve(scene->units().size() + worldGpuSprites.size());
     for (const auto& ws : worldGpuSprites) {
+        if (!inFrustumRect(ws.sprite.x, ws.sprite.y, ws.sprite.width, ws.sprite.height)) continue;
         auto sp = ws.sprite;
-        sp.brightness = fogBrightnessAt(ws.mapX1x, ws.mapY1x);
+        const float cx = sp.x + sp.width * 0.5f;
+        const float cy = sp.y + sp.height * 0.5f;
+        const float lightBoost = explosionLightAt(cx, cy, 0.36f, false, true);
+        sp.brightness = std::min(1.42f, fogBrightnessAt(ws.mapX1x, ws.mapY1x) + lightBoost);
         items.push_back({sp, ws.sortY});
     }
     constexpr float cellPx = 128.0f;
@@ -1083,10 +1217,13 @@ void GameSession::syncGpuSprites() {
         const unsigned col = c.direction & 7u;
         const float cw = dstSize * 0.96f;
         const float ch = dstSize * 0.36f;
+        const float cx = static_cast<float>(c.x * mapScale) - 0.5f * cw;
+        const float cy = static_cast<float>(c.y * mapScale) - 0.65f * ch;
+        if (!inFrustumRect(cx, cy, cw, ch)) continue;
         items.push_back({
             {
-                static_cast<float>(c.x * mapScale) - 0.5f * cw,
-                static_cast<float>(c.y * mapScale) - 0.65f * ch,
+                cx,
+                cy,
                 cw,
                 ch,
                 static_cast<float>(col) * cellPx,
@@ -1105,11 +1242,12 @@ void GameSession::syncGpuSprites() {
     const auto now = std::chrono::steady_clock::now();
     const float elapsed = std::chrono::duration<float>(now - animStart).count();
     const auto& units = scene->units();
-    const float fMapScale = static_cast<float>(std::max(1, mapScale));
-    const float lightRadiusSq = (140.0f * fMapScale) * (140.0f * fMapScale);
     for (size_t idx = 0; idx < units.size(); ++idx) {
         const auto& u = units[idx];
         if (u.hp <= 0 || !u.visible || !gpuAtlasSlots.contains(u.id)) continue;
+        const float ux = static_cast<float>(u.x * mapScale);
+        const float uy = static_cast<float>(u.y * mapScale);
+        if (!inFrustumRect(ux - dstSize, uy - dstSize, dstSize * 2.0f, dstSize * 2.0f)) continue;
         const unsigned col = u.direction & 7u;
         const unsigned row = u.walking ? (1u + ((4u * u.progress) >> 8u)) : 0u;
         const bool crouched = crouchedUnits.contains(idx);
@@ -1130,8 +1268,6 @@ void GameSession::syncGpuSprites() {
         const float animScale = static_cast<float>(mapScale) * 0.5f;
         ox *= animScale;
         oy *= animScale;
-        const float ux = static_cast<float>(u.x * mapScale);
-        const float uy = static_cast<float>(u.y * mapScale);
         const float u0 = static_cast<float>(col) * cellPx;
         const float v0 = static_cast<float>(row) * cellPx;
         const float u1 = static_cast<float>(col + 1u) * cellPx;
@@ -1150,37 +1286,8 @@ void GameSession::syncGpuSprites() {
                 u.y - 2
             });
         }
-        float lightBoost = 0.0f;
-        if (enhancedGraphics && combatEffects) {
-            if (firingNow) lightBoost = 0.26f;
-            for (const auto& vfx : activeVfx) {
-                if (lightBoost >= 0.42f) break;
-                if (vfx.kind != ActiveVfx::Kind::Explosion && vfx.kind != ActiveVfx::Kind::VehicleExplosion &&
-                    vfx.kind != ActiveVfx::Kind::Flamer && vfx.kind != ActiveVfx::Kind::CannonShell &&
-                    vfx.kind != ActiveVfx::Kind::Tracer) {
-                    continue;
-                }
-                const float dx = ux - vfx.x0;
-                const float dy = uy - vfx.y0;
-                const float distSq = dx * dx + dy * dy;
-                if (distSq < lightRadiusSq) {
-                    const float falloff = 1.0f - std::sqrt(distSq / lightRadiusSq);
-                    const float peak = (vfx.kind == ActiveVfx::Kind::VehicleExplosion || vfx.kind == ActiveVfx::Kind::Explosion)
-                        ? 0.42f : 0.28f;
-                    lightBoost = std::max(lightBoost, peak * falloff);
-                }
-            }
-            for (const auto& bw : burningWrecks) {
-                if (lightBoost >= 0.32f) break;
-                const float dx = ux - bw.x;
-                const float dy = uy - bw.y;
-                const float distSq = dx * dx + dy * dy;
-                if (distSq < lightRadiusSq) {
-                    const float falloff = 1.0f - std::sqrt(distSq / lightRadiusSq);
-                    lightBoost = std::max(lightBoost, 0.26f * falloff);
-                }
-            }
-        }
+        float lightBoost = (enhancedGraphics && combatEffects && firingNow) ? 0.26f : 0.0f;
+        lightBoost = std::max(lightBoost, explosionLightAt(ux, uy, 0.42f, true, true));
         items.push_back({
             {
                 ux - 0.5f * w + ox,
@@ -1204,24 +1311,10 @@ void GameSession::syncGpuSprites() {
             const bool alive = v.alive && v.hp > 0;
             const float vx = static_cast<float>(v.x) * fMapScale;
             const float vy = static_cast<float>(v.y) * fMapScale;
+            const float maxExtent = 96.0f * fMapScale;
+            if (!inFrustumRect(vx - maxExtent, vy - maxExtent, maxExtent * 2.0f, maxExtent * 2.0f)) continue;
             const float baseBright = fogBrightnessAt(v.x, v.y);
-            float lightBoost = 0.0f;
-            if (enhancedGraphics && combatEffects && alive) {
-                for (const auto& vfx : activeVfx) {
-                    if (lightBoost >= 0.36f) break;
-                    if (vfx.kind != ActiveVfx::Kind::Explosion && vfx.kind != ActiveVfx::Kind::VehicleExplosion &&
-                        vfx.kind != ActiveVfx::Kind::Flamer && vfx.kind != ActiveVfx::Kind::CannonShell) {
-                        continue;
-                    }
-                    const float dx = vx - vfx.x0;
-                    const float dy = vy - vfx.y0;
-                    const float distSq = dx * dx + dy * dy;
-                    if (distSq < lightRadiusSq) {
-                        const float falloff = 1.0f - std::sqrt(distSq / lightRadiusSq);
-                        lightBoost = std::max(lightBoost, 0.34f * falloff);
-                    }
-                }
-            }
+            const float lightBoost = alive ? explosionLightAt(vx, vy, 0.36f, false, true) : 0.0f;
             const float litBright = std::min(1.42f, baseBright + lightBoost);
             float rDx = 0.0f, rDy = 0.0f;
             if (alive) {
@@ -1305,8 +1398,8 @@ void GameSession::syncGpuSprites() {
                             gs.x, gs.y, gs.width, gs.height,
                             gs.u0, gs.v0, gs.u1, gs.v1,
                             slot,
-                            gs.isShadow ? 0.0f : (alive ? litBright : (baseBright * 0.94f)),
-                            gs.isShadow ? (0.34f * baseBright) : 1.0f
+                            gs.isShadow ? 1.0f : (alive ? litBright : (baseBright * 0.94f)),
+                            gs.isShadow ? (0.36f * baseBright) : 1.0f
                         },
                         v.y + gs.sortYOffset
                     });
@@ -1319,38 +1412,99 @@ void GameSession::syncGpuSprites() {
         const float altScale = lp.shadowScale;
         const float px = static_cast<float>(lp.pose.x * mapScale);
         const float py = static_cast<float>(lp.pose.y * mapScale);
-        items.push_back({
-            {
-                px - lp.sprW * 0.5f + 44.0f * altScale * static_cast<float>(mapScale),
-                py - lp.sprH * 0.5f + 66.0f * altScale * static_cast<float>(mapScale),
-                lp.sprW,
-                lp.sprH,
-                0.0f, 0.0f, lp.texW, lp.texH,
-                lp.atlasSlot,
-                0.0f,
-                0.40f
-            },
-            999998
-        });
-        items.push_back({
-            {
-                px - lp.sprW * 0.5f,
-                py - lp.sprH * 0.5f,
-                lp.sprW,
-                lp.sprH,
-                0.0f, 0.0f, lp.texW, lp.texH,
-                lp.atlasSlot,
-                1.0f,
-                1.0f
-            },
-            1000000
-        });
+        float sprX = px - lp.sprW * 0.5f;
+        float sprY = py - lp.sprH * 0.5f;
+        float sprW = lp.sprW;
+        float sprH = lp.sprH;
+        float u0 = 0.0f, v0 = 0.0f, u1 = lp.texW, v1 = lp.texH;
+        if (const auto ait = gpuAircraftAtlases.find(lp.spriteKey); ait != gpuAircraftAtlases.end()) {
+            const auto& atlas = ait->second;
+            unsigned d = lp.pose.dir32 & 31u;
+            if (atlas.frameW[d] <= 0 || atlas.frameH[d] <= 0) {
+                for (unsigned off = 1u; off < 32u; ++off) {
+                    const unsigned cand = (d + off) & 31u;
+                    if (atlas.frameW[cand] > 0 && atlas.frameH[cand] > 0) {
+                        d = cand;
+                        break;
+                    }
+                }
+            }
+            if (atlas.frameW[d] > 0 && atlas.frameH[d] > 0) {
+                const float gs = static_cast<float>(std::max(1, atlas.scale));
+                sprW = (static_cast<float>(atlas.frameW[d]) / gs) * fMapScale;
+                sprH = (static_cast<float>(atlas.frameH[d]) / gs) * fMapScale;
+                sprX = px + static_cast<float>(atlas.offsetX[d]) * fMapScale;
+                sprY = py + static_cast<float>(atlas.offsetY[d]) * fMapScale;
+                u0 = static_cast<float>(atlas.cellX[d]);
+                v0 = static_cast<float>(atlas.cellY[d]);
+                u1 = u0 + static_cast<float>(atlas.frameW[d]);
+                v1 = v0 + static_cast<float>(atlas.frameH[d]);
+            }
+        }
+        const int shadowSimX = lp.pose.x + static_cast<int>(std::lround(44.0f * altScale));
+        const int shadowSimY = lp.pose.y + static_cast<int>(std::lround(66.0f * altScale));
+        const float shadowFog = fogBrightnessAt(shadowSimX, shadowSimY);
+        if (shadowFog >= 0.55f) {
+            const float shScale = 0.88f / std::sqrt(std::max(0.25f, altScale));
+            const float shW = sprW * shScale;
+            const float shH = sprH * shScale;
+            const float shCx = sprX + sprW * 0.5f + 44.0f * altScale * fMapScale;
+            const float shCy = sprY + sprH * 0.5f + 66.0f * altScale * fMapScale;
+            const int shSortY = 180000 + lp.pose.y;
+            if (enhancedGraphics) {
+                const float penW = shW * 1.12f;
+                const float penH = shH * 1.12f;
+                if (inFrustumRect(shCx - penW * 0.5f, shCy - penH * 0.5f, penW, penH)) {
+                    items.push_back({
+                        {
+                            shCx - penW * 0.5f, shCy - penH * 0.5f,
+                            penW, penH, u0, v0, u1, v1,
+                            lp.atlasSlot, 0.0f, 0.18f * shadowFog
+                        },
+                        shSortY
+                    });
+                }
+                if (inFrustumRect(shCx - shW * 0.5f, shCy - shH * 0.5f, shW, shH)) {
+                    items.push_back({
+                        {
+                            shCx - shW * 0.5f, shCy - shH * 0.5f,
+                            shW, shH, u0, v0, u1, v1,
+                            lp.atlasSlot, 0.0f, 0.26f * shadowFog
+                        },
+                        shSortY
+                    });
+                }
+            } else if (inFrustumRect(shCx - shW * 0.5f, shCy - shH * 0.5f, shW, shH)) {
+                items.push_back({
+                    {
+                        shCx - shW * 0.5f, shCy - shH * 0.5f,
+                        shW, shH, u0, v0, u1, v1,
+                        lp.atlasSlot, 0.0f, 0.38f * shadowFog
+                    },
+                    shSortY
+                });
+            }
+        }
+        if (inFrustumRect(sprX, sprY, sprW, sprH)) {
+            items.push_back({
+                {
+                    sprX, sprY, sprW, sprH,
+                    u0, v0, u1, v1,
+                    lp.atlasSlot,
+                    1.0f,
+                    1.0f
+                },
+                1000000
+            });
+        }
     }
     if (hasAirTrails) {
         std::vector<ss2::Sprite> trailSprites;
         hud->appendAirTrailSprites(mapScale, trailSprites);
         for (const auto& ts : trailSprites) {
-            items.push_back({ts, 999999});
+            if (inFrustumRect(ts.x, ts.y, ts.width, ts.height)) {
+                items.push_back({ts, 999999});
+            }
         }
     }
     if (hasCombatVfx) {
@@ -1361,6 +1515,10 @@ void GameSession::syncGpuSprites() {
                 const auto* sp = unitCatalog ? unitCatalog->find(v.id) : nullptr;
                 const bool isCrate = (sp && sp->isSupplyCrate()) || v.id == "ammo.box" || v.id == "spare.parts";
                 if (!isCrate) continue;
+                const float vx = static_cast<float>(v.x) * fMapScale;
+                const float vy = static_cast<float>(v.y) * fMapScale;
+                if (!inFrustumRect(vx - 32.0f * fMapScale, vy - 32.0f * fMapScale,
+                                   64.0f * fMapScale, 64.0f * fMapScale)) continue;
                 const float bright = fogBrightnessAt(v.x, v.y);
                 if (bright < 0.55f) continue;
                 const bool parts = (sp ? (sp->ammo1 <= 0 && sp->ammo2 > 0) : (v.id == "spare.parts"));
@@ -1373,6 +1531,10 @@ void GameSession::syncGpuSprites() {
                 const float bright = fogBrightnessAt(pp.x, pp.y);
                 if (bright < 0.55f) continue;
                 const float alt = static_cast<float>(std::max(0, pp.altitudePx));
+                const float ppx = static_cast<float>(pp.x) * fMapScale;
+                const float ppy = static_cast<float>(pp.y) * fMapScale;
+                if (!inFrustumRect(ppx - 48.0f * fMapScale, ppy - (alt + 64.0f) * fMapScale,
+                                   96.0f * fMapScale, (alt + 128.0f) * fMapScale)) continue;
                 float phase = 1.0f;
                 if (pp.altitudePx > 0) {
                     phase = std::clamp(1.0f - alt / 196.0f, 0.05f, 1.0f);
@@ -1395,11 +1557,15 @@ void GameSession::syncGpuSprites() {
                                     vfxItems);
         }
         for (const auto& vi : vfxItems) {
-            items.push_back({vi.sprite, vi.sortY});
+            if (inFrustumRect(vi.sprite.x, vi.sprite.y, vi.sprite.width, vi.sprite.height)) {
+                items.push_back({vi.sprite, vi.sortY});
+            }
         }
     }
     std::stable_sort(items.begin(), items.end(),
-                     [](const DrawItem& a, const DrawItem& b) { return a.sortY < b.sortY; });
+                     [](const DrawItem& a, const DrawItem& b) {
+                         return a.sortY != b.sortY ? a.sortY < b.sortY : a.sprite.atlas < b.sprite.atlas;
+                     });
     std::vector<ss2::Sprite> sprites;
     sprites.reserve(items.size());
     for (const auto& it : items) sprites.push_back(it.sprite);
@@ -1691,17 +1857,36 @@ void GameSession::ensureUnitPortrait(const std::string& id, bool isVehicle) {
 
 assets::MapImage GameSession::downsampleOverview(const assets::MapImage& src, unsigned dstW, unsigned dstH) {
     ss2::assets::MapImage out{dstW, dstH, std::vector<std::uint8_t>(std::size_t(dstW) * dstH * 4u, 255u)};
-    if (!src.width || !src.height || src.rgba.size() < std::size_t(src.width) * src.height * 4u) return out;
+    if (!dstW || !dstH || !src.width || !src.height ||
+        src.rgba.size() < std::size_t(src.width) * src.height * 4u) {
+        return out;
+    }
     for (unsigned y = 0; y < dstH; ++y) {
-        const unsigned sy = (y * src.height) / dstH;
+        const unsigned sy0 = static_cast<unsigned>((std::uint64_t(y) * src.height) / dstH);
+        const unsigned sy1 = std::max(sy0 + 1u, static_cast<unsigned>((std::uint64_t(y + 1u) * src.height) / dstH));
+        const unsigned cy1 = std::min(sy1, src.height);
         for (unsigned x = 0; x < dstW; ++x) {
-            const unsigned sx = (x * src.width) / dstW;
-            const std::size_t si = (std::size_t(sy) * src.width + sx) * 4u;
+            const unsigned sx0 = static_cast<unsigned>((std::uint64_t(x) * src.width) / dstW);
+            const unsigned sx1 = std::max(sx0 + 1u, static_cast<unsigned>((std::uint64_t(x + 1u) * src.width) / dstW));
+            const unsigned cx1 = std::min(sx1, src.width);
+            std::uint64_t sumR = 0, sumG = 0, sumB = 0, cnt = 0;
+            for (unsigned sy = sy0; sy < cy1; ++sy) {
+                const std::size_t rowOff = std::size_t(sy) * src.width;
+                for (unsigned sx = sx0; sx < cx1; ++sx) {
+                    const std::size_t si = (rowOff + sx) * 4u;
+                    sumR += src.rgba[si + 0u];
+                    sumG += src.rgba[si + 1u];
+                    sumB += src.rgba[si + 2u];
+                    ++cnt;
+                }
+            }
             const std::size_t di = (std::size_t(y) * dstW + x) * 4u;
-            out.rgba[di + 0] = src.rgba[si + 0];
-            out.rgba[di + 1] = src.rgba[si + 1];
-            out.rgba[di + 2] = src.rgba[si + 2];
-            out.rgba[di + 3] = 255u;
+            if (cnt > 0u) {
+                out.rgba[di + 0u] = static_cast<std::uint8_t>((sumR + cnt / 2u) / cnt);
+                out.rgba[di + 1u] = static_cast<std::uint8_t>((sumG + cnt / 2u) / cnt);
+                out.rgba[di + 2u] = static_cast<std::uint8_t>((sumB + cnt / 2u) / cnt);
+            }
+            out.rgba[di + 3u] = 255u;
         }
     }
     return out;
@@ -1812,46 +1997,71 @@ const char* GameSession::airKindLabel(assets::AirMissionKind kind) {
     return "Air Support";
 }
 
+bool GameSession::ensureAircraftAtlas(const std::string& planeId) {
+    if (planeId.empty()) return false;
+    if (gpuAircraftAtlases.contains(planeId)) return true;
+    if (failedAircraftIds.contains(planeId)) return false;
+    if (!gameDir.empty()) {
+        if (auto built = ss2::assets::buildAircraftGpuAtlas(gameDir, planeId, true)) {
+            gpuAircraftAtlases.emplace(planeId, std::move(*built));
+            return true;
+        }
+    }
+    failedAircraftIds.insert(planeId);
+    return false;
+}
+
 void GameSession::uploadPlaneSprite(LivePlane& lp) {
     if (const auto* pSpec = unitCatalog ? unitCatalog->findPlane(lp.pose.planeId) : nullptr;
         pSpec && pSpec->altitude > 0) {
         lp.shadowScale = std::clamp(static_cast<float>(pSpec->altitude) / 280.0f, 0.65f, 1.50f);
     }
-    const std::string key = lp.pose.planeId + "#" + std::to_string(lp.pose.dir32 & 31u);
-    auto it = planeSpriteCache.find(key);
-    if (it == planeSpriteCache.end()) {
-        std::optional<ss2::assets::MapImage> loaded;
-        if (!gameDir.empty()) {
-            loaded = ss2::assets::loadAircraftSprite(gameDir, lp.pose.planeId, lp.pose.dir32);
-        }
-        if (!loaded) {
-            ss2::assets::MapImage fb{28, 28, std::vector<std::uint8_t>(28u * 28u * 4u, 0)};
-            for (int py = 0; py < 28; ++py) {
-                for (int px = 0; px < 28; ++px) {
-                    const bool body = std::abs(px - 14) <= 2 && std::abs(py - 14) <= 11;
-                    const bool wing = std::abs(py - 12) <= 2 && std::abs(px - 14) <= 12;
-                    if (body || wing) {
-                        const std::size_t o = (std::size_t(py) * 28u + static_cast<std::size_t>(px)) * 4u;
-                        fb.rgba[o] = 110;
-                        fb.rgba[o + 1] = 120;
-                        fb.rgba[o + 2] = 95;
-                        fb.rgba[o + 3] = 255;
-                    }
-                }
-            }
-            loaded = std::move(fb);
-        }
-        it = planeSpriteCache.emplace(key, std::move(*loaded)).first;
-    }
-    const auto& img = it->second;
+    const std::string key = lp.pose.planeId.empty() ? std::string("ju-87") : lp.pose.planeId;
     lp.spriteKey = key;
     lp.atlasSlot = planeAtlas.acquire(key);
     if (lp.atlasSlot == planeAtlas.overflowSlot() && !planeOverflowLogged) {
         planeOverflowLogged = true;
         std::cerr << "Plane atlas overflow: more than " << planeAtlas.liveCount()
-                  << " distinct live plane sprites; extra aircraft share the overflow slot.\n";
+                  << " distinct live plane models; extra aircraft share the overflow slot.\n";
     }
-    renderer.setSpriteAtlas(lp.atlasSlot, img);
+    if (ensureAircraftAtlas(key)) {
+        const auto& atlas = gpuAircraftAtlases.at(key);
+        const auto bit = boundPlaneSlots.find(lp.atlasSlot);
+        if (lp.atlasSlot == planeAtlas.overflowSlot() || bit == boundPlaneSlots.end() || bit->second != key) {
+            renderer.setSpriteAtlas(lp.atlasSlot, atlas.atlas);
+            boundPlaneSlots[lp.atlasSlot] = key;
+        }
+        lp.texW = static_cast<float>(atlas.atlas.width);
+        lp.texH = static_cast<float>(atlas.atlas.height);
+        const float gs = static_cast<float>(std::max(1, atlas.scale));
+        lp.sprW = (static_cast<float>(atlas.cellW) / gs) * static_cast<float>(mapScale);
+        lp.sprH = (static_cast<float>(atlas.cellH) / gs) * static_cast<float>(mapScale);
+        return;
+    }
+    auto it = planeSpriteCache.find(key);
+    if (it == planeSpriteCache.end()) {
+        ss2::assets::MapImage fb{28, 28, std::vector<std::uint8_t>(28u * 28u * 4u, 0)};
+        for (int py = 0; py < 28; ++py) {
+            for (int px = 0; px < 28; ++px) {
+                const bool body = std::abs(px - 14) <= 2 && std::abs(py - 14) <= 11;
+                const bool wing = std::abs(py - 12) <= 2 && std::abs(px - 14) <= 12;
+                if (body || wing) {
+                    const std::size_t o = (std::size_t(py) * 28u + static_cast<std::size_t>(px)) * 4u;
+                    fb.rgba[o] = 110;
+                    fb.rgba[o + 1] = 120;
+                    fb.rgba[o + 2] = 95;
+                    fb.rgba[o + 3] = 255;
+                }
+            }
+        }
+        it = planeSpriteCache.emplace(key, std::move(fb)).first;
+    }
+    const auto& img = it->second;
+    const auto bit = boundPlaneSlots.find(lp.atlasSlot);
+    if (lp.atlasSlot == planeAtlas.overflowSlot() || bit == boundPlaneSlots.end() || bit->second != key) {
+        renderer.setSpriteAtlas(lp.atlasSlot, img);
+        boundPlaneSlots[lp.atlasSlot] = key;
+    }
     lp.texW = static_cast<float>(img.width);
     lp.texH = static_cast<float>(img.height);
     lp.sprW = static_cast<float>(img.width * static_cast<unsigned>(mapScale));
@@ -2079,29 +2289,37 @@ void GameSession::spawnReinforcementWave(const MissionEvent& ev) {
         const int sx = std::clamp(gateX + (col - 2) * 20, 16, maxMapX);
         const int sy = std::clamp(gateY + row * 18, 16, maxMapY);
         ss2::assets::Placement p{ru.id, sx, sy, 0, ru.hp, ru.ammo, ru.group, static_cast<int>(ev.owner), ru.passengers, ru.expa};
-        (void)ensureGpuInfantrySlot(ru.id);
-        if (auto spawned = scene->spawn(p)) {
-            const auto& [newIdx, patch] = *spawned;
-            const auto& unit = scene->units().at(newIdx);
-            ensureUnitPortrait(unit.id, false);
-            const int simExpa = ss2::TutorialUnits::missionExpaToSim(ru.expa);
-            const size_t simIdx = simulation->spawnInfantry(unit, simExpa);
-            const int realAmmo = scaledSoldierAmmo(unit.id, ru.ammo);
-            const int initWaveVis = multiplayer.enabled ? (isAllyOwner(unit.owner) ? 1 : 0) : -1;
-            (void)scene->update(newIdx, unit.x, unit.y, unit.direction, unit.progress, unit.walking, unit.hp,
-                                initWaveVis, realAmmo);
-            selection->addUnit(scaleInfantry(scene->units().at(newIdx), mapScale));
-            initialUnitHp.push_back(std::max(1, unit.hp));
-            unitExpa.push_back(simExpa);
-            unitKills.push_back(0);
-            unitGrenades.push_back(initialGrenadesForId(unit.id));
-            unitMineAmmo.push_back(initialMinesForId(unit.id));
-            spawnedInfIndices.push_back(simIdx);
-            if (patch.pixels.width && patch.pixels.height)
-                renderer.updateMapRegion(patch.x, patch.y, patch.pixels);
-            if (spawnedInfantry + spawnedVehicles == 0) { firstX = unit.x; firstY = unit.y; }
-            ++spawnedInfantry;
-        } else if (auto spawnedVeh = spawnAndRegisterVehicle(p)) {
+        const auto* spec = unitCatalog ? unitCatalog->find(ru.id) : nullptr;
+        const bool knownVehicle = spec && spec->isVehicle;
+        bool spawnedAsInfantry = false;
+        if (!knownVehicle) {
+            (void)ensureGpuInfantrySlot(ru.id);
+            if (auto spawned = scene->spawn(p)) {
+                spawnedAsInfantry = true;
+                const auto& [newIdx, patch] = *spawned;
+                const auto& unit = scene->units().at(newIdx);
+                ensureUnitPortrait(unit.id, false);
+                const int simExpa = ss2::TutorialUnits::missionExpaToSim(ru.expa);
+                const size_t simIdx = simulation->spawnInfantry(unit, simExpa);
+                const int realAmmo = scaledSoldierAmmo(unit.id, ru.ammo);
+                const int initWaveVis = multiplayer.enabled ? (isAllyOwner(unit.owner) ? 1 : 0) : -1;
+                (void)scene->update(newIdx, unit.x, unit.y, unit.direction, unit.progress, unit.walking, unit.hp,
+                                    initWaveVis, realAmmo);
+                selection->addUnit(scaleInfantry(scene->units().at(newIdx), mapScale));
+                initialUnitHp.push_back(std::max(1, unit.hp));
+                unitExpa.push_back(simExpa);
+                unitKills.push_back(0);
+                unitGrenades.push_back(initialGrenadesForId(unit.id));
+                unitMineAmmo.push_back(initialMinesForId(unit.id));
+                spawnedInfIndices.push_back(simIdx);
+                if (patch.pixels.width && patch.pixels.height)
+                    renderer.updateMapRegion(patch.x, patch.y, patch.pixels);
+                if (spawnedInfantry + spawnedVehicles == 0) { firstX = unit.x; firstY = unit.y; }
+                ++spawnedInfantry;
+            }
+        }
+        if (!spawnedAsInfantry) {
+            if (auto spawnedVeh = spawnAndRegisterVehicle(p)) {
             const auto [vIdx, simVIdx] = *spawnedVeh;
             const auto& v = vehicleScene->vehicles().at(vIdx);
             spawnedVehIndices.push_back(simVIdx);
@@ -2137,6 +2355,7 @@ void GameSession::spawnReinforcementWave(const MissionEvent& ev) {
             }
             if (spawnedInfantry + spawnedVehicles == 0) { firstX = v.x; firstY = v.y; }
             ++spawnedVehicles;
+            }
         }
     }
     const std::size_t totalSpawned = spawnedInfantry + spawnedVehicles;

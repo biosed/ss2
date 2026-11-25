@@ -498,25 +498,28 @@ void GameSession::updateHudAndBeams() {
     const std::vector<ss2::ZeppelinMarkerStatus> beamZeppelins =
         (multiplayer.enabled && simulation) ? simulation->zeppelinStatuses() : std::vector<ss2::ZeppelinMarkerStatus>{};
     const bool hasAirTrailBeams = combatEffects && hud && hud->hasActiveAirTrails();
-    const bool hasSelectionRings = enhancedGraphics && selection &&
-        (!selection->selected().empty() || !selection->selectedVehicles().empty());
+    const bool hasSelectedUnits = selection && (!selection->selected().empty() || !selection->selectedVehicles().empty());
+    const bool hasSelectionRings = enhancedGraphics && hasSelectedUnits;
     const bool hasWeatherBeams = enhancedGraphics && combatEffects &&
         (missionWeather == assets::WeatherKind::Rain || missionWeather == assets::WeatherKind::Snow);
-    if (!activeVfx.empty() || !burningWrecks.empty() || !crippledSmokeVehicles.empty() ||
+    if (!activeVfx.empty() || !orderPulses.empty() || !burningWrecks.empty() || !crippledSmokeVehicles.empty() ||
         !movingSmokeVehicles.empty() || !livePlanes.empty() || hasAirTrailBeams || !orderLines.empty() ||
         previewRing || facePreview || !rangePreviews.empty() || !visibleOnScreenMines.empty() ||
         !statusBadges.empty() || !beamZeppelins.empty() || !activeBeacons.empty() ||
-        hasSelectionRings || hasWeatherBeams || vfxWasNonEmpty) {
+        hasSelectedUnits || hasSelectionRings || hasWeatherBeams || vfxWasNonEmpty) {
         const auto now = std::chrono::steady_clock::now();
         std::erase_if(activeVfx, [&](const ActiveVfx& v) { return now - v.start >= v.duration; });
+        std::erase_if(orderPulses, [&](const OrderPulse& op) {
+            return now - op.start >= std::chrono::milliseconds(600);
+        });
         std::erase_if(burningWrecks, [&](const BurningWreck& w) { return now >= w.until; });
         std::erase_if(activeBeacons, [&](const ActiveBeacon& b) {
             return now - b.start >= std::chrono::milliseconds(4500);
         });
         std::vector<ss2::MapBeam> beams;
         beams.reserve(visibleOnScreenMines.size() * 2u + statusBadges.size() * 3u + orderLines.size() * 2u +
-                      (previewRing ? 18u : 0u) + (facePreview ? 8u : 0u) + rangePreviews.size() * 40u +
-                      (hasSelectionRings ? 128u : 0u) +
+                      orderPulses.size() * 24u + (previewRing ? 18u : 0u) + (facePreview ? 8u : 0u) +
+                      rangePreviews.size() * 40u + (hasSelectionRings ? 256u : 0u) +
                       activeVfx.size() * 5u + burningWrecks.size() * 3u + crippledSmokeVehicles.size() +
                       std::min<std::size_t>(movingSmokeVehicles.size(), 6u));
         const float s = static_cast<float>(mapScale);
@@ -539,7 +542,7 @@ void GameSession::updateHudAndBeams() {
             if (scene) {
                 const auto& units = scene->units();
                 for (const size_t sid : selection->selected()) {
-                    if (ringUnits >= 16u) break;
+                    if (ringUnits >= 96u) break;
                     if (sid >= units.size()) continue;
                     const auto& u = units[sid];
                     if (u.hp <= 0 || !u.visible) continue;
@@ -555,7 +558,7 @@ void GameSession::updateHudAndBeams() {
             if (vehicleScene) {
                 const auto& vehs = vehicleScene->vehicles();
                 for (const size_t vid : selection->selectedVehicles()) {
-                    if (ringUnits >= 16u) break;
+                    if (ringUnits >= 96u) break;
                     if (vid >= vehs.size()) continue;
                     const auto& v = vehs[vid];
                     if (!v.alive || v.hp <= 0 || !v.visible) continue;
@@ -565,6 +568,91 @@ void GameSession::updateHudAndBeams() {
                     pushIsoEllipse(vx, vy, 22.0f, 16, 1.8f * s, 110, 224, 120, 0.52f);
                     ++ringUnits;
                 }
+            }
+        }
+        if (hasSelectedUnits) {
+            const std::uint32_t curTick = simulation ? simulation->simTick() : 0u;
+            if (scene) {
+                const auto& units = scene->units();
+                for (const size_t sid : selection->selected()) {
+                    if (beams.size() >= 112u) break;
+                    if (sid >= units.size()) continue;
+                    const auto& u = units[sid];
+                    if (u.hp <= 0 || !u.visible) continue;
+                    const float ux = static_cast<float>(u.x) * s;
+                    const float uy = static_cast<float>(u.y) * s;
+                    if (!inViewBounds(ux, uy)) continue;
+                    const float barY = uy - (crouchedUnits.contains(sid) ? 24.0f : 30.0f) * s;
+                    if (selection->controlGroupOfInfantry(sid).has_value() && beams.size() < 112u) {
+                        beams.push_back({ux - 10.5f * s, barY + 1.5f * s,
+                                         ux - 10.5f * s, barY + 1.5f * s,
+                                         3.8f * s, 244, 186, 78, 0.92f, 0.92f});
+                    }
+                    if (simulation && beams.size() < 112u) {
+                        if (const auto rit = unitReloadWindow.find(sid);
+                            rit != unitReloadWindow.end() && rit->second.durationTicks > 0u &&
+                            curTick >= rit->second.startTick &&
+                            curTick < rit->second.startTick + rit->second.durationTicks) {
+                            const float rem = static_cast<float>(
+                                rit->second.startTick + rit->second.durationTicks - curTick);
+                            const float frac = std::clamp(rem / static_cast<float>(rit->second.durationTicks), 0.05f, 1.0f);
+                            const float ry = barY + 4.0f * s;
+                            beams.push_back({ux - 7.0f * s, ry, ux - 7.0f * s + 14.0f * s * frac, ry,
+                                             1.8f * s, 105, 212, 235, 0.90f, 0.90f});
+                        }
+                    }
+                }
+            }
+            if (vehicleScene) {
+                const auto& vehs = vehicleScene->vehicles();
+                for (const size_t vid : selection->selectedVehicles()) {
+                    if (beams.size() >= 112u) break;
+                    if (vid >= vehs.size()) continue;
+                    const auto& v = vehs[vid];
+                    if (!v.alive || v.hp <= 0 || !v.visible) continue;
+                    const float vx = static_cast<float>(v.x) * s;
+                    const float vy = static_cast<float>(v.y) * s;
+                    if (!inViewBounds(vx, vy)) continue;
+                    const float barY = static_cast<float>(v.height > 0 ? v.top - 5 : v.y - 26) * s;
+                    if (selection->controlGroupOfVehicle(vid).has_value() && beams.size() < 112u) {
+                        beams.push_back({vx - 17.0f * s, barY + 1.5f * s,
+                                         vx - 17.0f * s, barY + 1.5f * s,
+                                         4.2f * s, 244, 186, 78, 0.92f, 0.92f});
+                    }
+                    if (simulation && beams.size() < 112u) {
+                        if (const auto rit = vehReloadWindow.find(vid);
+                            rit != vehReloadWindow.end() && rit->second.durationTicks > 0u &&
+                            curTick >= rit->second.startTick &&
+                            curTick < rit->second.startTick + rit->second.durationTicks) {
+                            const float rem = static_cast<float>(
+                                rit->second.startTick + rit->second.durationTicks - curTick);
+                            const float frac = std::clamp(rem / static_cast<float>(rit->second.durationTicks), 0.05f, 1.0f);
+                            const float ry = barY + 4.2f * s;
+                            beams.push_back({vx - 12.0f * s, ry, vx - 12.0f * s + 24.0f * s * frac, ry,
+                                             2.0f * s, 105, 212, 235, 0.90f, 0.90f});
+                        }
+                    }
+                }
+            }
+        }
+        for (const auto& op : orderPulses) {
+            if (beams.size() >= 112u) break;
+            const float t = std::clamp(std::chrono::duration<float>(now - op.start).count() / 0.60f, 0.0f, 1.0f);
+            const float fade = 1.0f - t;
+            std::uint8_t r = 110, g = 224, b = 120;
+            if (op.kind == OrderPulse::Kind::Support) { r = 244; g = 186; b = 78; }
+            else if (op.kind == OrderPulse::Kind::Attack) { r = 235; g = 92; b = 68; }
+            const float dx = static_cast<float>(op.dstSimX) * s;
+            const float dy = static_cast<float>(op.dstSimY) * s;
+            if (beams.size() + 12u < 112u) {
+                pushIsoEllipse(dx, dy, 8.0f + 22.0f * t, 12, 1.8f * s, r, g, b, 0.78f * fade);
+            }
+            if (beams.size() + 10u < 112u) {
+                pushIsoEllipse(dx, dy, 3.0f + 12.0f * t, 10, 1.4f * s, r, g, b, 0.55f * fade);
+            }
+            if (op.hasSource && beams.size() < 112u) {
+                beams.push_back({static_cast<float>(op.srcSimX) * s, static_cast<float>(op.srcSimY) * s,
+                                 dx, dy, 1.4f * s, r, g, b, 0.08f * fade, 0.38f * fade});
             }
         }
         for (const auto& rp : rangePreviews) {
@@ -730,13 +818,36 @@ void GameSession::updateHudAndBeams() {
             }
             if (!livePlanes.empty()) {
                 const float animPhase = std::chrono::duration<float>(now - animStart).count();
+                constexpr float kTwoPi = 6.28318530717958647692f;
                 for (const auto& [sid, lp] : livePlanes) {
                     if (beams.size() >= 64u) break;
+                    const float px = static_cast<float>(lp.pose.x * mapScale);
+                    const float py = static_cast<float>(lp.pose.y * mapScale);
+                    if (lp.pose.active && lp.pose.alive && enhancedGraphics && beams.size() + 3u <= 64u) {
+                        const float ang = (static_cast<float>(lp.pose.dir32 & 31u) / 32.0f) * kTwoPi;
+                        const float du = std::cos(ang);
+                        const float dv = std::sin(ang);
+                        const float fwdX = (du - dv) * 0.70710678f;
+                        const float fwdY = (du + dv) * 0.35355339f;
+                        const float wingX = (-dv - du) * 0.70710678f;
+                        const float wingY = (-dv + du) * 0.35355339f;
+                        const float sc = std::max(0.75f, lp.shadowScale);
+                        const float noseX = px + fwdX * 14.0f * sc * s;
+                        const float noseY = py + fwdY * 14.0f * sc * s;
+                        const float propA = 0.16f + 0.06f * std::sin(animPhase * 42.0f + static_cast<float>(sid));
+                        beams.push_back({noseX, noseY, noseX, noseY, 5.5f * s, 255, 240, 190, propA, propA});
+                        const float tipSpan = 16.0f * sc * s;
+                        const float trailLen = 22.0f * sc * s;
+                        for (const float side : {-1.0f, 1.0f}) {
+                            const float wx = px + wingX * tipSpan * side;
+                            const float wy = py + wingY * tipSpan * side;
+                            beams.push_back({wx, wy, wx - fwdX * trailLen, wy - fwdY * trailLen,
+                                             1.6f * s, 255, 240, 190, 0.14f, 0.0f});
+                        }
+                    }
                     if (!lp.pose.alive || lp.pose.maxHp <= 0 || lp.pose.hp * 2 > lp.pose.maxHp) continue;
                     const auto* pSpec = unitCatalog ? unitCatalog->findPlane(lp.pose.planeId) : nullptr;
                     if (pSpec && !pSpec->hasFallSmoke) continue;
-                    const float px = static_cast<float>(lp.pose.x * mapScale);
-                    const float py = static_cast<float>(lp.pose.y * mapScale);
                     const float sway = std::sin(animPhase * 3.8f + static_cast<float>(sid)) * 5.0f * s;
                     const float rise = (16.0f + 8.0f * std::sin(animPhase * 4.5f + static_cast<float>(sid))) * s;
                     beams.push_back({px, py, px + sway, py - rise, 7.0f * s, 60, 55, 50, 0.42f, 0.06f});
@@ -746,6 +857,7 @@ void GameSession::updateHudAndBeams() {
                 hud->appendAirTrailBeams(mapScale, 64u - beams.size(), beams);
             }
             const bool addGlow = enhancedGraphics;
+            const bool hasRetailVfx = combatVfx.hasRetailAssets();
             for (const auto& bw : burningWrecks) {
                 if (beams.size() >= 64) break;
                 const float tSec = std::chrono::duration<float>(bw.until - now).count();
@@ -776,8 +888,10 @@ void GameSession::updateHudAndBeams() {
                         const float my = (v.y0 + ey) * 0.5f;
                         beams.push_back({mx, my, mx, my, 26.0f * s, 255, 145, 40, 0.25f * fade, 0.25f * fade, true});
                     }
-                    beams.push_back({v.x0, v.y0, ex, ey, 11.0f * s * flick, 255, 145, 40, 0.90f * fade, 0.25f * fade, addGlow});
-                    beams.push_back({v.x0, v.y0, ex, ey, 5.5f * s * flick, 255, 230, 130, 0.95f * fade, 0.45f * fade, addGlow});
+                    if (!hasRetailVfx) {
+                        beams.push_back({v.x0, v.y0, ex, ey, 11.0f * s * flick, 255, 145, 40, 0.90f * fade, 0.25f * fade, addGlow});
+                        beams.push_back({v.x0, v.y0, ex, ey, 5.5f * s * flick, 255, 230, 130, 0.95f * fade, 0.45f * fade, addGlow});
+                    }
                     break;
                 }
                 case ActiveVfx::Kind::Tracer:
@@ -836,13 +950,15 @@ void GameSession::updateHudAndBeams() {
                                            255, 230, 130, fade * 0.40f, true);
                         }
                     }
-                    beams.push_back({v.x0, v.y0, v.x0, v.y0, fireR, 220, 65, 25, fade * 0.85f, fade * 0.85f, addGlow});
-                    if (t < 0.65f) {
-                        const float coreA = (1.0f - t / 0.65f);
-                        beams.push_back({v.x0, v.y0, v.x0, v.y0, fireR * 0.55f, 255, 230, 130, coreA * 0.9f, coreA * 0.9f, addGlow});
+                    if (!hasRetailVfx) {
+                        beams.push_back({v.x0, v.y0, v.x0, v.y0, fireR, 220, 65, 25, fade * 0.85f, fade * 0.85f, addGlow});
+                        if (t < 0.65f) {
+                            const float coreA = (1.0f - t / 0.65f);
+                            beams.push_back({v.x0, v.y0, v.x0, v.y0, fireR * 0.55f, 255, 230, 130, coreA * 0.9f, coreA * 0.9f, addGlow});
+                        }
+                        beams.push_back({v.x0, v.y0 - 4.0f * s, v.x0, v.y0 - (20.0f + 16.0f * t) * sc * s,
+                                         14.0f * sc * s, 60, 55, 50, fade * 0.50f, 0.08f});
                     }
-                    beams.push_back({v.x0, v.y0 - 4.0f * s, v.x0, v.y0 - (20.0f + 16.0f * t) * sc * s,
-                                     14.0f * sc * s, 60, 55, 50, fade * 0.50f, 0.08f});
                     break;
                 }
                 case ActiveVfx::Kind::HealPulse: {

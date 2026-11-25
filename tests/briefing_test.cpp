@@ -31,6 +31,13 @@ SDL_Event button(SDL_EventType type, float x, float y, Uint8 which = SDL_BUTTON_
     return e;
 }
 
+SDL_Event wheel(float y) {
+    SDL_Event e{};
+    e.type = SDL_EVENT_MOUSE_WHEEL;
+    e.wheel.y = y;
+    return e;
+}
+
 // Colours other than the border and body prove that glyphs were drawn.
 bool hasText(const ss2::Briefing& b) {
     const auto& p = b.rgba();
@@ -202,6 +209,32 @@ int main(int argc, char** argv) {
         check(pages > 1 && briefing.height() <= unsigned(pixelH), "long text is paged");
         for (std::size_t i = 0; i + 1 < pages; ++i) check(!briefing.acknowledge() && briefing.page() == i + 1, "next page");
         check(briefing.acknowledge() && !briefing.active(), "last page closes");
+        check(!briefing.previousPage(), "previousPage ignored when closed");
+
+        // Back-navigation and mouse-wheel paging keep the panel open across pages.
+        briefing.open(longText);
+        check(!briefing.previousPage() && briefing.page() == 0, "cannot go before first page");
+        check(!briefing.handle(wheel(-1.0f)) && briefing.active() && briefing.page() == 1, "wheel down advances");
+        check(!briefing.handle(wheel(1.0f)) && briefing.active() && briefing.page() == 0, "wheel up goes back");
+        for (std::size_t i = 0; i < pages + 2; ++i) {
+            check(!briefing.handle(wheel(-1.0f)) && briefing.active(), "wheel down never closes");
+        }
+        check(briefing.page() == pages - 1, "wheel down clamps on last page");
+        if (pages >= 2) {
+            check(!briefing.handle(key(SDLK_UP)) && briefing.active() && briefing.page() == pages - 2, "Up goes back");
+        }
+        if (pages >= 3) {
+            check(!briefing.handle(key(SDLK_LEFT)) && briefing.active() && briefing.page() == pages - 3, "Left goes back");
+        }
+        if (pages >= 4) {
+            check(!briefing.handle(key(SDLK_PAGEUP)) && briefing.active() && briefing.page() == pages - 4,
+                  "PageUp goes back");
+        }
+        if (pages >= 5) {
+            check(!briefing.handle(key(SDLK_BACKSPACE)) && briefing.active() && briefing.page() == pages - 5,
+                  "Backspace goes back");
+        }
+
         briefing.open(longText);
         check(briefing.handle(key(SDLK_ESCAPE)) && !briefing.active(), "Escape closes from any page");
 

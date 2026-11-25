@@ -1078,6 +1078,31 @@ std::size_t drawMissionVehicles(MapImage& map, const std::filesystem::path& game
     return drawn;
 }
 
+namespace {
+std::optional<MapImage> decodeAircraftFrame(View frame, View col, int& outOx, int& outOy) {
+    if (!isRenderableFrame(frame)) return std::nullopt;
+    const int ox = i16(frame, 0);
+    const int oy = i16(frame, 2);
+    const unsigned w = u16(frame, 4);
+    const unsigned h = u16(frame, 6);
+    if (w == 0 || h == 0 || w > 512 || h > 512) return std::nullopt;
+
+    MapImage img{w, h, std::vector<std::uint8_t>(std::size_t(w) * h * 4u, 0)};
+    drawIndexedFrame(img, -ox, -oy, frame, col);
+    for (std::size_t i = 0; i < img.rgba.size(); i += 4u) {
+        const unsigned a = img.rgba[i + 3u];
+        if (a > 0u && a < 255u) {
+            img.rgba[i] = static_cast<std::uint8_t>(std::min(255u, (unsigned(img.rgba[i]) * 255u) / a));
+            img.rgba[i + 1u] = static_cast<std::uint8_t>(std::min(255u, (unsigned(img.rgba[i + 1u]) * 255u) / a));
+            img.rgba[i + 2u] = static_cast<std::uint8_t>(std::min(255u, (unsigned(img.rgba[i + 2u]) * 255u) / a));
+        }
+    }
+    outOx = ox;
+    outOy = oy;
+    return img;
+}
+} // namespace
+
 std::optional<MapImage> loadAircraftSprite(const std::filesystem::path& gameDir,
                                            std::string_view unitId,
                                            unsigned dir32) {
@@ -1092,25 +1117,8 @@ std::optional<MapImage> loadAircraftSprite(const std::filesystem::path& gameDir,
     const auto asset = tryLoadVehicleStemAsset(archives, *stem);
     if (!asset || asset->frameCount < 32u) return std::nullopt;
 
-    const auto frame = pckFrame(asset->pck, dir32 & 31u);
-    if (!isRenderableFrame(frame)) return std::nullopt;
-    const int ox = i16(frame, 0);
-    const int oy = i16(frame, 2);
-    const unsigned w = u16(frame, 4);
-    const unsigned h = u16(frame, 6);
-    if (w == 0 || h == 0 || w > 512 || h > 512) return std::nullopt;
-
-    MapImage img{w, h, std::vector<std::uint8_t>(std::size_t(w) * h * 4u, 0)};
-    drawIndexedFrame(img, -ox, -oy, frame, asset->col);
-    for (std::size_t i = 0; i < img.rgba.size(); i += 4u) {
-        const unsigned a = img.rgba[i + 3u];
-        if (a > 0u && a < 255u) {
-            img.rgba[i] = static_cast<std::uint8_t>(std::min(255u, (unsigned(img.rgba[i]) * 255u) / a));
-            img.rgba[i + 1u] = static_cast<std::uint8_t>(std::min(255u, (unsigned(img.rgba[i + 1u]) * 255u) / a));
-            img.rgba[i + 2u] = static_cast<std::uint8_t>(std::min(255u, (unsigned(img.rgba[i + 2u]) * 255u) / a));
-        }
-    }
-    return img;
+    int ox = 0, oy = 0;
+    return decodeAircraftFrame(pckFrame(asset->pck, dir32 & 31u), asset->col, ox, oy);
 }
 
 std::optional<MapImage> VehicleScene::renderUnitPortrait(const std::string& id, unsigned size) {
@@ -1356,9 +1364,9 @@ std::optional<GpuVehicleAtlas> VehicleScene::buildGpuAtlas(const std::string& id
             const auto cov = readShadowCoverage(0, 0, fr);
             for (std::size_t p = 0; p < cov.pixels.size(); ++p) {
                 if (cov.pixels[p]) {
-                    raw.rgba[p * 4u + 0u] = 255u;
-                    raw.rgba[p * 4u + 1u] = 255u;
-                    raw.rgba[p * 4u + 2u] = 255u;
+                    raw.rgba[p * 4u + 0u] = 0u;
+                    raw.rgba[p * 4u + 1u] = 16u;
+                    raw.rgba[p * 4u + 2u] = 41u;
                     raw.rgba[p * 4u + 3u] = 255u;
                 }
             }
@@ -1516,5 +1524,71 @@ void VehicleScene::appendGpuSprites(std::size_t unitIndex, const GpuVehicleAtlas
             });
         }
     }
+}
+
+std::optional<AircraftGpuAtlas> buildAircraftGpuAtlas(const std::filesystem::path& gameDir,
+                                                      std::string_view planeId,
+                                                      bool scale2xEpx) {
+    if (gameDir.empty() || planeId.empty()) return std::nullopt;
+    const auto archives = resolveGameArchives(gameDir);
+    if (archives.empty()) return std::nullopt;
+    const auto descArchives = resolveDescArchives(gameDir, 0);
+    const bool hasDesc = !descArchives.empty();
+
+    const auto stem = resolveUnitStem(descArchives, hasDesc, planeId);
+    if (!stem) return std::nullopt;
+    const auto asset = tryLoadVehicleStemAsset(archives, *stem);
+    if (!asset || asset->frameCount < 32u) return std::nullopt;
+
+    std::array<MapImage, 32> rawFrames;
+    std::array<int, 32> oxs{}, oys{};
+    int maxRawW = 0, maxRawH = 0;
+    bool anyValid = false;
+    for (unsigned d = 0; d < 32u; ++d) {
+        int ox = 0, oy = 0;
+        if (auto decoded = decodeAircraftFrame(pckFrame(asset->pck, d), asset->col, ox, oy)) {
+            maxRawW = std::max(maxRawW, static_cast<int>(decoded->width));
+            maxRawH = std::max(maxRawH, static_cast<int>(decoded->height));
+            rawFrames[d] = std::move(*decoded);
+            oxs[d] = ox;
+            oys[d] = oy;
+            anyValid = true;
+        }
+    }
+    if (!anyValid || maxRawW <= 0 || maxRawH <= 0) return std::nullopt;
+
+    const bool can2x = scale2xEpx && maxRawW <= 256 && maxRawH <= 256 &&
+                       (8 * (maxRawW * 2 + 2) <= 4096) && (4 * (maxRawH * 2 + 2) <= 4096);
+    const int scale = can2x ? 2 : 1;
+
+    AircraftGpuAtlas out;
+    out.scale = scale;
+    out.cellW = maxRawW * scale + 2;
+    out.cellH = maxRawH * scale + 2;
+    const unsigned atlasW = static_cast<unsigned>(out.cellW * 8);
+    const unsigned atlasH = static_cast<unsigned>(out.cellH * 4);
+    out.atlas = MapImage{atlasW, atlasH, std::vector<std::uint8_t>(std::size_t(atlasW) * atlasH * 4u, 0u)};
+
+    for (unsigned d = 0; d < 32u; ++d) {
+        if (!rawFrames[d].width || !rawFrames[d].height) continue;
+        MapImage finalImg = can2x ? upscale2xEpx(rawFrames[d]) : std::move(rawFrames[d]);
+        const int col = static_cast<int>(d & 7u);
+        const int row = static_cast<int>(d >> 3u);
+        const int cx = col * out.cellW + 1;
+        const int cy = row * out.cellH + 1;
+        out.cellX[d] = cx;
+        out.cellY[d] = cy;
+        out.frameW[d] = static_cast<int>(finalImg.width);
+        out.frameH[d] = static_cast<int>(finalImg.height);
+        out.offsetX[d] = oxs[d];
+        out.offsetY[d] = oys[d];
+        for (unsigned py = 0; py < finalImg.height; ++py) {
+            const auto* srcRow = finalImg.rgba.data() + std::size_t(py) * finalImg.width * 4u;
+            auto* dstRow = out.atlas.rgba.data() +
+                           (std::size_t(cy + static_cast<int>(py)) * atlasW + static_cast<std::size_t>(cx)) * 4u;
+            std::copy_n(srcRow, std::size_t(finalImg.width) * 4u, dstRow);
+        }
+    }
+    return out;
 }
 }

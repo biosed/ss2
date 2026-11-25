@@ -1006,30 +1006,57 @@ struct VulkanWindow::Impl {
             return lut;
         }();
         const std::size_t n = src.size();
+        const std::uint8_t* srcPtr = src.data();
+        std::uint32_t prevSrc = 0;
+        std::uint32_t prevOut = 0;
+        bool havePrev = false;
         if (srgb) {
             for (std::size_t i = 0; i < n; i += 4) {
-                const unsigned alpha = src[i + 3];
+                std::uint32_t curSrc = 0;
+                std::memcpy(&curSrc, srcPtr + i, 4);
+                if (havePrev && curSrc == prevSrc) {
+                    std::memcpy(dst + i, &prevOut, 4);
+                    continue;
+                }
+                const unsigned alpha = srcPtr[i + 3];
                 const auto* row = &srgbPremul[alpha * 256];
-                dst[i + 0] = row[src[i + 0]];
-                dst[i + 1] = row[src[i + 1]];
-                dst[i + 2] = row[src[i + 2]];
-                dst[i + 3] = std::uint8_t(alpha);
+                const std::uint8_t outPx[4] = {
+                    row[srcPtr[i + 0]],
+                    row[srcPtr[i + 1]],
+                    row[srcPtr[i + 2]],
+                    std::uint8_t(alpha),
+                };
+                std::memcpy(&prevOut, outPx, 4);
+                std::memcpy(dst + i, &prevOut, 4);
+                prevSrc = curSrc;
+                havePrev = true;
             }
         } else {
             for (std::size_t i = 0; i < n; i += 4) {
-                const unsigned alpha = src[i + 3];
-                if (alpha == 255) {
-                    dst[i + 0] = src[i + 0];
-                    dst[i + 1] = src[i + 1];
-                    dst[i + 2] = src[i + 2];
-                } else if (!alpha) {
-                    dst[i + 0] = dst[i + 1] = dst[i + 2] = 0;
-                } else {
-                    dst[i + 0] = std::uint8_t((unsigned(src[i + 0]) * alpha + 127) / 255);
-                    dst[i + 1] = std::uint8_t((unsigned(src[i + 1]) * alpha + 127) / 255);
-                    dst[i + 2] = std::uint8_t((unsigned(src[i + 2]) * alpha + 127) / 255);
+                std::uint32_t curSrc = 0;
+                std::memcpy(&curSrc, srcPtr + i, 4);
+                if (havePrev && curSrc == prevSrc) {
+                    std::memcpy(dst + i, &prevOut, 4);
+                    continue;
                 }
-                dst[i + 3] = std::uint8_t(alpha);
+                const unsigned alpha = srcPtr[i + 3];
+                std::uint8_t outPx[4];
+                if (alpha == 255) {
+                    outPx[0] = srcPtr[i + 0];
+                    outPx[1] = srcPtr[i + 1];
+                    outPx[2] = srcPtr[i + 2];
+                } else if (!alpha) {
+                    outPx[0] = outPx[1] = outPx[2] = 0;
+                } else {
+                    outPx[0] = std::uint8_t((unsigned(srcPtr[i + 0]) * alpha + 127) / 255);
+                    outPx[1] = std::uint8_t((unsigned(srcPtr[i + 1]) * alpha + 127) / 255);
+                    outPx[2] = std::uint8_t((unsigned(srcPtr[i + 2]) * alpha + 127) / 255);
+                }
+                outPx[3] = std::uint8_t(alpha);
+                std::memcpy(&prevOut, outPx, 4);
+                std::memcpy(dst + i, &prevOut, 4);
+                prevSrc = curSrc;
+                havePrev = true;
             }
         }
     }
@@ -1352,7 +1379,8 @@ struct VulkanWindow::Impl {
             if (opaque) std::memcpy(mapped, overlay.pixels.data(), overlay.pixels.size());
             else premultiplyInto(overlay.pixels, mapped, srgb);
             device->unmapMemory(*atlas.stagingMemory);
-            atlas.pixels = overlay.pixels;
+            // Skip copying overlay.pixels into atlas.pixels during in-place updates;
+            // overlay.pixels remains authoritative for any non-format-change rebuild.
             atlas.pendingUpload = true;
             return;
         }

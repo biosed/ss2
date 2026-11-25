@@ -30,6 +30,7 @@ public:
     // Same effect as pressing Enter, for tests and scripted callers: advances
     // to the next page, or closes on the last one. Returns true when closed.
     bool acknowledge();
+    bool previousPage();
 
     // Hands the current panel to the renderer, or removes it once closed.
     // Call once per frame; it uploads only after a change.

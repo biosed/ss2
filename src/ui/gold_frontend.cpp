@@ -1,5 +1,6 @@
 #include "ui/gold_frontend_internal.hpp"
 
+#include "assets/sound_bank.hpp"
 #include "render/window.hpp"
 
 #include <algorithm>
@@ -382,6 +383,98 @@ void drawDiamondOverview(cairo_t* cr, cairo_surface_t* surf,
     }
 }
 
+void loadUiSfxClips(const std::filesystem::path& gameDir,
+                    std::span<const std::string_view> names,
+                    std::unordered_map<std::string, CachedUiClip>& dst) {
+    dst.clear();
+    if (gameDir.empty() || names.empty()) return;
+    try {
+        const auto bank = assets::SoundBank::load(gameDir);
+        for (const std::string_view name : names) {
+            const std::string key(name);
+            const std::size_t count = bank.variantCount(key);
+            for (std::size_t v = 0; v < count; ++v) {
+                const auto* clip = bank.clip(key, v);
+                if (!clip || clip->pcm.empty() || clip->bitsPerSample != 16) continue;
+                bool allZero = true;
+                for (std::size_t i = 0; i + 1 < clip->pcm.size(); i += 2) {
+                    if (clip->pcm[i] != 0u || clip->pcm[i + 1] != 0u) {
+                        allZero = false;
+                        break;
+                    }
+                }
+                if (allZero) continue;
+                dst.emplace(key, CachedUiClip{
+                    clip->sampleRate ? clip->sampleRate : 22050u,
+                    clip->pcm
+                });
+                break;
+            }
+        }
+    } catch (...) {
+    }
+}
+
+void playUiSfxClip(SDL_Window* window,
+                   const std::unordered_map<std::string, CachedUiClip>& clips,
+                   std::string_view group,
+                   float masterVolume,
+                   float relGain,
+                   SDL_AudioDeviceID& device,
+                   bool& deviceResumed,
+                   SDL_AudioStream*& stream,
+                   bool& audioInitFailed,
+                   std::uint64_t& lastChooseMs) {
+    if (window == nullptr || audioInitFailed || masterVolume <= 0.001f) return;
+    const auto it = clips.find(std::string(group));
+    if (it == clips.end() || it->second.pcm.empty()) return;
+    const auto& clip = it->second;
+
+    const std::uint64_t nowMs = SDL_GetTicks();
+    if (group == "choose") {
+        if (lastChooseMs != 0u && nowMs >= lastChooseMs && (nowMs - lastChooseMs) < 45u) {
+            return;
+        }
+        lastChooseMs = std::max<std::uint64_t>(1u, nowMs);
+    }
+
+    if (!SDL_WasInit(SDL_INIT_AUDIO)) {
+        if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) {
+            audioInitFailed = true;
+            return;
+        }
+    }
+    constexpr SDL_AudioSpec kDstSpec{SDL_AUDIO_S16, 2, 48000};
+    if (!device) {
+        device = SDL_OpenAudioDevice(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &kDstSpec);
+        if (!device) {
+            audioInitFailed = true;
+            return;
+        }
+        deviceResumed = false;
+    }
+    if (!deviceResumed) {
+        SDL_ResumeAudioDevice(device);
+        deviceResumed = true;
+    }
+    const SDL_AudioSpec srcSpec{SDL_AUDIO_S16, 1, static_cast<int>(clip.sampleRate)};
+    if (!stream) {
+        stream = SDL_CreateAudioStream(&srcSpec, &kDstSpec);
+        if (!stream || !SDL_BindAudioStream(device, stream)) {
+            if (stream) {
+                SDL_DestroyAudioStream(stream);
+                stream = nullptr;
+            }
+            audioInitFailed = true;
+            return;
+        }
+    }
+    SDL_SetAudioStreamFormat(stream, &srcSpec, nullptr);
+    SDL_SetAudioStreamGain(stream, std::clamp(masterVolume * relGain, 0.0f, 1.0f));
+    SDL_ClearAudioStream(stream);
+    (void)SDL_PutAudioStreamData(stream, clip.pcm.data(), static_cast<int>(clip.pcm.size()));
+}
+
 }  // namespace ss2::gold_ui
 
 namespace ss2 {
@@ -423,6 +516,7 @@ void GoldFrontEnd::reloadModAssets() {
     assets_->menuSuePath.clear();
     assets_->backwavBytes = 0;
     assets_->briefingMusicBytes = 0;
+    assets_->uiSfxClips.clear();
     assets_->loadedMenuSue = false;
     availableMods_ = gameDir_.empty()
         ? std::vector<assets::ModInfo>{}
@@ -576,6 +670,10 @@ void GoldFrontEnd::loadAssets(std::optional<int> fixedBgIndex) {
         assets::sueChainEntrySize(menuArchives, assets_->backwavEntry).value_or(0u) & ~std::size_t(3u);
     assets_->briefingMusicBytes =
         assets::sueChainEntrySize(menuArchives, "briefing").value_or(0u) & ~std::size_t(3u);
+    static constexpr std::array<std::string_view, 6> kUiSfxNames{{
+        "choose", "push", "pull", "checkbox_open", "checkbox_close", "accept"
+    }};
+    gold_ui::loadUiSfxClips(gameDir_, kUiSfxNames, assets_->uiSfxClips);
 
     assets_->loadedMenuSue = assets_->mainBg != nullptr || assets_->briefingBg != nullptr;
     if (window_ != nullptr) {
@@ -900,12 +998,14 @@ void GoldFrontEnd::cycleFocus(const std::vector<std::string>& ids, int step) {
     auto it = std::ranges::find(ids, focusedId_);
     const int idx = it == ids.end() ? 0 : int(it - ids.begin());
     const int next = (idx + step + int(ids.size())) % int(ids.size());
+    const bool changed = (ids[next] != focusedId_);
     focusedId_ = ids[next];
     if (std::size_t ci = 0; parseIndexAfter(focusedId_, "campaign:", ci)) {
         fe_.selectCampaign(ci);
     } else if (std::size_t cci = 0; parseIndexAfter(focusedId_, "ccampaign:", cci)) {
         fe_.selectCustomCampaign(cci);
     }
+    if (changed && !focusedId_.empty()) playUiSfx("choose", 0.32f);
     dirty_ = true;
 }
 
@@ -952,6 +1052,7 @@ void GoldFrontEnd::handleActiveListNavigationKey(SDL_Keycode key) {
             }
         }
     };
+    const std::size_t prevSel = activeListSelected();
     if (key == SDLK_UP) {
         const std::size_t sel = activeListSelected();
         selectActiveRow(sel > 0 ? sel - 1 : 0);
@@ -986,6 +1087,9 @@ void GoldFrontEnd::handleActiveListNavigationKey(SDL_Keycode key) {
         ensureSelectionVisible();
         loadSelectedOverview();
         dirty_ = true;
+    }
+    if (activeListSelected() != prevSel) {
+        playUiSfx("choose", 0.32f);
     }
 }
 
@@ -1068,6 +1172,15 @@ std::string GoldFrontEnd::hitTestStage(double sx, double sy) const {
     return {};
 }
 
+void GoldFrontEnd::playUiSfx(std::string_view group, float relGain) {
+    if (!assets_ || window_ == nullptr || assets_->audioInitFailed) return;
+    const UserSettings& cfg = (fe_.screen() == FrontEnd::Screen::Options) ? optionsDraft_ : settings_;
+    gold_ui::playUiSfxClip(window_, assets_->uiSfxClips, group, cfg.sfxVolume, relGain,
+                           assets_->musicAudioDev, assets_->musicDeviceResumed,
+                           assets_->uiSfxStream, assets_->audioInitFailed,
+                           assets_->lastChooseSfxMs);
+}
+
 void GoldFrontEnd::activateId(const std::string& id) {
     if (id.empty()) return;
     const auto prev = fe_.screen();
@@ -1093,6 +1206,38 @@ void GoldFrontEnd::activateId(const std::string& id) {
         if (id == "ok") commitOptionsEdit();
         else if (id == "cancel" || id == "back") cancelOptionsEdit();
     }
+
+    auto playActivationSfx = [&](std::string_view actId) {
+        if (actId == "cancel" || actId == "back" || actId == "opt_cancel" ||
+            actId == "ed_cancel" || actId == "credits_close") {
+            playUiSfx("pull", 0.60f);
+            return;
+        }
+        const bool isBriefingLaunch =
+            (prev == FrontEnd::Screen::Briefing && actId == "start" &&
+             (fe_.briefingFromCampaign() ? (fe_.selectedCampaignMissionEntry() != nullptr)
+                                         : (fe_.selectedMission() != nullptr)));
+        const bool isReplayLaunch = (actId == "replay_start" && !replays_.empty());
+        const bool isSaveLaunch = ((actId == "load_start" || actId == "save_load") && !saves_.empty());
+        const bool isMpLaunch =
+            (actId == "mp_start" &&
+             ((fe_.mpIsHost() && !mpMissions_.empty()) ||
+              (!fe_.mpIsHost() && !fe_.mpHostAddress().empty())));
+        if (isBriefingLaunch || isReplayLaunch || isSaveLaunch || isMpLaunch) {
+            playUiSfx("accept", 0.72f);
+            return;
+        }
+        if (actId == "difficulty" ||
+            actId.starts_with("mission:") || actId.starts_with("cmission:") ||
+            actId.starts_with("replay:") || actId.starts_with("save:") ||
+            actId.starts_with("mpmap:") || actId.starts_with("mp_map:") ||
+            actId.starts_with("profile_row:")) {
+            playUiSfx("checkbox_open", 0.55f);
+            return;
+        }
+        playUiSfx("push", 0.60f);
+    };
+    playActivationSfx(id);
 
     if (id == "scroll_up") { scrollBy(-1); return; }
     if (id == "scroll_down") { scrollBy(1); return; }
@@ -1171,6 +1316,7 @@ void GoldFrontEnd::handleKey(SDL_Keycode key) {
     const auto prev = fe_.screen();
 
     if (key == SDLK_ESCAPE) {
+        playUiSfx("pull", 0.60f);
         if (prev == FrontEnd::Screen::SinglePlayer && profileEditMode_ != ProfileEditMode::None) {
             profileEditMode_ = ProfileEditMode::None;
             profileNameDraft_ = settings_.activeProfile;
@@ -1283,6 +1429,7 @@ void GoldFrontEnd::handleMouseMove(double stageX, double stageY) {
     const std::string hit = hitTestStage(stageX, stageY);
     if (hit != hoveredId_) {
         hoveredId_ = hit;
+        if (!hoveredId_.empty()) playUiSfx("choose", 0.32f);
         dirty_ = true;
     }
 }
@@ -1340,8 +1487,11 @@ void GoldFrontEnd::handleMouseDown(double stageX, double stageY, std::uint8_t cl
             dirty_ = true;
             if (fe_.screen() == FrontEnd::Screen::Multiplayer) {
                 if (clicks >= 2 && fe_.mpIsHost()) activateId("mp_start");
+                else playUiSfx("checkbox_open", 0.55f);
             } else if (clicks >= 2 || (clicks == 0 && alreadySelected)) {
                 activateId(hit);
+            } else {
+                playUiSfx("checkbox_open", 0.55f);
             }
             return;
         }

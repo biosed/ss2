@@ -249,21 +249,24 @@ void GameSession::playSelectionVoice(std::string_view verb) {
 }
 
 std::tuple<std::string, int, float> GameSession::weaponSoundForUnit(const std::string& id) const {
-    const std::string low = lowerAsciiId(id);
-    if (low == "dsmguner" || low == "rsmguner" || low == "aofficer") return {"smg_burst", 420, 0.55f};
-    if (low.find("hmg") != std::string::npos) return {"smg_burst", 240, 0.50f};
-    if (low.find("flam") != std::string::npos) return {"fmw", 450, 0.48f};
-    if (low.find("bazooka") != std::string::npos || low.find("panzerfaust") != std::string::npos ||
-        low.find("piat") != std::string::npos) {
-        return {"bazooka", 360, 0.52f};
-    }
-    if (low.find("mortar") != std::string::npos) return {"mortar", 450, 0.52f};
-    if (low == "dofficer") return {"gunshot", 200, 0.42f};
     if (unitCatalog) {
         if (const auto* spec = unitCatalog->find(id); spec && !spec->shot1.soundGroup.empty()) {
-            return {spec->shot1.soundGroup, 260, 0.42f};
+            if (lowerAsciiId(spec->shot1.soundGroup) != "none") {
+                return {spec->shot1.soundGroup, 260, 0.42f};
+            }
         }
     }
+    const std::string low = lowerAsciiId(id);
+    if (low == "dsmguner" || low == "rsmguner" || low == "aofficer") return {"smg_burst", 420, 0.55f};
+    if (low.find("hmg") != std::string::npos) return {"mg_tank_burst", 240, 0.50f};
+    if (low.find("flam") != std::string::npos) return {"fmw", 450, 0.48f};
+    if (low.find("piat") != std::string::npos) return {"piat", 360, 0.52f};
+    if (low.find("bazooka") != std::string::npos || low.find("panzerfaust") != std::string::npos ||
+        low.find("panzershrek") != std::string::npos) {
+        return {"rocket", 360, 0.52f};
+    }
+    if (low.find("mortar") != std::string::npos) return {"howitzer", 450, 0.52f};
+    if (low == "dofficer") return {"gunshot", 200, 0.42f};
     return {"rifle", 180, 0.40f};
 }
 

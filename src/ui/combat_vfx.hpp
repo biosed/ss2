@@ -780,15 +780,63 @@ inline std::vector<std::uint8_t> tintSoldPalette(ByteView baseSoldPl, int scaleR
     return out;
 }
 
+inline std::vector<std::uint8_t> upscaleRgba2xEpx(const std::uint8_t* src, int w, int h) {
+    if (!src || w <= 0 || h <= 0) return {};
+    const std::size_t dstW = static_cast<std::size_t>(w) * 2u;
+    const std::size_t dstH = static_cast<std::size_t>(h) * 2u;
+    std::vector<std::uint8_t> out(dstW * dstH * 4u, 0u);
+    const auto readPx = [&](int x, int y) -> std::array<std::uint8_t, 4> {
+        if (x < 0 || y < 0 || x >= w || y >= h) return {0u, 0u, 0u, 0u};
+        const auto* p = src + (static_cast<std::size_t>(y) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x)) * 4u;
+        if (p[3] == 0u) return {0u, 0u, 0u, 0u};
+        return {p[0], p[1], p[2], p[3]};
+    };
+    const auto eq = [](const std::array<std::uint8_t, 4>& a, const std::array<std::uint8_t, 4>& b) -> bool {
+        if (a[3] == 0u && b[3] == 0u) return true;
+        return a[0] == b[0] && a[1] == b[1] && a[2] == b[2] && a[3] == b[3];
+    };
+    const auto putPx = [&](std::size_t x, std::size_t y, const std::array<std::uint8_t, 4>& c) {
+        auto* dst = &out[(y * dstW + x) * 4u];
+        dst[0] = c[0];
+        dst[1] = c[1];
+        dst[2] = c[2];
+        dst[3] = c[3];
+    };
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            const auto P = readPx(x, y);
+            const auto A = readPx(x, y - 1);
+            const auto B = readPx(x + 1, y);
+            const auto C = readPx(x - 1, y);
+            const auto D = readPx(x, y + 1);
+            auto p00 = P, p10 = P, p01 = P, p11 = P;
+            if (!eq(C, B) && !eq(A, D)) {
+                if (eq(C, A)) p00 = A;
+                if (eq(A, B)) p10 = B;
+                if (eq(D, C)) p01 = C;
+                if (eq(B, D)) p11 = D;
+            }
+            const std::size_t ox = static_cast<std::size_t>(x) * 2u;
+            const std::size_t oy = static_cast<std::size_t>(y) * 2u;
+            putPx(ox, oy, p00);
+            putPx(ox + 1u, oy, p10);
+            putPx(ox, oy + 1u, p01);
+            putPx(ox + 1u, oy + 1u, p11);
+        }
+    }
+    return out;
+}
+
 } // namespace combat_vfx_detail
 
 class CombatVfxBank {
 public:
-    static constexpr unsigned kMaxAtlasDim = 2048u;
+    static constexpr unsigned kMaxAtlasDim = 4096u;
 
     struct PackedFrame {
         std::uint16_t u0{0}, v0{0}, u1{0}, v1{0};
         std::int16_t offsetX{0}, offsetY{0};
+        std::uint8_t texScale{1};
     };
 
     CombatVfxBank() {
@@ -880,13 +928,17 @@ public:
 private:
     struct RawClip {
         std::vector<std::vector<combat_vfx_detail::DecodedTrimmedSprite>> directions;
+        bool isRetail{false};
     };
     struct PackedClip {
         std::vector<std::vector<PackedFrame>> directions;
     };
 
     void clearUnpacked() {
-        for (auto& rc : rawClips_) rc.directions.clear();
+        for (auto& rc : rawClips_) {
+            rc.directions.clear();
+            rc.isRetail = false;
+        }
         for (auto& pc : clips_) pc.directions.clear();
         totalFrames_ = 0u;
     }
@@ -946,31 +998,31 @@ private:
             unsigned frameStride;
         };
         static constexpr std::array<AniEntrySpec, 26> kSpecs{{
-            {CombatVfxClip::ExplosionTiny,   "a_v50",         nullptr, 1u,  1u, 0u,  2u},
-            {CombatVfxClip::ExplosionSmall,  "a_v36",         nullptr, 1u,  1u, 0u,  2u},
-            {CombatVfxClip::ExplosionMedium, "a_v30",         nullptr, 1u,  1u, 0u,  2u},
-            {CombatVfxClip::ExplosionLarge,  "a_v24",         "a_v18", 1u,  1u, 0u,  3u},
-            {CombatVfxClip::ExplosionHuge,   "a_v16",         "a_v14", 1u,  1u, 0u,  3u},
-            {CombatVfxClip::CrateBlast1,     "BOOMBOX1",      nullptr, 1u,  1u, 0u,  4u},
-            {CombatVfxClip::CrateBlast2,     "BOOMBOX2",      nullptr, 1u,  1u, 0u,  4u},
-            {CombatVfxClip::CrateBlast3,     "BOOMBOX3",      nullptr, 1u,  1u, 0u,  4u},
-            {CombatVfxClip::BoxDust,         "BOXDUST",       nullptr, 1u,  1u, 0u,  3u},
-            {CombatVfxClip::GroundDust,      "a_pil",         nullptr, 1u,  1u, 0u,  2u},
+            {CombatVfxClip::ExplosionTiny,   "a_v50",         nullptr, 1u,  1u, 0u,  1u},
+            {CombatVfxClip::ExplosionSmall,  "a_v36",         nullptr, 1u,  1u, 0u,  1u},
+            {CombatVfxClip::ExplosionMedium, "a_v30",         nullptr, 1u,  1u, 0u,  1u},
+            {CombatVfxClip::ExplosionLarge,  "a_v24",         "a_v18", 1u,  1u, 0u,  2u},
+            {CombatVfxClip::ExplosionHuge,   "a_v16",         "a_v14", 1u,  1u, 0u,  2u},
+            {CombatVfxClip::CrateBlast1,     "BOOMBOX1",      nullptr, 1u,  1u, 0u,  2u},
+            {CombatVfxClip::CrateBlast2,     "BOOMBOX2",      nullptr, 1u,  1u, 0u,  2u},
+            {CombatVfxClip::CrateBlast3,     "BOOMBOX3",      nullptr, 1u,  1u, 0u,  2u},
+            {CombatVfxClip::BoxDust,         "BOXDUST",       nullptr, 1u,  1u, 0u,  2u},
+            {CombatVfxClip::GroundDust,      "a_pil",         nullptr, 1u,  1u, 0u,  1u},
             {CombatVfxClip::MuzzleRifle,     "a_vistrel",     nullptr, 32u, 1u, 0u,  1u},
             {CombatVfxClip::MuzzleCannon,    "a_vistr0",      nullptr, 32u, 1u, 0u,  1u},
-            {CombatVfxClip::MuzzleHowitzer,  "a_gaub0",       "a_gaub45", 32u, 1u, 24u, 4u},
+            {CombatVfxClip::MuzzleHowitzer,  "a_gaub0",       "a_gaub45", 32u, 1u, 24u, 2u},
             {CombatVfxClip::MuzzleKatyusha,  "a_katushka",    nullptr, 32u, 2u, 0u,  1u},
-            {CombatVfxClip::MuzzleMortar,    "MORTFIRE",      nullptr, 1u,  1u, 0u,  2u},
-            {CombatVfxClip::RocketPlume,     "a_raket",       nullptr, 1u,  1u, 0u,  4u},
-            {CombatVfxClip::FlamePlume,      "FIREBOT",       nullptr, 1u,  1u, 0u,  2u},
-            {CombatVfxClip::FireGlow,        "a_fireglow",    nullptr, 1u,  1u, 0u,  3u},
-            {CombatVfxClip::WaterSplash1,    "a_fontanchik",  nullptr, 1u,  1u, 0u,  2u},
-            {CombatVfxClip::WaterSplash2,    "a_fontanchik2", nullptr, 1u,  1u, 0u,  2u},
-            {CombatVfxClip::WaterSplash3,    "a_fontanchik3", nullptr, 1u,  1u, 0u,  2u},
-            {CombatVfxClip::TrackTank,       "a_sledtank",    nullptr, 1u,  1u, 0u,  2u},
-            {CombatVfxClip::TrackWheel1,     "a_sled1",       nullptr, 1u,  1u, 0u,  4u},
-            {CombatVfxClip::TrackWheel2,     "a_sled2",       nullptr, 1u,  1u, 0u,  4u},
-            {CombatVfxClip::TrackWheel3,     "a_sled3",       nullptr, 1u,  1u, 0u,  4u},
+            {CombatVfxClip::MuzzleMortar,    "MORTFIRE",      nullptr, 1u,  1u, 0u,  1u},
+            {CombatVfxClip::RocketPlume,     "a_raket",       nullptr, 1u,  1u, 0u,  2u},
+            {CombatVfxClip::FlamePlume,      "FIREBOT",       nullptr, 1u,  1u, 0u,  1u},
+            {CombatVfxClip::FireGlow,        "a_fireglow",    nullptr, 1u,  1u, 0u,  2u},
+            {CombatVfxClip::WaterSplash1,    "a_fontanchik",  nullptr, 1u,  1u, 0u,  1u},
+            {CombatVfxClip::WaterSplash2,    "a_fontanchik2", nullptr, 1u,  1u, 0u,  1u},
+            {CombatVfxClip::WaterSplash3,    "a_fontanchik3", nullptr, 1u,  1u, 0u,  1u},
+            {CombatVfxClip::TrackTank,       "a_sledtank",    nullptr, 1u,  1u, 0u,  1u},
+            {CombatVfxClip::TrackWheel1,     "a_sled1",       nullptr, 1u,  1u, 0u,  2u},
+            {CombatVfxClip::TrackWheel2,     "a_sled2",       nullptr, 1u,  1u, 0u,  2u},
+            {CombatVfxClip::TrackWheel3,     "a_sled3",       nullptr, 1u,  1u, 0u,  2u},
             {CombatVfxClip::WakeShallows,    "a_slednavode",  nullptr, 1u,  1u, 0u,  1u},
         }};
 
@@ -983,6 +1035,7 @@ private:
             if (!ani || !col) return false;
             RawClip rc;
             if (!decodeAniIntoRawClip(*ani, *col, dirs, dirStep, maxFpd, stride, rc)) return false;
+            rc.isRetail = true;
             rawClips_[static_cast<std::size_t>(clip)] = std::move(rc);
             return true;
         };
@@ -1024,11 +1077,15 @@ private:
                         }
                     }
                     if (!canopies.empty()) {
-                        rawClips_[static_cast<std::size_t>(CombatVfxClip::ParachuteCanopy)].directions = {std::move(canopies)};
+                        auto& rc = rawClips_[static_cast<std::size_t>(CombatVfxClip::ParachuteCanopy)];
+                        rc.directions = {std::move(canopies)};
+                        rc.isRetail = true;
                         ++loadedCount;
                     }
                     if (!shadows.empty()) {
-                        rawClips_[static_cast<std::size_t>(CombatVfxClip::ParachuteShadow)].directions = {std::move(shadows)};
+                        auto& rc = rawClips_[static_cast<std::size_t>(CombatVfxClip::ParachuteShadow)];
+                        rc.directions = {std::move(shadows)};
+                        rc.isRetail = true;
                     }
                 }
             }
@@ -1066,11 +1123,15 @@ private:
                     }
                 }
                 if (ok && ammoDirs.size() == 8u) {
-                    rawClips_[static_cast<std::size_t>(CombatVfxClip::AmmoCrate)].directions = std::move(ammoDirs);
+                    auto& rc = rawClips_[static_cast<std::size_t>(CombatVfxClip::AmmoCrate)];
+                    rc.directions = std::move(ammoDirs);
+                    rc.isRetail = true;
                     ++loadedCount;
                 }
                 if (ok && partsDirs.size() == 8u) {
-                    rawClips_[static_cast<std::size_t>(CombatVfxClip::PartsCrate)].directions = std::move(partsDirs);
+                    auto& rc = rawClips_[static_cast<std::size_t>(CombatVfxClip::PartsCrate)];
+                    rc.directions = std::move(partsDirs);
+                    rc.isRetail = true;
                 }
             }
         }
@@ -1251,71 +1312,101 @@ private:
             std::size_t frameIdx;
             unsigned paddedW;
             unsigned paddedH;
+            std::uint8_t texScale;
         };
-        std::vector<Ref> refs;
-        for (std::size_t ci = 0u; ci < rawClips_.size(); ++ci) {
-            const auto& dirs = rawClips_[ci].directions;
-            clips_[ci].directions.assign(dirs.size(), {});
-            for (std::size_t di = 0u; di < dirs.size(); ++di) {
-                clips_[ci].directions[di].resize(dirs[di].size());
-                for (std::size_t fi = 0u; fi < dirs[di].size(); ++fi) {
-                    const auto& sp = dirs[di][fi];
-                    if (sp.width == 0u || sp.height == 0u) continue;
-                    refs.push_back({ci, di, fi, sp.width + 2u, sp.height + 2u});
-                }
-            }
-        }
-        if (refs.empty()) return false;
-
-        std::sort(refs.begin(), refs.end(), [](const Ref& a, const Ref& b) {
-            return a.paddedH != b.paddedH ? a.paddedH > b.paddedH : a.paddedW > b.paddedW;
-        });
-
-        unsigned atlasW = retailLoaded_ ? kMaxAtlasDim : 512u;
         struct Placement {
             Ref ref;
             unsigned x;
             unsigned y;
         };
-        std::vector<Placement> placed;
-        placed.reserve(refs.size());
-
-        unsigned curX = 0u, curY = 0u, rowH = 0u;
-        for (const auto& r : refs) {
-            if (r.paddedW > atlasW) atlasW = kMaxAtlasDim;
-            if (curX + r.paddedW > atlasW) {
-                curY += rowH;
-                curX = 0u;
-                rowH = 0u;
+        for (std::size_t ci = 0u; ci < rawClips_.size(); ++ci) {
+            const auto& dirs = rawClips_[ci].directions;
+            clips_[ci].directions.assign(dirs.size(), {});
+            for (std::size_t di = 0u; di < dirs.size(); ++di) {
+                clips_[ci].directions[di].resize(dirs[di].size());
             }
-            if (curY + r.paddedH > kMaxAtlasDim) {
-                if (atlasW < kMaxAtlasDim) {
-                    atlasW = kMaxAtlasDim;
-                    placed.clear();
-                    curX = 0u;
-                    curY = 0u;
-                    rowH = 0u;
-                    for (const auto& r2 : refs) {
-                        if (curX + r2.paddedW > atlasW) {
-                            curY += rowH;
-                            curX = 0u;
-                            rowH = 0u;
-                        }
-                        if (curY + r2.paddedH > kMaxAtlasDim) break;
-                        placed.push_back({r2, curX + 1u, curY + 1u});
-                        curX += r2.paddedW;
-                        rowH = std::max(rowH, r2.paddedH);
-                    }
-                    break;
-                }
-                continue;
-            }
-            placed.push_back({r, curX + 1u, curY + 1u});
-            curX += r.paddedW;
-            rowH = std::max(rowH, r.paddedH);
         }
 
-        const unsigned usedH = std::clamp(((curY + rowH + 15u) & ~15u), 16u, kMaxAtlasDim);
+        const auto tryLayout = [&](unsigned retailMode, std::vector<Placement>& outPlaced,
+                                   unsigned& outAtlasW, unsigned& outUsedH) -> bool {
+            // retailMode: 2 = all retail 2x, 1 = retail <= 80px 2x / larger 1x, 0 = all 1x fallback.
+            std::vector<Ref> refs;
+            for (std::size_t ci = 0u; ci < rawClips_.size(); ++ci) {
+                const auto& rc = rawClips_[ci];
+                const auto& dirs = rc.directions;
+                for (std::size_t di = 0u; di < dirs.size(); ++di) {
+                    for (std::size_t fi = 0u; fi < dirs[di].size(); ++fi) {
+                        const auto& sp = dirs[di][fi];
+                        if (sp.width == 0u || sp.height == 0u) continue;
+                        std::uint8_t scale = 1u;
+                        if (rc.isRetail && retailMode > 0u) {
+                            if (retailMode == 2u || (sp.width <= 80u && sp.height <= 80u)) {
+                                scale = 2u;
+                            }
+                        }
+                        refs.push_back({ci, di, fi, sp.width * scale + 2u, sp.height * scale + 2u, scale});
+                    }
+                }
+            }
+            if (refs.empty()) return false;
+
+            std::sort(refs.begin(), refs.end(), [](const Ref& a, const Ref& b) {
+                return a.paddedH != b.paddedH ? a.paddedH > b.paddedH : a.paddedW > b.paddedW;
+            });
+
+            unsigned atlasW = retailLoaded_ ? kMaxAtlasDim : 512u;
+            for (int pass = 0; pass < 2; ++pass) {
+                outPlaced.clear();
+                outPlaced.reserve(refs.size());
+                unsigned curX = 0u, curY = 0u, rowH = 0u;
+                bool needWider = false;
+                bool overflowH = false;
+                for (const auto& r : refs) {
+                    if (r.paddedW > atlasW) {
+                        if (atlasW < kMaxAtlasDim) {
+                            needWider = true;
+                            break;
+                        }
+                        return false;
+                    }
+                    if (curX + r.paddedW > atlasW) {
+                        curY += rowH;
+                        curX = 0u;
+                        rowH = 0u;
+                    }
+                    if (curY + r.paddedH > kMaxAtlasDim) {
+                        if (atlasW < kMaxAtlasDim) {
+                            needWider = true;
+                            break;
+                        }
+                        overflowH = true;
+                        break;
+                    }
+                    outPlaced.push_back({r, curX + 1u, curY + 1u});
+                    curX += r.paddedW;
+                    rowH = std::max(rowH, r.paddedH);
+                }
+                if (needWider) {
+                    atlasW = kMaxAtlasDim;
+                    continue;
+                }
+                if (overflowH) return false;
+                outAtlasW = atlasW;
+                outUsedH = std::clamp(((curY + rowH + 15u) & ~15u), 16u, kMaxAtlasDim);
+                return true;
+            }
+            return false;
+        };
+
+        std::vector<Placement> placed;
+        unsigned atlasW = kMaxAtlasDim;
+        unsigned usedH = 16u;
+        if (!tryLayout(2u, placed, atlasW, usedH) &&
+            !tryLayout(1u, placed, atlasW, usedH) &&
+            !tryLayout(0u, placed, atlasW, usedH)) {
+            return false;
+        }
+
         atlas_ = assets::MapImage{
             atlasW,
             usedH,
@@ -1325,18 +1416,25 @@ private:
 
         for (const auto& pl : placed) {
             const auto& sp = rawClips_[pl.ref.clipIdx].directions[pl.ref.dirIdx][pl.ref.frameIdx];
-            for (unsigned ry = 0u; ry < sp.height; ++ry) {
-                const auto* srcRow = &sp.rgba[std::size_t(ry) * std::size_t(sp.width) * 4u];
+            const unsigned dstW = sp.width * pl.ref.texScale;
+            const unsigned dstH = sp.height * pl.ref.texScale;
+            const std::vector<std::uint8_t> upscaled = (pl.ref.texScale == 2u)
+                ? combat_vfx_detail::upscaleRgba2xEpx(sp.rgba.data(), int(sp.width), int(sp.height))
+                : std::vector<std::uint8_t>{};
+            const std::uint8_t* srcData = (pl.ref.texScale == 2u) ? upscaled.data() : sp.rgba.data();
+            for (unsigned ry = 0u; ry < dstH; ++ry) {
+                const auto* srcRow = srcData + std::size_t(ry) * std::size_t(dstW) * 4u;
                 auto* dstRow = &atlas_.rgba[(std::size_t(pl.y + ry) * std::size_t(atlasW) + std::size_t(pl.x)) * 4u];
-                std::memcpy(dstRow, srcRow, std::size_t(sp.width) * 4u);
+                std::memcpy(dstRow, srcRow, std::size_t(dstW) * 4u);
             }
             clips_[pl.ref.clipIdx].directions[pl.ref.dirIdx][pl.ref.frameIdx] = PackedFrame{
                 static_cast<std::uint16_t>(pl.x),
                 static_cast<std::uint16_t>(pl.y),
-                static_cast<std::uint16_t>(pl.x + sp.width),
-                static_cast<std::uint16_t>(pl.y + sp.height),
+                static_cast<std::uint16_t>(pl.x + dstW),
+                static_cast<std::uint16_t>(pl.y + dstH),
                 static_cast<std::int16_t>(sp.offsetX),
-                static_cast<std::int16_t>(sp.offsetY)
+                static_cast<std::int16_t>(sp.offsetY),
+                pl.ref.texScale
             };
         }
         return true;
@@ -1843,8 +1941,9 @@ private:
                            float simX, float simY, int mapScale, float extraScale,
                            float brightness, float alpha) const noexcept {
         const float s = static_cast<float>(std::max(1, mapScale));
-        const float fw = static_cast<float>(fr.u1 - fr.u0) * extraScale * s;
-        const float fh = static_cast<float>(fr.v1 - fr.v0) * extraScale * s;
+        const float texScale = static_cast<float>(std::max<std::uint8_t>(1u, fr.texScale));
+        const float fw = (static_cast<float>(fr.u1 - fr.u0) / texScale) * extraScale * s;
+        const float fh = (static_cast<float>(fr.v1 - fr.v0) / texScale) * extraScale * s;
         const float ox = static_cast<float>(fr.offsetX) * extraScale * s;
         const float oy = static_cast<float>(fr.offsetY) * extraScale * s;
         return Sprite{

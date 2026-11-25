@@ -40,6 +40,8 @@
 #include <string>
 #include <string_view>
 #include <tuple>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -93,8 +95,8 @@ assets::Infantry scaleInfantry(assets::Infantry unit, int scale);
 assets::VehicleUnit scaleVehicle(assets::VehicleUnit unit, int scale);
 
 struct GameSession {
-    static constexpr unsigned planeAtlasBase = 120u;
-    static constexpr unsigned planeAtlasCount = 8u;
+    static constexpr unsigned planeAtlasBase = 232u;
+    static constexpr unsigned planeAtlasCount = 24u;
     static_assert(planeAtlasBase + planeAtlasCount <= VulkanWindow::spriteAtlasSlots,
                   "plane atlas range must fit below the beam/hud slots");
 
@@ -169,6 +171,18 @@ struct GameSession {
         std::chrono::steady_clock::time_point until;
         std::optional<size_t> targetUid;
         bool isOrder{false};
+    };
+    struct OrderPulse {
+        enum class Kind : std::uint8_t { Move, Support, Attack };
+        int srcSimX{0}, srcSimY{0};
+        bool hasSource{false};
+        int dstSimX{0}, dstSimY{0};
+        Kind kind{Kind::Move};
+        std::chrono::steady_clock::time_point start{};
+    };
+    struct ReloadWindow {
+        std::uint32_t startTick{0};
+        std::uint32_t durationTicks{0};
     };
     struct ForceRosterGroup {
         std::string displayName;
@@ -245,6 +259,8 @@ struct GameSession {
     std::set<size_t> crouchedUnits;
     std::set<size_t> holdFireUnits;
     std::map<size_t, std::chrono::steady_clock::time_point> recoilUntil;
+    std::unordered_map<std::size_t, ReloadWindow> unitReloadWindow;
+    std::unordered_map<std::size_t, ReloadWindow> vehReloadWindow;
     std::chrono::steady_clock::time_point animStart = std::chrono::steady_clock::now();
     std::chrono::steady_clock::time_point lastAnimSync = animStart;
 
@@ -299,6 +315,9 @@ struct GameSession {
     assets::CraterCatalog craterCatalog;
     unsigned craterSeed = 1;
     std::map<std::string, assets::MapImage> planeSpriteCache;
+    std::unordered_map<std::string, assets::AircraftGpuAtlas> gpuAircraftAtlases;
+    std::unordered_set<std::string> failedAircraftIds;
+    std::unordered_map<unsigned, std::string> boundPlaneSlots;
     PlaneAtlasAllocator planeAtlas{planeAtlasBase, planeAtlasCount};
     bool planeOverflowLogged = false;
     unsigned mapScheme = 0;
@@ -344,6 +363,7 @@ struct GameSession {
     bool paused = false;
     std::size_t reportedLosses = 0;
     std::vector<TimedMarker> activeMarkers;
+    std::vector<OrderPulse> orderPulses;
     std::set<std::size_t> binocularUnits;
     std::set<std::size_t> vehicleHoldFireUnits;
     std::set<std::size_t> camouflagedUnits;
@@ -435,6 +455,7 @@ struct GameSession {
     void logHud(const std::string& msg);
     void showNotice(const std::string& msg, NoticeKind kind);
     static const char* airKindLabel(assets::AirMissionKind kind);
+    bool ensureAircraftAtlas(const std::string& planeId);
     void uploadPlaneSprite(LivePlane& lp);
     std::optional<std::pair<size_t, size_t>> spawnAndRegisterVehicle(const assets::Placement& p);
     void registerSimSpawnedSoldier(std::size_t simIdx, const std::string& unitId, int x, int y, int owner, int group);
@@ -483,6 +504,8 @@ struct GameSession {
     // Tactical unit/vehicle/air orders (session_orders.cpp).
     void armAirSupportKind(assets::AirMissionKind kind);
     void doTogglePause();
+    void stepGameSpeed(int delta);
+    void pushOrderPulse(int dstSimX, int dstSimY, OrderPulse::Kind kind);
     void doStop();
     void doToggleHoldFire();
     void doToggleCrouch();

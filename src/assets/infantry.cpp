@@ -345,6 +345,54 @@ bool revealed(const Infantry& unit, std::size_t index, const std::set<std::size_
     const int dx = std::abs(unit.x-cursor->first), dy = 2*std::abs(unit.y-cursor->second);
     return std::max(dx,dy) + std::min(dx,dy)/2 < 256;
 }
+
+MapImage upscaleOverlay2xEpx(const MapImage& src) {
+    const int w = int(src.width);
+    const int h = int(src.height);
+    const std::size_t dstW = std::size_t(src.width) * 2u;
+    const std::size_t dstH = std::size_t(src.height) * 2u;
+    MapImage dst{src.width * 2u, src.height * 2u, std::vector<std::uint8_t>(dstW * dstH * 4u, 0u)};
+    const auto readPx = [&](int x, int y) -> std::array<std::uint8_t, 4> {
+        if (x < 0 || y < 0 || x >= w || y >= h) return {0u, 0u, 0u, 0u};
+        const auto* p = src.rgba.data() + (std::size_t(y) * std::size_t(w) + std::size_t(x)) * 4u;
+        if (p[3] == 0u) return {0u, 0u, 0u, 0u};
+        return {p[0], p[1], p[2], p[3]};
+    };
+    const auto eq = [](const std::array<std::uint8_t, 4>& a, const std::array<std::uint8_t, 4>& b) -> bool {
+        if (a[3] == 0u && b[3] == 0u) return true;
+        return a == b;
+    };
+    const auto putPx = [&](std::size_t x, std::size_t y, const std::array<std::uint8_t, 4>& c) {
+        auto* p = &dst.rgba[(y * dstW + x) * 4u];
+        p[0] = c[0];
+        p[1] = c[1];
+        p[2] = c[2];
+        p[3] = c[3];
+    };
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            const auto P = readPx(x, y);
+            const auto A = readPx(x, y - 1);
+            const auto B = readPx(x + 1, y);
+            const auto C = readPx(x - 1, y);
+            const auto D = readPx(x, y + 1);
+            auto p00 = P, p10 = P, p01 = P, p11 = P;
+            if (!eq(C, B) && !eq(A, D)) {
+                if (eq(C, A)) p00 = A;
+                if (eq(A, B)) p10 = B;
+                if (eq(D, C)) p01 = C;
+                if (eq(B, D)) p11 = D;
+            }
+            const std::size_t ox = std::size_t(x) * 2u;
+            const std::size_t oy = std::size_t(y) * 2u;
+            putPx(ox, oy, p00);
+            putPx(ox + 1u, oy, p10);
+            putPx(ox, oy + 1u, p01);
+            putPx(ox + 1u, oy + 1u, p11);
+        }
+    }
+    return dst;
+}
 }
 
 std::vector<MapPatch> InfantryScene::setInspection(const std::set<std::size_t>& selected, Cursor cursor, int checkerPhase) {
@@ -463,6 +511,46 @@ MapPatch InfantryScene::stampAlphaOverlay(int centerX, int centerY, const MapIma
     const int dstRight = std::clamp((ox + int(sprite.width)) * resolution_, dstLeft, int(ground_.width));
     const int dstBottom = std::clamp((oy + int(sprite.height)) * resolution_, dstTop, int(ground_.height));
     if (dstLeft >= dstRight || dstTop >= dstBottom) return {0, 0, {}};
+    if (resolution_ == 2) {
+        const MapImage upscaled = upscaleOverlay2xEpx(sprite);
+        const int uox = ox * 2;
+        const int uoy = oy * 2;
+        const float cx = 0.5f * float(upscaled.width - 1u);
+        const float cy = 0.5f * float(upscaled.height - 1u);
+        const float invRx = 1.0f / std::max(1.0f, 0.5f * float(upscaled.width));
+        const float invRy = 1.0f / std::max(1.0f, 0.5f * float(upscaled.height));
+        for (int dy = dstTop; dy < dstBottom; ++dy) {
+            const int sy = dy - uoy;
+            if (sy < 0 || sy >= int(upscaled.height)) continue;
+            for (int dx = dstLeft; dx < dstRight; ++dx) {
+                const int sx = dx - uox;
+                if (sx < 0 || sx >= int(upscaled.width)) continue;
+                const auto* src = upscaled.rgba.data() + (std::size_t(sy) * upscaled.width + static_cast<std::size_t>(sx)) * 4u;
+                const unsigned a = src[3];
+                if (a == 0u) continue;
+                const float nd = std::hypot((float(sx) - cx) * invRx, (float(sy) - cy) * invRy);
+                const float t = std::clamp(1.0f - nd, 0.0f, 1.0f);
+                const float scorch = 1.0f - 0.08f * (t * t * (3.0f - 2.0f * t));
+                const unsigned sr = static_cast<unsigned>(std::lround(float(src[0]) * scorch));
+                const unsigned sg = static_cast<unsigned>(std::lround(float(src[1]) * scorch));
+                const unsigned sb = static_cast<unsigned>(std::lround(float(src[2]) * scorch));
+                auto* dst = ground_.rgba.data() + (std::size_t(dy) * ground_.width + static_cast<std::size_t>(dx)) * 4u;
+                if (a == 255u) {
+                    dst[0] = static_cast<std::uint8_t>(sr);
+                    dst[1] = static_cast<std::uint8_t>(sg);
+                    dst[2] = static_cast<std::uint8_t>(sb);
+                    dst[3] = 255u;
+                } else {
+                    const unsigned invA = 255u - a;
+                    dst[0] = static_cast<std::uint8_t>((sr * a + unsigned(dst[0]) * invA + 127u) / 255u);
+                    dst[1] = static_cast<std::uint8_t>((sg * a + unsigned(dst[1]) * invA + 127u) / 255u);
+                    dst[2] = static_cast<std::uint8_t>((sb * a + unsigned(dst[2]) * invA + 127u) / 255u);
+                    dst[3] = 255u;
+                }
+            }
+        }
+        return repaint(dstLeft, dstTop, dstRight, dstBottom);
+    }
     for (int dy = dstTop; dy < dstBottom; ++dy) {
         const int sy = (dy / resolution_) - oy;
         if (sy < 0 || sy >= int(sprite.height)) continue;

@@ -106,8 +106,23 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
                     return;
                 }
                 if (hr.action == ss2::HudAction::pause) {
+                    if (audio) audio->playGroup("switch", 0.42f, ss2::VoicePriority::High);
                     replayTransport.togglePause();
                     paused = replayTransport.paused || simulation->isPaused();
+                    return;
+                }
+                if (hr.action == ss2::HudAction::speedDown) {
+                    if (audio) audio->playGroup("switch", 0.42f, ss2::VoicePriority::High);
+                    replayTransport.stepSlower();
+                    showNotice(ss2::trf("Replay speed: {0}", {std::string(replayTransport.speedLabel())}),
+                               ss2::NoticeKind::accepted);
+                    return;
+                }
+                if (hr.action == ss2::HudAction::speedUp) {
+                    if (audio) audio->playGroup("switch", 0.42f, ss2::VoicePriority::High);
+                    replayTransport.stepFaster();
+                    showNotice(ss2::trf("Replay speed: {0}", {std::string(replayTransport.speedLabel())}),
+                               ss2::NoticeKind::accepted);
                     return;
                 }
                 if (hr.consumed) return;
@@ -213,8 +228,8 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
         } else {
             mr = menu.handle(event);
         }
-        if (audio && (!mr.activated.empty() || mr.closed)) {
-            audio->playGroup("accept", 0.42f);
+        if (audio && !mr.activated.empty() && mr.activated != "resume") {
+            audio->playGroup("choose", 0.42f, ss2::VoicePriority::High);
         }
         if (mr.closed || mr.activated == "resume") {
             closeMenu();
@@ -507,10 +522,13 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
         } else if (hr.action == ss2::HudAction::recon) {
             doToggleBinoculars();
         } else if (hr.action == ss2::HudAction::attackMove) {
+            if (audio) audio->playGroup("switch", 0.42f, ss2::VoicePriority::High);
             doArmAttackMove();
         } else if (hr.action == ss2::HudAction::patrol) {
+            if (audio) audio->playGroup("switch", 0.42f, ss2::VoicePriority::High);
             doArmPatrol();
         } else if (hr.action == ss2::HudAction::attackGround) {
+            if (audio) audio->playGroup("switch", 0.42f, ss2::VoicePriority::High);
             doArmAttackGround();
         } else if (hr.action == ss2::HudAction::unload) {
             doUnloadOrUnhitch();
@@ -531,6 +549,7 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
                 }
             }
         } else if (hr.action == ss2::HudAction::selectClass && !hr.classLabel.empty() && selection && scene) {
+            if (audio) audio->playGroup("switch", 0.42f, ss2::VoicePriority::High);
             std::set<size_t> newInf, newVeh;
             const auto& units = scene->units();
             for (const auto id : selection->selected()) {
@@ -553,19 +572,30 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
         } else if (hr.action == ss2::HudAction::airSupport && hr.airSlot >= 0 && hr.airSlot < 5 && simulation) {
             const auto kind = static_cast<ss2::assets::AirMissionKind>(hr.airSlot);
             if (armedAirSupport && *armedAirSupport == kind) {
+                if (audio) audio->playGroup("switch", 0.42f, ss2::VoicePriority::High);
                 armedAirSupport.reset();
                 resetCursor();
                 orderNotice.show(ss2::tr("Air support cancelled."), ss2::NoticeKind::unsupported);
             } else {
                 armAirSupportKind(kind);
             }
+        } else if (hr.action == ss2::HudAction::speedDown) {
+            if (audio) audio->playGroup("switch", 0.42f, ss2::VoicePriority::High);
+            stepGameSpeed(-1);
+        } else if (hr.action == ss2::HudAction::speedUp) {
+            if (audio) audio->playGroup("switch", 0.42f, ss2::VoicePriority::High);
+            stepGameSpeed(+1);
         } else if (hr.action == ss2::HudAction::pause) {
+            if (audio) audio->playGroup("switch", 0.42f, ss2::VoicePriority::High);
             doTogglePause();
         } else if (hr.action == ss2::HudAction::log) {
+            if (audio) audio->playGroup("switch", 0.42f, ss2::VoicePriority::High);
             openLogMenu();
         } else if (hr.action == ss2::HudAction::menu) {
+            if (audio) audio->playGroup("switch", 0.42f, ss2::VoicePriority::High);
             openPauseMenu();
         } else if (hr.action == ss2::HudAction::mission && selection) {
+            if (audio) audio->playGroup("switch", 0.42f, ss2::VoicePriority::High);
             SDL_Event mKey{};
             mKey.type = SDL_EVENT_KEY_DOWN;
             mKey.key.key = SDLK_M;
@@ -649,20 +679,7 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
     if (simulation && event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat &&
         (event.key.key == SDLK_LEFTBRACKET || event.key.key == SDLK_RIGHTBRACKET) &&
         !(event.key.mod & SDL_KMOD_CTRL)) {
-        static constexpr std::array<int, 4> kSpeeds{{50, 100, 200, 300}};
-        const int cur = simulation->speedPercent();
-        std::size_t idx = 1;
-        for (std::size_t i = 0; i < kSpeeds.size(); ++i) {
-            if (kSpeeds[i] == cur) { idx = i; break; }
-        }
-        if (event.key.key == SDLK_LEFTBRACKET && idx > 0) --idx;
-        else if (event.key.key == SDLK_RIGHTBRACKET && idx + 1 < kSpeeds.size()) ++idx;
-        const int next = kSpeeds[idx];
-        simulation->setSpeedPercent(next);
-        settings.speedPercent = next;
-        persistNow();
-        const std::string spStr = next == 50 ? "0.5x" : next == 200 ? "2x" : next == 300 ? "3x" : "1x";
-        orderNotice.show(ss2::trf("Game speed: {0}", {spStr}), ss2::NoticeKind::accepted);
+        stepGameSpeed(event.key.key == SDLK_LEFTBRACKET ? -1 : +1);
         return;
     }
     if (simulation && selection && event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat &&
@@ -985,6 +1002,7 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
                     true
                 });
                 syncMarkers();
+                pushOrderPulse(simX, simY, OrderPulse::Kind::Move);
                 playSelectionVoice("move");
                 showNotice(ss2::trf("Reverse move ordered ({0} vehicles).", {std::to_string(*res)}),
                            ss2::NoticeKind::accepted);
@@ -1005,6 +1023,7 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
                     true
                 });
                 syncMarkers();
+                pushOrderPulse(simX, simY, OrderPulse::Kind::Move);
                 playSelectionVoice("move");
                 showNotice(ss2::trf("Rotating front armor ({0} vehicles).", {std::to_string(*res)}),
                            ss2::NoticeKind::accepted);
@@ -1034,6 +1053,7 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
                     true
                 });
                 syncMarkers();
+                pushOrderPulse(simX, simY, OrderPulse::Kind::Attack);
                 playSelectionVoice("attack");
                 showNotice(ss2::trf("Attack ground ordered ({0} units).", {std::to_string(totalBombard)}),
                            ss2::NoticeKind::accepted);
@@ -1125,6 +1145,7 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
                         true
                     });
                     syncMarkers();
+                    pushOrderPulse(simX, simY, OrderPulse::Kind::Attack);
                     playSelectionVoice("attack");
                     showNotice(ss2::tr("Garrison engaging target!"), ss2::NoticeKind::accepted);
                     return;
@@ -1160,6 +1181,7 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
                         true
                     });
                     syncMarkers();
+                    pushOrderPulse(tv.x, tv.y, OrderPulse::Kind::Move);
                     playSelectionVoice("move");
                     showNotice(ss2::trf("Hitching {0}...", {hudDisplayName(vehicleScene->vehicles().at(gIdx).id)}),
                                ss2::NoticeKind::accepted);
@@ -1185,6 +1207,7 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
                     true
                 });
                 syncMarkers();
+                pushOrderPulse(tv.x, tv.y, OrderPulse::Kind::Support);
                 playSelectionVoice("move");
                 showNotice(ss2::trf("Supply truck servicing {0}...", {ss2::tr(hudDisplayName(tv.id))}),
                            ss2::NoticeKind::accepted);
@@ -1205,6 +1228,7 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
                     true
                 });
                 syncMarkers();
+                pushOrderPulse(tu.x, tu.y, OrderPulse::Kind::Support);
                 playSelectionVoice("move");
                 showNotice(ss2::tr("Moving to heal wounded soldier."), ss2::NoticeKind::accepted);
                 return;
@@ -1228,6 +1252,7 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
                     true
                 });
                 syncMarkers();
+                pushOrderPulse(tv.x, tv.y, OrderPulse::Kind::Move);
                 playSelectionVoice("move");
                 showNotice(ss2::trf("Capturing vehicle ({0} soldiers)...", {std::to_string(*res)}),
                            ss2::NoticeKind::accepted);
@@ -1252,6 +1277,7 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
                     true
                 });
                 syncMarkers();
+                pushOrderPulse(tv.x, tv.y, OrderPulse::Kind::Move);
                 playSelectionVoice("move");
                 showNotice(ss2::trf("Boarding transport ({0} soldiers).", {std::to_string(*res)}),
                            ss2::NoticeKind::accepted);
@@ -1276,6 +1302,7 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
                     true
                 });
                 syncMarkers();
+                pushOrderPulse(tv.x, tv.y, OrderPulse::Kind::Move);
                 playSelectionVoice("move");
                 showNotice(ss2::trf("Escorting {0} ({1} units).",
                                     {ss2::tr(hudDisplayName(tv.id)), std::to_string(*res)}),
@@ -1297,6 +1324,7 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
                     true
                 });
                 syncMarkers();
+                pushOrderPulse(tu.x, tu.y, OrderPulse::Kind::Move);
                 playSelectionVoice("move");
                 showNotice(ss2::trf("Escorting {0} ({1} units).",
                                     {ss2::tr(hudDisplayName(tu.id)), std::to_string(*res)}),
@@ -1333,6 +1361,7 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
                     true
                 });
                 syncMarkers();
+                pushOrderPulse(u.x, u.y, OrderPulse::Kind::Attack);
                 playSelectionVoice("attack");
                 std::cout << "Tutorial I accepted attack on unit " << *targetInf << " at map pixel " << simX << ',' << simY
                           << " for " << count << '/' << total << (vids.empty() ? " selected infantry\n" : " selected units\n");
@@ -1375,6 +1404,7 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
                     true
                 });
                 syncMarkers();
+                pushOrderPulse(tv.x, tv.y, OrderPulse::Kind::Attack);
                 playSelectionVoice("attack");
                 std::cout << "Accepted attack on vehicle " << *targetVeh << " at map pixel " << simX << ',' << simY
                           << " for " << count << '/' << total << " selected units\n";
@@ -1398,6 +1428,7 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
                             true
                         });
                         syncMarkers();
+                        pushOrderPulse(lb.x, lb.y, OrderPulse::Kind::Move);
                         playSelectionVoice("move");
                         showNotice(ss2::trf("Garrisoning building ({0} soldiers).", {std::to_string(*res)}),
                                    ss2::NoticeKind::accepted);
@@ -1415,6 +1446,7 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
                             true
                         });
                         syncMarkers();
+                        pushOrderPulse(lb.x, lb.y, OrderPulse::Kind::Support);
                         playSelectionVoice("move");
                         bool hasSupTruck = false, hasAmbulance = false;
                         if (vehicleScene && unitCatalog) {
@@ -1448,6 +1480,7 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
                             true
                         });
                         syncMarkers();
+                        pushOrderPulse(lb.x, lb.y, OrderPulse::Kind::Attack);
                         playSelectionVoice("attack");
                         showNotice(ss2::tr("Attacking occupied building!"), ss2::NoticeKind::accepted);
                         return;
@@ -1468,6 +1501,7 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
                             true
                         });
                         syncMarkers();
+                        pushOrderPulse(lb.x, lb.y, OrderPulse::Kind::Support);
                         playSelectionVoice("move");
                         showNotice(ss2::tr("Supply truck repairing bridge..."), ss2::NoticeKind::accepted);
                         return;
@@ -1485,6 +1519,7 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
                         true
                     });
                     syncMarkers();
+                    pushOrderPulse(simX, simY, OrderPulse::Kind::Move);
                     playSelectionVoice("move");
                     showNotice(ss2::trf("Sapper clearing mines ({0} soldiers)...", {std::to_string(*res)}),
                                ss2::NoticeKind::accepted);

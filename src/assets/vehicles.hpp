@@ -113,4 +113,15 @@ std::size_t drawMissionVehicles(MapImage& map, const std::filesystem::path& game
 std::optional<MapImage> loadAircraftSprite(const std::filesystem::path& gameDir,
                                            std::string_view unitId,
                                            unsigned dir32);
+
+struct AircraftGpuAtlas {
+    MapImage atlas;
+    int cellW{0}, cellH{0};
+    int scale{1};
+    std::array<int, 32> frameW{}, frameH{}, offsetX{}, offsetY{}, cellX{}, cellY{};
+};
+
+std::optional<AircraftGpuAtlas> buildAircraftGpuAtlas(const std::filesystem::path& gameDir,
+                                                      std::string_view planeId,
+                                                      bool scale2xEpx = true);
 }

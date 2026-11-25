@@ -169,6 +169,26 @@ void drawDiamondOverview(cairo_t* cr, cairo_surface_t* surf,
                          double x, double y, double w, double h,
                          bool drawFrameStroke);
 
+struct CachedUiClip {
+    std::uint32_t sampleRate{22050};
+    std::vector<std::uint8_t> pcm;
+};
+
+void loadUiSfxClips(const std::filesystem::path& gameDir,
+                    std::span<const std::string_view> names,
+                    std::unordered_map<std::string, CachedUiClip>& dst);
+
+void playUiSfxClip(SDL_Window* window,
+                   const std::unordered_map<std::string, CachedUiClip>& clips,
+                   std::string_view group,
+                   float masterVolume,
+                   float relGain,
+                   SDL_AudioDeviceID& device,
+                   bool& deviceResumed,
+                   SDL_AudioStream*& stream,
+                   bool& audioInitFailed,
+                   std::uint64_t& lastChooseMs);
+
 }  // namespace ss2::gold_ui
 
 namespace ss2 {
@@ -222,6 +242,9 @@ struct GoldFrontEnd::Assets {
     bool audioInitFailed{false};
     std::uint64_t nextMusicPumpTickMs{0};
     bool briefVoiceDucking{false};
+    std::unordered_map<std::string, gold_ui::CachedUiClip> uiSfxClips;
+    SDL_AudioStream* uiSfxStream{nullptr};
+    std::uint64_t lastChooseSfxMs{0};
     MenuCursorAnimator menuCursor;
     LanScanner lanScanner;
     bool lanScannerActive{false};
@@ -233,6 +256,10 @@ struct GoldFrontEnd::Assets {
     }
 
     ~Assets() {
+        if (uiSfxStream) {
+            SDL_DestroyAudioStream(uiSfxStream);
+            uiSfxStream = nullptr;
+        }
         if (musicAudioStream) {
             SDL_DestroyAudioStream(musicAudioStream);
             musicAudioStream = nullptr;

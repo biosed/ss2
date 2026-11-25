@@ -145,6 +145,14 @@ bool Briefing::acknowledge() {
     return true;
 }
 
+bool Briefing::previousPage() {
+    if (!active_ || page_ == 0) return false;
+    armed_ = false;
+    --page_;
+    layout();
+    return true;
+}
+
 bool Briefing::handle(const SDL_Event& event) {
     if (!active_) return false;
     const auto id = SDL_GetWindowID(parent_);
@@ -159,8 +167,20 @@ bool Briefing::handle(const SDL_Event& event) {
         case SDLK_RETURN: case SDLK_KP_ENTER: case SDLK_SPACE: return acknowledge();
         // Escape leaves the whole panel, whichever page is showing.
         case SDLK_ESCAPE: page_ = pages_ - 1; return acknowledge();
+        case SDLK_UP: case SDLK_LEFT: case SDLK_PAGEUP: case SDLK_BACKSPACE:
+            previousPage();
+            return false;
         default: return false;
         }
+    case SDL_EVENT_MOUSE_WHEEL:
+        if (!ours(event.wheel.windowID)) return false;
+        if (event.wheel.y > 0) previousPage();
+        else if (event.wheel.y < 0 && page_ + 1 < pages_) {
+            armed_ = false;
+            ++page_;
+            layout();
+        }
+        return false;
     case SDL_EVENT_MOUSE_BUTTON_DOWN:
         if (ours(event.button.windowID) && event.button.button == SDL_BUTTON_LEFT)
             armed_ = inside(event.button.x, event.button.y);

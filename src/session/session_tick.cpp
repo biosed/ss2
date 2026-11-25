@@ -298,6 +298,15 @@ void GameSession::stepSimulationEvents() {
             }
             if (pose.fired) {
                 recoilUntil[pose.index] = now + std::chrono::milliseconds(120);
+                {
+                    const auto& uid = scene->units().at(pose.index).id;
+                    const auto* uSpec = unitCatalog ? unitCatalog->find(uid) : nullptr;
+                    if (uSpec && uSpec->shot1.reloadTicks > 0 && simulation) {
+                        unitReloadWindow[pose.index] = {
+                            simulation->simTick(), static_cast<std::uint32_t>(uSpec->shot1.reloadTicks)
+                        };
+                    }
+                }
                 if (audio) {
                     const auto& uid = scene->units().at(pose.index).id;
                     const auto [rawGroup, cooldownMs, gain] = weaponSoundForUnit(uid);
@@ -343,14 +352,14 @@ void GameSession::stepSimulationEvents() {
                     const auto& uid = scene->units().at(pose.index).id;
                     const auto* uSpec = unitCatalog ? unitCatalog->find(uid) : nullptr;
                     const bool flamer = pose.firedFlamer || (uid.find("flam") != std::string::npos);
-                    if (activeVfx.size() < 64 && (!flamer || !combatVfx.hasRetailAssets())) {
+                    if (activeVfx.size() < 64) {
                         activeVfx.push_back({
                             flamer ? ActiveVfx::Kind::Flamer : ActiveVfx::Kind::Tracer,
                             sx, sy, tx, ty, now,
                             std::chrono::milliseconds(flamer ? 220 : 95)
                         });
                     }
-                    if ((pose.threwGrenade || pose.firedExplosive) && activeVfx.size() < 64 && !combatVfx.hasRetailAssets()) {
+                    if ((pose.threwGrenade || pose.firedExplosive) && activeVfx.size() < 64) {
                         activeVfx.push_back({
                             ActiveVfx::Kind::Explosion, tx, ty, tx, ty, now, std::chrono::milliseconds(360)
                         });
@@ -569,12 +578,17 @@ void GameSession::stepSimulationEvents() {
                     if (!vp.firedSecondary) {
                         vehRecoilUntil[vp.index] = now + std::chrono::milliseconds(160);
                         spritesDirty = true;
+                        if (smSpec && smSpec->shot1.reloadTicks > 0 && simulation) {
+                            vehReloadWindow[vp.index] = {
+                                simulation->simTick(), static_cast<std::uint32_t>(smSpec->shot1.reloadTicks)
+                            };
+                        }
                     }
                     if (audio) {
                         const std::string sndGroup = !vp.fireSound.empty()
                             ? vp.fireSound
                             : (vp.firedFlamer ? std::string("fmw")
-                                              : (vp.firedRocket ? std::string("katyusha")
+                                              : (vp.firedRocket ? std::string("rocket")
                                                                 : (vp.firedSecondary ? std::string("mg_tank_burst")
                                                                                      : std::string("howitzer"))));
                         const int cdMs = vp.firedFlamer ? 400 : (vp.firedRocket ? 140 : (vp.firedSecondary ? 260 : 320));
@@ -624,7 +638,7 @@ void GameSession::stepSimulationEvents() {
                         const float sy = static_cast<float>(vp.y * mapScale) - 12.0f * static_cast<float>(mapScale);
                         const float tx = static_cast<float>(vp.targetX * mapScale);
                         const float ty = static_cast<float>(vp.targetY * mapScale) - 10.0f * static_cast<float>(mapScale);
-                        if (activeVfx.size() < 64 && (!vp.firedFlamer || !combatVfx.hasRetailAssets())) {
+                        if (activeVfx.size() < 64) {
                             activeVfx.push_back({
                                 vp.firedFlamer ? ActiveVfx::Kind::Flamer
                                                : (vp.firedRocket ? ActiveVfx::Kind::Rocket
@@ -634,8 +648,7 @@ void GameSession::stepSimulationEvents() {
                                 std::chrono::milliseconds(vp.firedFlamer ? 260 : (vp.firedRocket ? 420 : (vp.firedSecondary ? 105 : 155)))
                             });
                         }
-                        if (vp.heavyImpact && !vp.firedRocket && !vp.firedFlamer &&
-                            activeVfx.size() < 64 && !combatVfx.hasRetailAssets()) {
+                        if (vp.heavyImpact && !vp.firedRocket && !vp.firedFlamer && activeVfx.size() < 64) {
                             activeVfx.push_back({
                                 ActiveVfx::Kind::Explosion, tx, ty, tx, ty, now, std::chrono::milliseconds(420)
                             });
@@ -730,7 +743,7 @@ void GameSession::stepSimulationEvents() {
                     if (combatEffects && vp.visible) {
                         const float wx = static_cast<float>(vp.x * mapScale);
                         const float wy = static_cast<float>(vp.y * mapScale);
-                        if (activeVfx.size() < 64 && !combatVfx.hasRetailAssets()) {
+                        if (activeVfx.size() < 64) {
                             activeVfx.push_back({ActiveVfx::Kind::VehicleExplosion, wx, wy, wx, wy, now,
                                                  std::chrono::milliseconds(650)});
                         }
@@ -767,7 +780,7 @@ void GameSession::stepSimulationEvents() {
                     stampBattleCrater(me.x, me.y, me.antiTank);
                 }
                 if (combatEffects) {
-                    if (activeVfx.size() < 64 && !combatVfx.hasRetailAssets()) {
+                    if (activeVfx.size() < 64) {
                         activeVfx.push_back({ActiveVfx::Kind::Explosion, mx, my, mx, my, now,
                                              std::chrono::milliseconds(me.antiTank ? 520 : 380)});
                     }
@@ -837,7 +850,7 @@ void GameSession::stepSimulationEvents() {
                     recordEventPos(static_cast<double>(bx), static_cast<double>(by));
                     pushMinimapPing(bu.x, bu.y, true);
                     if (combatEffects) {
-                        if (activeVfx.size() < 64 && !combatVfx.hasRetailAssets()) {
+                        if (activeVfx.size() < 64) {
                             activeVfx.push_back({ActiveVfx::Kind::VehicleExplosion, bx, by, bx, by, now,
                                                  std::chrono::milliseconds(650)});
                         }
@@ -853,7 +866,7 @@ void GameSession::stepSimulationEvents() {
                 } else if (newStage > prevStage && newStage < 3) {
                     if (bu.owner == localOwner() || isBuildingPointVisible(bu.x, bu.y)) {
                         if (combatEffects) {
-                            if (activeVfx.size() < 64 && !combatVfx.hasRetailAssets()) {
+                            if (activeVfx.size() < 64) {
                                 activeVfx.push_back({ActiveVfx::Kind::Explosion, bx, by, bx, by, now,
                                                      std::chrono::milliseconds(440)});
                             }
@@ -868,7 +881,7 @@ void GameSession::stepSimulationEvents() {
                     (void)playWorldSound("smallexplosion", 0.50f, bu.x, bu.y);
                 } else if (bu.damagedThisTick && combatEffects &&
                            (bu.owner == localOwner() || isBuildingPointVisible(bu.x, bu.y))) {
-                    if (activeVfx.size() < 64 && !combatVfx.hasRetailAssets()) {
+                    if (activeVfx.size() < 64) {
                         activeVfx.push_back({ActiveVfx::Kind::Explosion, bx, by, bx, by, now,
                                              std::chrono::milliseconds(320)});
                     }
@@ -893,7 +906,7 @@ void GameSession::stepSimulationEvents() {
                 recordEventPos(static_cast<double>(bx), static_cast<double>(by));
                 pushMinimapPing(bru.x, bru.y, true);
                 if (combatEffects) {
-                    if (activeVfx.size() < 64 && !combatVfx.hasRetailAssets()) {
+                    if (activeVfx.size() < 64) {
                         activeVfx.push_back({ActiveVfx::Kind::VehicleExplosion, bx, by, bx, by, now,
                                              std::chrono::milliseconds(700)});
                     }
@@ -909,7 +922,7 @@ void GameSession::stepSimulationEvents() {
                 showNotice(ss2::tr("Bridge destroyed!"), ss2::NoticeKind::blocked);
             } else if (bru.damagedThisTick && combatEffects &&
                        isBuildingPointVisible(bru.x, bru.y)) {
-                if (activeVfx.size() < 64 && !combatVfx.hasRetailAssets()) {
+                if (activeVfx.size() < 64) {
                     activeVfx.push_back({ActiveVfx::Kind::Explosion, bx, by, bx, by, now,
                                          std::chrono::milliseconds(340)});
                 }
@@ -936,15 +949,18 @@ void GameSession::stepSimulationEvents() {
                 const ss2::assets::AmbientWoofer* best = nullptr;
                 double bestDist = 1e12;
                 double bestRad = 1.0;
+                double camX = 0.0;
+                double halfViewW = 640.0;
                 const auto& woofers = simulation->data().woofers;
                 if (!woofers.empty()) {
                     int winW = 1280, winH = 720;
                     if (!SDL_GetWindowSize(window, &winW, &winH)) { winW = 1280; winH = 720; }
-                    const auto center = ss2::hidpi::logicalWindowCenter(winW, winH);
-                    const auto [camPxX, camPxY] = renderer.mapPosition(
-                        static_cast<float>(center.x), static_cast<float>(center.y));
-                    const double camX = camPxX / static_cast<double>(mapScale);
-                    const double camY = camPxY / static_cast<double>(mapScale);
+                    const auto [mx0, my0] = renderer.mapPosition(0.0f, 0.0f);
+                    const auto [mx1, my1] = renderer.mapPosition(static_cast<float>(winW), static_cast<float>(winH));
+                    const double s = static_cast<double>(std::max(1, mapScale));
+                    camX = 0.5 * (mx0 + mx1) / s;
+                    const double camY = 0.5 * (my0 + my1) / s;
+                    halfViewW = 0.5 * std::abs(mx1 - mx0) / s;
                     for (const auto& w : woofers) {
                         const double radPx = std::max(320.0, static_cast<double>(w.radiusTiles) * 32.0);
                         const double d = std::hypot(static_cast<double>(w.x) - camX,
@@ -961,7 +977,8 @@ void GameSession::stepSimulationEvents() {
                     const float gain = std::clamp(
                         best->volume * static_cast<float>(1.0 - 0.65 * (bestDist / bestRad)),
                         0.05f, 0.35f);
-                    (void)audio->playGroup(ambSnd, gain, ss2::VoicePriority::Ambient);
+                    const float pan = ss2::viewportStereoPan(static_cast<double>(best->x) - camX, halfViewW, 0.55f);
+                    (void)audio->playGroup(ambSnd, gain, ss2::VoicePriority::Ambient, pan);
                     const unsigned periodMs = (best->maxPeriodMs >= 500u)
                         ? std::clamp<unsigned>(
                               ((ambientPhase & 1u) != 0u && best->minPeriodMs >= 500u)
@@ -970,13 +987,21 @@ void GameSession::stepSimulationEvents() {
                         : 6000u;
                     ++ambientPhase;
                     nextAmbientAt = now + std::chrono::milliseconds(periodMs);
+                } else if (missionWeather == assets::WeatherKind::Rain) {
+                    (void)audio->playGroup("@rain_loop", 0.16f, ss2::VoicePriority::Ambient);
+                    if ((ambientPhase % 6u) == 0u) {
+                        const float thunderPan = ((ambientPhase & 2u) != 0u) ? 0.25f : -0.25f;
+                        (void)audio->playGroup("@groza", 0.22f, ss2::VoicePriority::Ambient, thunderPan);
+                    }
+                    ++ambientPhase;
+                    nextAmbientAt = now + std::chrono::milliseconds(1300);
                 } else {
                     const char* ambGroup = (!burningWrecks.empty() && (ambientPhase & 1u) != 0u)
                         ? "@fire_loop"
                         : (mapScheme == 2 ? "@cicades_loop" : "@birds");
                     (void)audio->playGroup(ambGroup, 0.14f, ss2::VoicePriority::Ambient);
                     ++ambientPhase;
-                    nextAmbientAt = now + std::chrono::seconds(8);
+                    nextAmbientAt = now + std::chrono::milliseconds(3800);
                 }
             }
         }
@@ -1089,7 +1114,7 @@ void GameSession::stepSimulationEvents() {
                     }
                     pushMinimapPing(ae.x, ae.y, true);
                     if (combatEffects) {
-                        if (activeVfx.size() < 64 && !combatVfx.hasRetailAssets()) {
+                        if (activeVfx.size() < 64) {
                             activeVfx.push_back({ActiveVfx::Kind::VehicleExplosion, ax, ay, ax, ay, now,
                                                  std::chrono::milliseconds(620)});
                         }
@@ -1121,10 +1146,10 @@ void GameSession::stepSimulationEvents() {
                 }
                 if (combatEffects) {
                     if (activeVfx.size() < 64) {
-                        if (rocketStrafe && !combatVfx.hasRetailAssets()) {
+                        if (rocketStrafe) {
                             activeVfx.push_back({ActiveVfx::Kind::Explosion, ax, ay, ax, ay, now,
                                                  std::chrono::milliseconds(360)});
-                        } else if (!rocketStrafe) {
+                        } else {
                             activeVfx.push_back({ActiveVfx::Kind::Tracer,
                                                  ax - 20.0f * static_cast<float>(mapScale),
                                                  ay - 28.0f * static_cast<float>(mapScale),
@@ -1207,7 +1232,7 @@ void GameSession::stepSimulationEvents() {
                         hud->recordAirCrashTrail(ae.x, ae.y);
                         spritesDirty = true;
                     }
-                    if (activeVfx.size() < 64 && !combatVfx.hasRetailAssets()) {
+                    if (activeVfx.size() < 64) {
                         activeVfx.push_back({ActiveVfx::Kind::VehicleExplosion, ax, ay, ax, ay, now,
                                              std::chrono::milliseconds(700)});
                     }

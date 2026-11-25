@@ -162,6 +162,7 @@ bool SoundPlayer::playGroup(const std::string& group, float gain, VoicePriority 
     const std::string normGroup = audio_detail::lowerAscii(group);
     const std::uint8_t* pcmData = nullptr;
     int pcmBytes = 0;
+    int fullClipBytes = 0;
     int baseFreq = 22050;
     int channels = 1;
 
@@ -177,23 +178,67 @@ bool SoundPlayer::playGroup(const std::string& group, float gain, VoicePriority 
         const auto& hc = it->second[variant];
         pcmData = hc.pcm.data();
         pcmBytes = static_cast<int>(hc.pcm.size());
+        fullClipBytes = pcmBytes;
         baseFreq = static_cast<int>(hc.sampleRate);
         channels = static_cast<int>(hc.channels);
     } else {
         const std::size_t count = bank_.variantCount(normGroup);
         if (count == 0u) return false;
-        const std::size_t variant = variantSelector_.next(normGroup, count);
+        std::size_t variant = variantSelector_.next(normGroup, count);
         const auto* clip = bank_.clip(normGroup, variant);
         if (!clip || clip->pcm.empty() || clip->bitsPerSample != 16) return false;
+        auto isSilentStub = [](const assets::SoundClip* c) {
+            if (!c || c->pcm.empty() || c->bitsPerSample != 16) return false;
+            const int freq = static_cast<int>(c->sampleRate ? c->sampleRate : 22050u);
+            if (static_cast<int>(c->pcm.size()) >= freq * 2 / 10) return false;
+            for (std::size_t i = 0; i + 1 < c->pcm.size(); i += 2) {
+                if (c->pcm[i] != 0u || c->pcm[i + 1] != 0u) return false;
+            }
+            return true;
+        };
+        if (count > 1u && isSilentStub(clip)) {
+            variant = variantSelector_.next(normGroup, count);
+            clip = bank_.clip(normGroup, variant);
+            if (!clip || clip->pcm.empty() || clip->bitsPerSample != 16) return false;
+        }
         pcmData = clip->pcm.data();
         pcmBytes = static_cast<int>(clip->pcm.size());
+        fullClipBytes = pcmBytes;
         baseFreq = static_cast<int>(clip->sampleRate ? clip->sampleRate : 22050u);
         channels = 1;
         if (!isVoiceover) {
             // Cap long retail ambient/death tails (e.g., 16s fall_small) so voices return cleanly to pool.
-            const int maxBytes = baseFreq * 2 * 3; // 3 seconds max for non-VO SFX
+            const int maxSeconds = (priority == VoicePriority::Ambient || clip->loop) ? 9 : 3;
+            const int maxBytes = baseFreq * 2 * maxSeconds;
             if (pcmBytes > maxBytes) pcmBytes = maxBytes;
         }
+    }
+
+    std::vector<std::uint8_t> fadeScratch;
+    if (pcmBytes < fullClipBytes && pcmBytes >= channels * 2) {
+        fadeScratch.assign(pcmData, pcmData + pcmBytes);
+        const int frameBytes = channels * 2;
+        const int totalFrames = pcmBytes / frameBytes;
+        const int fadeSamples = std::min(totalFrames, std::max(1, baseFreq * 35 / 1000));
+        for (int i = 0; i < fadeSamples; ++i) {
+            const float fadeGain = (fadeSamples > 1)
+                ? static_cast<float>(fadeSamples - 1 - i) / static_cast<float>(fadeSamples - 1)
+                : 0.0f;
+            const int frameIdx = totalFrames - fadeSamples + i;
+            for (int c = 0; c < channels; ++c) {
+                const std::size_t off =
+                    (static_cast<std::size_t>(frameIdx) * static_cast<std::size_t>(channels) +
+                     static_cast<std::size_t>(c)) * 2u;
+                const auto sample = static_cast<std::int16_t>(audio_detail::readU16(fadeScratch.data() + off));
+                const int faded = std::clamp(
+                    static_cast<int>(std::lround(static_cast<float>(sample) * fadeGain)),
+                    -32768, 32767);
+                const auto u = static_cast<std::uint16_t>(static_cast<std::int16_t>(faded));
+                fadeScratch[off] = static_cast<std::uint8_t>(u & 0xFFu);
+                fadeScratch[off + 1] = static_cast<std::uint8_t>((u >> 8u) & 0xFFu);
+            }
+        }
+        pcmData = fadeScratch.data();
     }
 
     // Pick a pool slot: an idle voice first, otherwise steal the oldest voice

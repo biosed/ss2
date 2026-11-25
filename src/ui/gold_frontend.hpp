@@ -154,6 +154,7 @@ private:
                            bool upHov, bool downHov, bool thumbActive) const;
     std::string hitTestStage(double sx, double sy) const;
     void activateId(const std::string& id);
+    void playUiSfx(std::string_view group, float relGain = 0.65f);
     void syncMenuMusic();
     void pumpMenuMusic();
     void stopMenuMusic();
@@ -395,6 +396,7 @@ private:
 
     void loadAssets(std::optional<int> fixedBgIndex);
     void startFanfare(bool victory, float volume);
+    void playUiSfx(std::string_view group, float relGain = 0.65f);
     std::vector<ActionButton> buildActionButtons() const;
     std::string hitTestStage(double sx, double sy) const;
     void cycleFocus(int step);

@@ -177,6 +177,7 @@ void GoldFrontEnd::cancelOptionsEdit() {
 
 void GoldFrontEnd::adjustOption(const std::string& id, int delta) {
     const int step = delta >= 0 ? 1 : -1;
+    bool openCue = (step >= 0);
     if (id == "opt_difficulty") {
         optionsDraft_.difficulty = 1 + ((optionsDraft_.difficulty - 1 + step + 3) % 3);
     } else if (id == "opt_language") {
@@ -215,6 +216,7 @@ void GoldFrontEnd::adjustOption(const std::string& id, int delta) {
         optionsDraft_.musicVolume = kMus[(best + std::size_t(step + int(kMus.size()))) % kMus.size()];
     } else if (id == "opt_music_mute") {
         optionsDraft_.musicMuted = !optionsDraft_.musicMuted;
+        openCue = !optionsDraft_.musicMuted;
     } else if (id == "opt_speed") {
         static constexpr std::array<int, 4> kSpeeds{{50, 100, 200, 300}};
         std::size_t idx = 1;
@@ -224,12 +226,16 @@ void GoldFrontEnd::adjustOption(const std::string& id, int delta) {
         optionsDraft_.speedPercent = kSpeeds[(idx + std::size_t(step + int(kSpeeds.size()))) % kSpeeds.size()];
     } else if (id == "opt_smooth") {
         optionsDraft_.smoothTerrain = !optionsDraft_.smoothTerrain;
+        openCue = optionsDraft_.smoothTerrain;
     } else if (id == "opt_enhanced_gfx") {
         optionsDraft_.enhancedGraphics = !optionsDraft_.enhancedGraphics;
+        openCue = optionsDraft_.enhancedGraphics;
     } else if (id == "opt_effects") {
         optionsDraft_.combatEffects = !optionsDraft_.combatEffects;
+        openCue = optionsDraft_.combatEffects;
     } else if (id == "opt_skip_intro") {
         optionsDraft_.skipIntro = !optionsDraft_.skipIntro;
+        openCue = optionsDraft_.skipIntro;
     } else if (id == "opt_mod") {
         std::vector<std::string> choices{""};
         choices.reserve(1 + availableMods_.size());
@@ -246,6 +252,7 @@ void GoldFrontEnd::adjustOption(const std::string& id, int delta) {
     }
     dirty_ = true;
     syncMenuMusic();
+    playUiSfx(openCue ? "checkbox_open" : "checkbox_close", 0.55f);
 }
 
 std::size_t GoldFrontEnd::ratingsRowCount() const {

@@ -81,7 +81,7 @@ struct HudState {
 enum class HudAction {
     none, stop, holdFire, crouch, mission, pause, log, moveCamera, menu, recon,
     orderMinimap, airSupport, attackMove, patrol, attackGround, unload, mine,
-    scatter, recallGroup, selectClass
+    scatter, recallGroup, selectClass, speedDown, speedUp
 };
 
 struct HudResult {
@@ -194,7 +194,9 @@ private:
     std::map<std::string, assets::MapImage> portraits_;
     unsigned width_ = 0, height_ = 0;
     int top_ = 0;                        // window-pixel row where the bar starts
+    double uiScale_ = 1.0;
     Rect minimap_, readout_;
+    Rect speedDownPip_{}, speedUpPip_{}, pausePip_{};
     struct Button { HudAction action; const char* label; const char* key; Rect rect; };
     std::vector<Button> buttons_;
     std::optional<HudAction> pressed_, hovered_;

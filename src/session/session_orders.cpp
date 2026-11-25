@@ -53,6 +53,39 @@ void GameSession::doTogglePause() {
     std::cout << (paused ? "Mission clock paused" : "Mission clock resumed") << '\n';
 }
 
+void GameSession::stepGameSpeed(int delta) {
+    if (!simulation || delta == 0) return;
+    static constexpr std::array<int, 4> kSpeeds{{50, 100, 200, 300}};
+    const int cur = simulation->speedPercent();
+    std::size_t idx = 1;
+    for (std::size_t i = 0; i < kSpeeds.size(); ++i) {
+        if (kSpeeds[i] == cur) { idx = i; break; }
+    }
+    if (delta < 0 && idx > 0) --idx;
+    else if (delta > 0 && idx + 1 < kSpeeds.size()) ++idx;
+    const int next = kSpeeds[idx];
+    simulation->setSpeedPercent(next);
+    settings.speedPercent = next;
+    persistNow();
+    const std::string spStr = next == 50 ? "0.5x" : next == 200 ? "2x" : next == 300 ? "3x" : "1x";
+    orderNotice.show(ss2::trf("Game speed: {0}", {spStr}), ss2::NoticeKind::accepted);
+}
+
+void GameSession::pushOrderPulse(int dstSimX, int dstSimY, OrderPulse::Kind kind) {
+    int srcX = 0, srcY = 0;
+    bool hasSrc = false;
+    if (selection) {
+        if (const auto ctr = selection->selectionCentroid()) {
+            const int s = std::max(1, mapScale);
+            srcX = ctr->first / s;
+            srcY = ctr->second / s;
+            hasSrc = true;
+        }
+    }
+    if (orderPulses.size() >= 12u) orderPulses.erase(orderPulses.begin());
+    orderPulses.push_back({srcX, srcY, hasSrc, dstSimX, dstSimY, kind, std::chrono::steady_clock::now()});
+}
+
 void GameSession::doStop() {
     if (!simulation || !selection) return;
     const auto& sel = selection->selected();
@@ -322,6 +355,7 @@ void GameSession::doUnloadOrUnhitch() {
             }
             const size_t evac = simulation->evacuateBuilding(*selectedBuilding);
             if (evac > 0) {
+                pushOrderPulse(lb.x, lb.y, OrderPulse::Kind::Support);
                 selectedBuilding.reset();
                 if (!evacUnitId.empty()) playUnitVoiceForId("unload", evacUnitId, false, false, evacVet);
                 else playSelectionVoice("unload");
@@ -336,6 +370,10 @@ void GameSession::doUnloadOrUnhitch() {
         const std::vector<size_t> vids(vsel.begin(), vsel.end());
         const size_t unhitched = simulation->unhitchVehicles(vids);
         if (unhitched > 0) {
+            if (vehicleScene && !vids.empty() && vids.front() < vehicleScene->vehicles().size()) {
+                const auto& v = vehicleScene->vehicles()[vids.front()];
+                pushOrderPulse(v.x, v.y, OrderPulse::Kind::Support);
+            }
             playSelectionVoice("unload");
             showNotice(ss2::trf("Unhitched {0} field guns.", {std::to_string(unhitched)}),
                        ss2::NoticeKind::accepted);
@@ -343,6 +381,10 @@ void GameSession::doUnloadOrUnhitch() {
         } else {
             const size_t unloaded = simulation->unloadVehicles(vids);
             if (unloaded > 0) {
+                if (vehicleScene && !vids.empty() && vids.front() < vehicleScene->vehicles().size()) {
+                    const auto& v = vehicleScene->vehicles()[vids.front()];
+                    pushOrderPulse(v.x, v.y, OrderPulse::Kind::Support);
+                }
                 playSelectionVoice("unload");
                 showNotice(ss2::trf("Unloaded {0} soldiers.", {std::to_string(unloaded)}), ss2::NoticeKind::accepted);
                 handledU = true;
@@ -365,6 +407,7 @@ void GameSession::doUnloadOrUnhitch() {
             }
             const size_t evac = simulation->evacuateBuilding(*hoveredBld);
             if (evac > 0) {
+                pushOrderPulse(hb.x, hb.y, OrderPulse::Kind::Support);
                 if (selectedBuilding && *selectedBuilding == *hoveredBld) selectedBuilding.reset();
                 if (!evacUnitId.empty()) playUnitVoiceForId("unload", evacUnitId, false, false, evacVet);
                 else playSelectionVoice("unload");
@@ -386,6 +429,10 @@ void GameSession::doLayMine() {
     const size_t laid = simulation->layMine(ids);
     if (laid > 0) {
         liveVisibleMines = simulation->visibleMines();
+        if (const auto ctr = selection->selectionCentroid()) {
+            const int s = std::max(1, mapScale);
+            pushOrderPulse(ctr->first / s, ctr->second / s, OrderPulse::Kind::Support);
+        }
         playSelectionVoice("laymine");
     } else {
         orderNotice.show(ss2::tr("Select a Sapper with AT mines to lay mines here."), ss2::NoticeKind::unsupported);
@@ -405,6 +452,10 @@ void GameSession::doScatter() {
         faceArmed = false;
         armedAirSupport.reset();
         resetCursor();
+        if (const auto ctr = selection->selectionCentroid()) {
+            const int s = std::max(1, mapScale);
+            pushOrderPulse(ctr->first / s, ctr->second / s, OrderPulse::Kind::Support);
+        }
         playSelectionVoice("move");
         showNotice(ss2::trf("Scattering {0} infantry.", {std::to_string(n)}), ss2::NoticeKind::accepted);
     } else {
@@ -485,6 +536,7 @@ bool GameSession::issueGroundOrder(int simX, int simY, bool isAttackMove, bool a
             true
         });
         syncMarkers();
+        pushOrderPulse(simX, simY, isAttackMove ? OrderPulse::Kind::Attack : OrderPulse::Kind::Move);
         playSelectionVoice(isAttackMove ? "attack_move" : "move");
         std::cout << "Tutorial I accepted move to map pixel " << simX << ',' << simY
                   << " for " << count << '/' << total << (vids.empty() ? " selected infantry\n" : " selected units\n");
@@ -521,6 +573,7 @@ void GameSession::dispatchAirSupportAt(assets::AirMissionKind kind, int simX, in
             true
         });
         syncMarkers();
+        pushOrderPulse(simX, simY, strike ? OrderPulse::Kind::Attack : OrderPulse::Kind::Move);
         pushMinimapPing(simX, simY, strike);
         if (audio) {
             if (strike) (void)audio->playGroup("e_airraid_siren", 0.55f, ss2::VoicePriority::High);
@@ -575,6 +628,7 @@ void GameSession::dispatchPatrolAt(int simX, int simY) {
             true
         });
         syncMarkers();
+        pushOrderPulse(simX, simY, OrderPulse::Kind::Support);
         pushMinimapPing(simX, simY, false);
         playSelectionVoice("move");
         showNotice(ss2::tr("Patrol route set."), ss2::NoticeKind::accepted);

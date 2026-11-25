@@ -114,6 +114,7 @@ void GameSession::openAirSupportMenu() {
     if (!simulation) return;
     ensureRetailMenuSkin(menu, gameDir);
     dismissPostMissionScreen();
+    if (audio) audio->playGroup("choose", 0.42f, ss2::VoicePriority::High);
     const auto slots = simulation->playerAirSupport();
     std::vector<ss2::MenuItem> items;
     items.push_back({"back", ss2::tr("Back to pause menu"), "", true});
@@ -144,11 +145,13 @@ void GameSession::openPauseMenu() {
     } else {
         menuPausedClock = false;
     }
+    if (audio) audio->playGroup("push", 0.42f, ss2::VoicePriority::High);
     menu.open(ss2::tr("Paused"), buildPauseItems());
 }
 
 void GameSession::closeMenu() {
     dismissPostMissionScreen();
+    if (menu.active() && audio) audio->playGroup("pull", 0.42f, ss2::VoicePriority::High);
     menu.close();
     if (simulation && menuPausedClock && paused) {
         paused = simulation->togglePause();
@@ -749,14 +752,18 @@ bool GameSession::loadSaveFromPath(const std::filesystem::path& path, const std:
     menuPausedClock = false;
     fallenSoldiers.clear();
     recoilUntil.clear();
+    unitReloadWindow.clear();
+    vehReloadWindow.clear();
     woundedBarLogged.clear();
     activeVfx.clear();
     burningWrecks.clear();
     livePlanes.clear();
     liveParachutes.clear();
     planeAtlas.reset();
+    boundPlaneSlots.clear();
     planeOverflowLogged = false;
     activeMarkers.clear();
+    orderPulses.clear();
     eventHistory.clear();
     eventHistoryCursor = 0;
     syncMarkers();
@@ -1025,40 +1032,47 @@ void GameSession::openSaveLoadMenu() {
         return;
     }
     dismissPostMissionScreen();
+    if (audio) audio->playGroup("choose", 0.42f, ss2::VoicePriority::High);
+    auto saveSlotStatus = [](const std::filesystem::path& path, bool& outExists) -> std::string {
+        std::error_code ec;
+        outExists = std::filesystem::is_regular_file(path, ec);
+        if (!outExists) return ss2::tr("Empty");
+        if (const auto decoded = ss2::readSaveFile(path)) {
+            const unsigned secs = decoded->meta.tick / 25u;
+            const unsigned mins = secs / 60u;
+            const unsigned remS = secs % 60u;
+            const std::string mmss = (mins < 10u ? "0" : "") + std::to_string(mins) + ":" +
+                                     (remS < 10u ? "0" : "") + std::to_string(remS);
+            return mmss + " | " + std::to_string(decoded->meta.playerSoldiers) + " inf / " +
+                   std::to_string(decoded->meta.playerVehicles) + " veh";
+        }
+        const auto fsz = std::filesystem::file_size(path, ec);
+        return std::to_string(std::max<std::uintmax_t>(1u, fsz / 1024u)) + " KB";
+    };
+    std::array<std::string, 4> slotTags{};
+    std::array<bool, 4> slotExists{};
+    for (int s = 0; s <= 3; ++s) {
+        slotTags[static_cast<std::size_t>(s)] = saveSlotStatus(quickSavePath(s), slotExists[static_cast<std::size_t>(s)]);
+    }
     std::vector<ss2::MenuItem> items;
     items.push_back({"back", ss2::tr("Back to pause menu"), "", true});
     items.push_back({"", ss2::tr("Save Game"), "", false});
     for (int s = 0; s <= 3; ++s) {
-        std::error_code ec;
-        const auto p = quickSavePath(s);
-        const bool exists = std::filesystem::is_regular_file(p, ec);
-        const auto fsz = exists ? std::filesystem::file_size(p, ec) : 0u;
-        const std::string tag = exists ? (std::to_string(std::max<std::uintmax_t>(1u, fsz / 1024u)) + " KB")
-                                       : ss2::tr("Empty");
         const std::string lbl = (s == 0) ? ss2::tr("Quick Save (F9)")
                                          : ss2::trf("Save Slot {0}", {std::to_string(s)});
-        items.push_back({"save:" + std::to_string(s), lbl, tag, true});
+        items.push_back({"save:" + std::to_string(s), lbl, slotTags[static_cast<std::size_t>(s)], true});
     }
     items.push_back({"", ss2::tr("Load Game"), "", false});
     {
-        std::error_code ec;
-        const auto p = quickSavePath(-1);
-        const bool exists = std::filesystem::is_regular_file(p, ec);
-        const auto fsz = exists ? std::filesystem::file_size(p, ec) : 0u;
-        const std::string tag = exists ? (std::to_string(std::max<std::uintmax_t>(1u, fsz / 1024u)) + " KB")
-                                       : ss2::tr("Empty");
-        items.push_back({"load:-1", ss2::tr("Load Auto-Save"), tag, exists});
+        bool autoExists = false;
+        const std::string autoTag = saveSlotStatus(quickSavePath(-1), autoExists);
+        items.push_back({"load:-1", ss2::tr("Load Auto-Save"), autoTag, autoExists});
     }
     for (int s = 0; s <= 3; ++s) {
-        std::error_code ec;
-        const auto p = quickSavePath(s);
-        const bool exists = std::filesystem::is_regular_file(p, ec);
-        const auto fsz = exists ? std::filesystem::file_size(p, ec) : 0u;
-        const std::string tag = exists ? (std::to_string(std::max<std::uintmax_t>(1u, fsz / 1024u)) + " KB")
-                                       : ss2::tr("Empty");
         const std::string lbl = (s == 0) ? ss2::tr("Quick Load (F10)")
                                          : ss2::trf("Load Slot {0}", {std::to_string(s)});
-        items.push_back({"load:" + std::to_string(s), lbl, tag, exists});
+        items.push_back({"load:" + std::to_string(s), lbl,
+                         slotTags[static_cast<std::size_t>(s)], slotExists[static_cast<std::size_t>(s)]});
     }
     ensureRetailMenuSkin(menu, gameDir);
     menu.open(ss2::tr("Save / Load"), std::move(items));

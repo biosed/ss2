@@ -104,7 +104,7 @@ public:
     // Sprite atlases: RGBA8 with straight (non-premultiplied) alpha, sampled with
     // linear filtering. Replacing a slot is allowed at any time. Slots [120,128) are
     // reserved for plane sprites (7 live + 1 overflow); infantry/vehicles/world stay below 120.
-    static constexpr unsigned spriteAtlasSlots = 128;
+    static constexpr unsigned spriteAtlasSlots = 256;
     void setSpriteAtlas(unsigned slot, const assets::MapImage& atlas);
     // Replaces all sprites. They are alpha blended in list order, clipped to the map's
     // on-screen rectangle, and follow the camera. Replacing the map removes them.

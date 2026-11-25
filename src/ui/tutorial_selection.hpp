@@ -47,6 +47,20 @@ public:
     void mark(int x, int y);
     bool cancelDrag();
     void recallControlGroup(unsigned digit, bool additive = false);
+    std::optional<unsigned> controlGroupOfInfantry(std::size_t index) const noexcept {
+        for (unsigned d = 1u; d <= 10u; ++d) {
+            const unsigned digit = d % 10u;
+            if (groups_[digit].contains(index)) return digit;
+        }
+        return std::nullopt;
+    }
+    std::optional<unsigned> controlGroupOfVehicle(std::size_t index) const noexcept {
+        for (unsigned d = 1u; d <= 10u; ++d) {
+            const unsigned digit = d % 10u;
+            if (vehicleGroups_[digit].contains(index)) return digit;
+        }
+        return std::nullopt;
+    }
     void setSelection(std::set<size_t> infantry, std::set<size_t> vehicles);
     std::optional<std::pair<int, int>> selectionCentroid() const;
     size_t selectAllPlayerUnits(bool screenOnly);

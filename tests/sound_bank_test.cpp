@@ -61,6 +61,15 @@ void testSyntheticBank() {
     assert(c->sampleRate == 22050 && c->bitsPerSample == 16 && !c->loop);
     assert(c->pcm.size() == 4 && c->pcm[0] == 0x01 && c->pcm[3] == 0x04);
     assert(bank.clip("nonexistent") == nullptr);
+
+    // `$`-prefixed event/narrator cues and `@`-prefixed ambient loops resolve without prefix.
+    const auto prefixedBank = buildSyntheticBank({"$e_test", "@river_test"});
+    assert(prefixedBank.groupCount() == 2);
+    assert(prefixedBank.variantCount("e_test") == 1);
+    assert(prefixedBank.clip("e_test", 0) != nullptr);
+    assert(prefixedBank.variantCount("$e_test") == 1);
+    assert(prefixedBank.variantCount("river_test") == 1);
+    assert(prefixedBank.clip("river_test", 0) != nullptr);
 }
 
 void testSyntheticFallbackWithoutDescriptors() {
@@ -240,6 +249,8 @@ void testRetailGoldBank(const std::filesystem::path& gameDir) {
 
     const auto* rifle = bank.clip("rifle", 0);
     assert(rifle && rifle->sampleRate == 22050 && rifle->bitsPerSample == 16 && !rifle->pcm.empty());
+    assert(bank.variantCount("e_telegram") > 0);
+    assert(bank.clip("e_victory", 0) != nullptr);
 
     // Exact retail spot-checks across nations, veterans, French/Italian, officers, sappers, medics, planes.
     assert(bank.resolveUnitVoice("german", "soldier", "select", false) == "d_select");

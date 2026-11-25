@@ -256,6 +256,11 @@ struct GoldPostMissionScreen::Assets {
 
     SDL_AudioDeviceID fanfareDev{0};
     SDL_AudioStream* fanfareStream{nullptr};
+    std::unordered_map<std::string, CachedUiClip> uiSfxClips;
+    SDL_AudioStream* uiSfxStream{nullptr};
+    bool fanfareDeviceResumed{false};
+    bool audioInitFailed{false};
+    std::uint64_t lastChooseSfxMs{0};
 
     bool ensureFanfareLoaded(bool victory) {
         if (menuArchives.empty()) return false;
@@ -288,6 +293,10 @@ struct GoldPostMissionScreen::Assets {
     }
 
     ~Assets() {
+        if (uiSfxStream) {
+            SDL_DestroyAudioStream(uiSfxStream);
+            uiSfxStream = nullptr;
+        }
         if (fanfareStream) {
             SDL_DestroyAudioStream(fanfareStream);
             fanfareStream = nullptr;
@@ -444,9 +453,19 @@ void GoldPostMissionScreen::loadAssets(std::optional<int> fixedBgIndex) {
     assets_->loadedRetail =
         (assets_->mainBg != nullptr || assets_->winRusBg.surface != nullptr) &&
         statPicsOk && mstatBtOk && starsOk;
+    static constexpr std::array<std::string_view, 3> kPostUiSfxNames{{"choose", "push", "pull"}};
+    gold_ui::loadUiSfxClips(gameDir_, kPostUiSfxNames, assets_->uiSfxClips);
     if (window_ != nullptr) {
         assets_->menuCursor.load(gameDir_);
     }
+}
+
+void GoldPostMissionScreen::playUiSfx(std::string_view group, float relGain) {
+    if (!assets_ || window_ == nullptr || assets_->audioInitFailed) return;
+    gold_ui::playUiSfxClip(window_, assets_->uiSfxClips, group, stats_.sfxVolume, relGain,
+                           assets_->fanfareDev, assets_->fanfareDeviceResumed,
+                           assets_->uiSfxStream, assets_->audioInitFailed,
+                           assets_->lastChooseSfxMs);
 }
 
 void GoldPostMissionScreen::stopFanfare() {
@@ -477,6 +496,7 @@ void GoldPostMissionScreen::startFanfare(bool victory, float volume) {
     if (!assets_->fanfareDev) {
         assets_->fanfareDev = SDL_OpenAudioDevice(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &dstSpec);
         if (!assets_->fanfareDev) return;
+        assets_->fanfareDeviceResumed = false;
     }
     if (!assets_->fanfareStream) {
         assets_->fanfareStream = SDL_CreateAudioStream(&dstSpec, &dstSpec);
@@ -497,6 +517,7 @@ void GoldPostMissionScreen::startFanfare(bool victory, float volume) {
     SDL_SetAudioStreamGain(assets_->fanfareStream, gain * 0.72f);
     SDL_ClearAudioStream(assets_->fanfareStream);
     SDL_ResumeAudioDevice(assets_->fanfareDev);
+    assets_->fanfareDeviceResumed = true;
     (void)SDL_PutAudioStreamData(assets_->fanfareStream, pcm.data(), static_cast<int>(pcm.size()));
 }
 
@@ -641,6 +662,7 @@ void GoldPostMissionScreen::cycleFocus(int step) {
     const int next = ((cur + step) % n + n) % n;
     if (focusedId_ != ids[std::size_t(next)]) {
         focusedId_ = ids[std::size_t(next)];
+        playUiSfx("choose", 0.32f);
         dirty_ = true;
     }
 }
@@ -650,6 +672,7 @@ std::string GoldPostMissionScreen::handleKey(SDL_Keycode key, bool* outClosed) {
     if (!active_) return {};
 
     if (key == SDLK_ESCAPE) {
+        playUiSfx("pull", 0.60f);
         close();
         if (outClosed) *outClosed = true;
         return {};
@@ -666,6 +689,7 @@ std::string GoldPostMissionScreen::handleKey(SDL_Keycode key, bool* outClosed) {
         const auto ids = actionIds();
         if (!ids.empty() && focusedId_ != ids.front()) {
             focusedId_ = ids.front();
+            playUiSfx("choose", 0.32f);
             dirty_ = true;
         }
         return {};
@@ -674,6 +698,7 @@ std::string GoldPostMissionScreen::handleKey(SDL_Keycode key, bool* outClosed) {
         const auto ids = actionIds();
         if (!ids.empty() && focusedId_ != ids.back()) {
             focusedId_ = ids.back();
+            playUiSfx("choose", 0.32f);
             dirty_ = true;
         }
         return {};
@@ -683,6 +708,7 @@ std::string GoldPostMissionScreen::handleKey(SDL_Keycode key, bool* outClosed) {
             const auto ids = actionIds();
             if (!ids.empty()) focusedId_ = ids.front();
         }
+        if (!focusedId_.empty()) playUiSfx("push", 0.60f);
         return focusedId_;
     }
 
@@ -691,6 +717,7 @@ std::string GoldPostMissionScreen::handleKey(SDL_Keycode key, bool* outClosed) {
         const auto lower = static_cast<SDL_Keycode>(std::tolower(static_cast<unsigned char>(b.shortcut)));
         if (key == lower) {
             focusedId_ = b.id;
+            playUiSfx("push", 0.60f);
             dirty_ = true;
             return b.id;
         }
@@ -703,6 +730,7 @@ void GoldPostMissionScreen::handleMouseMove(double stageX, double stageY) {
     const std::string hit = hitTestStage(stageX, stageY);
     if (hit != hoveredId_) {
         hoveredId_ = hit;
+        if (!hoveredId_.empty()) playUiSfx("choose", 0.32f);
         dirty_ = true;
     }
     if (!hit.empty() && hit != focusedId_) {
@@ -717,6 +745,7 @@ std::string GoldPostMissionScreen::handleMouseDown(double stageX, double stageY)
     if (hit.empty()) return {};
     hoveredId_ = hit;
     focusedId_ = hit;
+    playUiSfx("push", 0.60f);
     dirty_ = true;
     return hit;
 }

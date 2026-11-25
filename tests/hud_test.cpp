@@ -865,6 +865,31 @@ int main(int argc, char** argv) {
                 }
             }
         }
+        // Additive 4K HiDPI uiScale_ check: >1080p scales past 260px while <=1080p stays unchanged.
+        {
+            std::unique_ptr<SDL_Window, decltype(&SDL_DestroyWindow)> win720(
+                SDL_CreateWindow("HUD 720p", 1280, 720, SDL_WINDOW_VULKAN | SDL_WINDOW_HIDDEN), SDL_DestroyWindow);
+            if (win720) {
+                SDL_SyncWindow(win720.get());
+                int pw720 = 0, ph720 = 0;
+                SDL_GetWindowSizeInPixels(win720.get(), &pw720, &ph720);
+                if (ph720 == 720) {
+                    ss2::Hud hud720(win720.get());
+                    check(hud720.height() == 158u, "1280x720 HUD height stays unchanged at 158px");
+                }
+            }
+            std::unique_ptr<SDL_Window, decltype(&SDL_DestroyWindow)> win4k(
+                SDL_CreateWindow("HUD 4K", 3840, 2160, SDL_WINDOW_VULKAN | SDL_WINDOW_HIDDEN | SDL_WINDOW_RESIZABLE), SDL_DestroyWindow);
+            if (win4k) {
+                SDL_SyncWindow(win4k.get());
+                int pw4k = 0, ph4k = 0;
+                SDL_GetWindowSizeInPixels(win4k.get(), &pw4k, &ph4k);
+                if (ph4k >= 2160) {
+                    ss2::Hud hud4k(win4k.get());
+                    check(hud4k.height() > 260u, "3840x2160 HUD scales above 260px cap");
+                }
+            }
+        }
     } catch (const std::exception& e) {
         std::cerr << e.what() << '\n';
         status = 1;

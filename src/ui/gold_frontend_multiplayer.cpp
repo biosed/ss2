@@ -298,7 +298,7 @@ void GoldFrontEnd::renderReplaysOrLoadGame(const RenderEnv& env) {
     auto renderDetailBrowser = [&](const std::string& heading, const std::string& leftHeading,
                                    const char* rowPrefix, std::size_t rowCount, std::size_t selectedRow,
                                    const std::string& emptyMsg, const std::string& emptyHint,
-                                   auto rowNameFn, auto detailsFn, auto captionFn,
+                                   auto rowNameFn, auto missionPathFn, auto detailsFn, auto captionFn,
                                    const auto& buttons, auto buttonEnabledFn) {
         drawHeading(cr, pangoCtx, heading, {200, 38, 400, 28}, 17.0);
         drawHeading(cr, pangoCtx, leftHeading, {130, 110, 150, 20}, 15.0);
@@ -357,9 +357,25 @@ void GoldFrontEnd::renderReplaysOrLoadGame(const RenderEnv& env) {
             cairo_line_to(cr, 754, 180);
             cairo_stroke(cr);
 
+            const std::string mPath = missionPathFn(selectedRow);
+            std::string resolved;
+            if (!mPath.empty()) {
+                resolved = (std::filesystem::path(mPath).is_relative() && !gameDir_.empty())
+                    ? (gameDir_ / mPath).string()
+                    : mPath;
+                ensureOverviewLoaded(resolved);
+            }
+            cairo_surface_t* ov = nullptr;
+            if (!resolved.empty()) {
+                if (const auto it = assets_->overviews.find(resolved); it != assets_->overviews.end()) {
+                    ov = it->second.get();
+                }
+            }
+            drawDiamondOverview(cr, assets_->overviewOrPlate(ov), 501.0, 186.0, 204.0, 102.0, true);
+
             const auto details = detailsFn(selectedRow);
             for (std::size_t i = 0; i < details.size(); ++i) {
-                const double dy = 196.0 + double(i) * 38.0;
+                const double dy = 294.0 + double(i) * 24.0;
                 auto kl = makeTextLayout(pangoCtx, details[i].k + ":", 13.0, false);
                 cairo_move_to(cr, 454, dy);
                 cairo_set_source_rgb(cr, 200.0 / 255.0, 194.0 / 255.0, 166.0 / 255.0);
@@ -375,7 +391,7 @@ void GoldFrontEnd::renderReplaysOrLoadGame(const RenderEnv& env) {
             if (!caption.empty()) {
                 auto pathLbl = makeTextLayout(pangoCtx, caption, 11.0, false, 302.0);
                 pango_layout_set_ellipsize(pathLbl.get(), PANGO_ELLIPSIZE_START);
-                cairo_move_to(cr, 452, 446.0);
+                cairo_move_to(cr, 452, 448.0);
                 cairo_set_source_rgba(cr, 188.0 / 255.0, 192.0 / 255.0, 174.0 / 255.0, 0.85);
                 pango_cairo_show_layout(cr, pathLbl.get());
             }
@@ -409,6 +425,7 @@ void GoldFrontEnd::renderReplaysOrLoadGame(const RenderEnv& env) {
             tr("Replay Game"), tr("Replays:"), "replay:", rowCount, fe_.selectedReplay(),
             tr("No replays recorded yet."), "--record FILE\n~/.local/share/ss2/replays/",
             [&](std::size_t idx) { return replays_[idx].name; },
+            [&](std::size_t idx) { return replays_[idx].mission; },
             [&](std::size_t idx) -> std::array<DetailRow, 6> {
                 const auto& r = replays_[idx];
                 const std::string missionStem = r.mission.empty()
@@ -434,6 +451,7 @@ void GoldFrontEnd::renderReplaysOrLoadGame(const RenderEnv& env) {
             tr("Load Game"), tr("Saved Games:"), "save:", rowCount, fe_.selectedSave(),
             tr("No saved games yet."), "F9 / Save / Load\n~/.local/share/ss2/saves/",
             [&](std::size_t idx) { return saves_[idx].name; },
+            [&](std::size_t idx) { return saves_[idx].mission; },
             [&](std::size_t idx) -> std::array<DetailRow, 6> {
                 const auto& s = saves_[idx];
                 const std::string missionName = !s.missionTitle.empty()
