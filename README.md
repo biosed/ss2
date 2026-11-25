@@ -70,7 +70,7 @@ Automated Windows builds (`ss2-windows-x86_64`) are built on every push by [`.gi
 
 ```sh
 pacman -S --needed \
-  mingw-w64-ucrt-x86_64-{gcc,cmake,ninja,ccache,pkgconf,python,SDL3,pango,zlib,libjpeg-turbo,libpng,ffmpeg,libvorbis,vulkan-headers,vulkan-loader}
+  mingw-w64-ucrt-x86_64-{gcc,cmake,ninja,ccache,pkgconf,python,sdl3,pango,zlib,libjpeg-turbo,libpng,ffmpeg,libvorbis,vulkan-headers,vulkan-loader}
 
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j"$(nproc)"

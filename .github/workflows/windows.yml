@@ -28,7 +28,7 @@ jobs:
             ccache:p
             pkgconf:p
             python:p
-            SDL3:p
+            sdl3:p
             pango:p
             zlib:p
             libjpeg-turbo:p
@@ -42,11 +42,13 @@ jobs:
       - name: Restore ccache cache
         uses: actions/cache/restore@v4
         with:
-          path: D:\a\_temp\msys64\home\runneradmin\.ccache
+          path: D:\a\_temp\ss2-ccache
           key: ccache-win64-ucrt64-${{ env.DATE_EPOCH }}
           restore-keys: |
             ccache-win64-ucrt64-
       - name: Configure
+        env:
+          CCACHE_DIR: /d/a/_temp/ss2-ccache
         run: |
           cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
@@ -54,12 +56,14 @@ jobs:
             -DCMAKE_CXX_COMPILER=g++ \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
       - name: Build
+        env:
+          CCACHE_DIR: /d/a/_temp/ss2-ccache
         run: cmake --build build -j"$(nproc)"
       - name: Save ccache cache
-        if: always()
+        if: always() && env.DATE_EPOCH != ''
         uses: actions/cache/save@v4
         with:
-          path: D:\a\_temp\msys64\home\runneradmin\.ccache
+          path: D:\a\_temp\ss2-ccache
           key: ccache-win64-ucrt64-${{ env.DATE_EPOCH }}
       - name: Test
         run: ctest --test-dir build --output-on-failure --no-tests=error 2>&1 | tee ctest.log

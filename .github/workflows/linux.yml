@@ -69,6 +69,7 @@ jobs:
         shell: bash
         env:
           SDL_VIDEO_DRIVER: offscreen
+          SDL_AUDIODRIVER: dummy
           VK_DRIVER_FILES: /usr/share/vulkan/icd.d/lvp_icd.${{ matrix.icd_arch }}.json
           UBSAN_OPTIONS: halt_on_error=1
       - name: Install desktop & packaging smoke check
