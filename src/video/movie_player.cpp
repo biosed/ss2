@@ -1,6 +1,7 @@
 #include "video/movie_player.hpp"
 #include "assets/sprite.hpp"
 #include <SDL3/SDL.h>
+#ifdef SS2_HAVE_FFMPEG
 extern "C" {
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
@@ -9,6 +10,7 @@ extern "C" {
 #include <libavutil/channel_layout.h>
 #include <libavutil/imgutils.h>
 }
+#endif
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -19,6 +21,7 @@ extern "C" {
 #include <vector>
 
 namespace ss2 {
+#ifdef SS2_HAVE_FFMPEG
 namespace {
 
 struct FormatDeleter { void operator()(AVFormatContext* p) const { if (p) avformat_close_input(&p); } };
@@ -67,6 +70,7 @@ double frameSeconds(const AVFrame* f, const AVRational tb) {
 }
 
 } // namespace
+#endif
 
 MovieRect letterboxRect(int vw, int vh, int ww, int wh) {
     if (vw <= 0 || vh <= 0 || ww <= 0 || wh <= 0) return {0, 0, 0, 0};
@@ -78,6 +82,10 @@ MovieRect letterboxRect(int vw, int vh, int ww, int wh) {
 
 bool probeMovie(const std::filesystem::path& file, MovieInfo& info) {
     info = {};
+#ifndef SS2_HAVE_FFMPEG
+    (void)file;
+    return false;
+#else
     std::error_code ec;
     if (!std::filesystem::exists(file, ec)) return false;
     Streams s;
@@ -116,8 +124,10 @@ bool probeMovie(const std::filesystem::path& file, MovieInfo& info) {
         if (decoded == 0) return false;
     }
     return info.hasVideo || info.hasAudio;
+#endif
 }
 
+#ifdef SS2_HAVE_FFMPEG
 namespace {
 struct WindowDeleter { void operator()(SDL_Window* p) const { if (p) SDL_DestroyWindow(p); } };
 struct RendererDeleter { void operator()(SDL_Renderer* p) const { if (p) SDL_DestroyRenderer(p); } };
@@ -128,8 +138,15 @@ using RendererPtr = std::unique_ptr<SDL_Renderer, RendererDeleter>;
 using TexturePtr = std::unique_ptr<SDL_Texture, TextureDeleter>;
 using AudioStreamPtr = std::unique_ptr<SDL_AudioStream, StreamDeleter>;
 } // namespace
+#endif
 
 bool playMovie(const std::filesystem::path& file, bool fullscreen, bool allowSkip) {
+#ifndef SS2_HAVE_FFMPEG
+    (void)file;
+    (void)fullscreen;
+    (void)allowSkip;
+    return false;
+#else
     MovieInfo info;
     if (!probeMovie(file, info) || !info.hasVideo) return false;
     const char* driver = SDL_GetCurrentVideoDriver();
@@ -317,14 +334,24 @@ bool playMovie(const std::filesystem::path& file, bool fullscreen, bool allowSki
     audioStream.reset();
     if (device) SDL_CloseAudioDevice(device);
     return !skipped;
+#endif
 }
 
 namespace {
 std::filesystem::path defaultHdPackDir() {
     if (const char* xdg = std::getenv("XDG_DATA_HOME"); xdg && *xdg)
         return std::filesystem::path(xdg) / "ss2/hd-pack";
+#ifdef _WIN32
+    if (const char* localAppData = std::getenv("LOCALAPPDATA"); localAppData && *localAppData)
+        return std::filesystem::path(localAppData) / "ss2/hd-pack";
+    if (const char* appData = std::getenv("APPDATA"); appData && *appData)
+        return std::filesystem::path(appData) / "ss2/hd-pack";
+    if (const char* profile = std::getenv("USERPROFILE"); profile && *profile)
+        return std::filesystem::path(profile) / "AppData/Local/ss2/hd-pack";
+#else
     if (const char* home = std::getenv("HOME"); home && *home)
         return std::filesystem::path(home) / ".local/share/ss2/hd-pack";
+#endif
     return {};
 }
 } // namespace

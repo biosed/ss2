@@ -469,10 +469,15 @@ int main(int argc, char** argv) try {
             std::optional<std::string> oldData;
             std::optional<std::string> oldCfg;
             ~XdgGuard() {
+#ifdef _WIN32
+                _putenv_s("XDG_DATA_HOME", oldData ? oldData->c_str() : "");
+                _putenv_s("XDG_CONFIG_HOME", oldCfg ? oldCfg->c_str() : "");
+#else
                 if (oldData) ::setenv("XDG_DATA_HOME", oldData->c_str(), 1);
                 else ::unsetenv("XDG_DATA_HOME");
                 if (oldCfg) ::setenv("XDG_CONFIG_HOME", oldCfg->c_str(), 1);
                 else ::unsetenv("XDG_CONFIG_HOME");
+#endif
                 std::error_code ec;
                 std::filesystem::remove_all(root, ec);
             }
@@ -481,10 +486,15 @@ int main(int argc, char** argv) try {
             prevData ? std::optional<std::string>(prevData) : std::nullopt,
             prevCfg ? std::optional<std::string>(prevCfg) : std::nullopt,
         };
-        const auto xdgData = xdgRoot / "data";
-        const auto xdgCfg = xdgRoot / "config";
+        const std::string xdgData = (xdgRoot / "data").string();
+        const std::string xdgCfg = (xdgRoot / "config").string();
+#ifdef _WIN32
+        _putenv_s("XDG_DATA_HOME", xdgData.c_str());
+        _putenv_s("XDG_CONFIG_HOME", xdgCfg.c_str());
+#else
         ::setenv("XDG_DATA_HOME", xdgData.c_str(), 1);
         ::setenv("XDG_CONFIG_HOME", xdgCfg.c_str(), 1);
+#endif
 
         std::optional<std::filesystem::path> nextMission;
         ss2::SavedUnitPoolMap inMemPools;

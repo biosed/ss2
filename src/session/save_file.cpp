@@ -266,7 +266,10 @@ std::optional<DecodedSaveFile> readSaveFile(const std::filesystem::path& path) {
     if (decoded->meta.savedEpochSec <= 0) {
         const auto ftime = std::filesystem::last_write_time(path, ec);
         if (!ec) {
-            const auto sysTime = std::chrono::clock_cast<std::chrono::system_clock>(ftime);
+            const auto sysNow = std::chrono::system_clock::now();
+            const auto fileNow = std::filesystem::file_time_type::clock::now();
+            const auto sysTime =
+                sysNow + std::chrono::duration_cast<std::chrono::system_clock::duration>(ftime - fileNow);
             decoded->meta.savedEpochSec =
                 std::chrono::duration_cast<std::chrono::seconds>(sysTime.time_since_epoch()).count();
         }
@@ -300,7 +303,11 @@ std::string formatSaveTimestamp(std::int64_t epochSec) {
     if (epochSec <= 0) return {};
     const std::time_t tt = static_cast<std::time_t>(epochSec);
     std::tm tm{};
+#ifdef _WIN32
+    if (localtime_s(&tm, &tt) != 0) return {};
+#else
     if (!localtime_r(&tt, &tm)) return {};
+#endif
     char buf[32];
     if (std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M", &tm) == 0) return {};
     return std::string(buf);

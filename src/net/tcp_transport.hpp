@@ -11,9 +11,12 @@
 
 namespace ss2 {
 
-// Non-blocking POSIX TCP peer connection with length-prefixed LockstepPacket framing.
+// Non-blocking TCP peer connection with length-prefixed LockstepPacket framing.
 class TcpConnection {
 public:
+    using SocketHandle = std::intptr_t;
+    static constexpr SocketHandle kInvalidSocket = -1;
+
     TcpConnection() = default;
     ~TcpConnection();
 
@@ -22,7 +25,7 @@ public:
     TcpConnection(TcpConnection&& other) noexcept;
     TcpConnection& operator=(TcpConnection&& other) noexcept;
 
-    static TcpConnection adoptConnectedSocket(int fd, std::string peerAddr = {});
+    static TcpConnection adoptConnectedSocket(SocketHandle fd, std::string peerAddr = {});
     static TcpConnection connectNonBlocking(const std::string& host, std::uint16_t port);
 
     bool pollConnected();
@@ -31,14 +34,14 @@ public:
     bool pollPackets(std::vector<LockstepPacket>& outPackets);
     void close();
 
-    bool isOpen() const noexcept { return fd_ >= 0; }
-    bool isConnected() const noexcept { return fd_ >= 0 && connected_; }
+    bool isOpen() const noexcept { return fd_ != kInvalidSocket; }
+    bool isConnected() const noexcept { return fd_ != kInvalidSocket && connected_; }
     const std::string& lastError() const noexcept { return lastError_; }
     const std::string& peerAddress() const noexcept { return peerAddress_; }
     std::size_t bufferedTxBytes() const noexcept { return txBuf_.size(); }
 
 private:
-    int fd_{-1};
+    SocketHandle fd_{kInvalidSocket};
     bool connected_{false};
     bool connecting_{false};
     std::string peerAddress_;
@@ -47,7 +50,7 @@ private:
     std::vector<std::uint8_t> rxBuf_;
 };
 
-// Non-blocking POSIX TCP listener supporting ephemeral port 0 in tests and standard ports live.
+// Non-blocking TCP listener supporting ephemeral port 0 in tests and standard ports live.
 class TcpListener {
 public:
     TcpListener() = default;
@@ -63,11 +66,11 @@ public:
     std::optional<TcpConnection> pollAccept();
     void close();
 
-    bool isOpen() const noexcept { return fd_ >= 0; }
+    bool isOpen() const noexcept { return fd_ != TcpConnection::kInvalidSocket; }
     const std::string& lastError() const noexcept { return lastError_; }
 
 private:
-    int fd_{-1};
+    TcpConnection::SocketHandle fd_{TcpConnection::kInvalidSocket};
     std::string lastError_;
 };
 

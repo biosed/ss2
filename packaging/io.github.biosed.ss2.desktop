@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Sudden Strike II
+GenericName=Real-Time Tactics Strategy Game
+Comment=Native Linux and Windows engine for Sudden Strike II (requires user-supplied game files)
+Exec=ss2
+Icon=io.github.biosed.ss2
+Terminal=false
+Categories=Game;StrategyGame;
+Keywords=Sudden Strike;RTS;WW2;Tactics;Strategy;
+StartupNotify=true

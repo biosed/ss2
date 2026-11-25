@@ -126,35 +126,47 @@ run_toolchain() {
     printf '%s\n' "$lock_out" | grep -E '^(LOCKSTEP_DETERMINISM_HASH|LOCKSTEP_SKIRMISH_HASH|LOCKSTEP_4P_2V2_HASH) ' > "$TMP/lockhash_$label"
 }
 
-run_toolchain "arm64_gcc" "" g++ -O3
-run_toolchain "arm64_clang" "" clang++ -O2
-run_toolchain "x86_64_musl" "qemu-x86_64-static" zig c++ -target x86_64-linux-musl -O2
-run_toolchain "x86_64_v3_musl" "qemu-x86_64-static" zig c++ -target x86_64-linux-musl -mcpu=x86_64_v3 -O2
+HOST_ARCH="$(uname -m)"
+if [ "$HOST_ARCH" = "aarch64" ] || [ "$HOST_ARCH" = "arm64" ]; then
+    run_toolchain "arm64_gcc" "" g++ -O3
+    run_toolchain "arm64_clang" "" clang++ -O2
+    run_toolchain "x86_64_musl" "qemu-x86_64-static" zig c++ -target x86_64-linux-musl -O2
+    run_toolchain "x86_64_v3_musl" "qemu-x86_64-static" zig c++ -target x86_64-linux-musl -mcpu=x86_64_v3 -O2
+    NAMES=("ARM64 GCC" "ARM64 Clang" "x86-64 Zig" "x86-64-v3 Zig")
+    LABELS=("arm64_gcc" "arm64_clang" "x86_64_musl" "x86_64_v3_musl")
+    FMA_HOST_LABEL="ARM64 GCC"
+    FMA_HOST_CMD=(g++ -std=c++20 -O3 -ffp-contract=off)
+    FMA_V3_RUNNER="qemu-x86_64-static"
+else
+    run_toolchain "x86_64_gcc" "" g++ -O3
+    run_toolchain "x86_64_clang" "" clang++ -O2
+    run_toolchain "arm64_musl" "qemu-aarch64-static" zig c++ -target aarch64-linux-musl -O2
+    run_toolchain "x86_64_v3_musl" "" zig c++ -target x86_64-linux-musl -mcpu=x86_64_v3 -O2
+    NAMES=("x86-64 GCC" "x86-64 Clang" "ARM64 Zig" "x86-64-v3 Zig")
+    LABELS=("x86_64_gcc" "x86_64_clang" "arm64_musl" "x86_64_v3_musl")
+    FMA_HOST_LABEL="x86-64 GCC"
+    FMA_HOST_CMD=(g++ -std=c++20 -O3 -ffp-contract=off)
+    FMA_V3_RUNNER=""
+fi
 
-h_gcc="$(cat "$TMP/hash_arm64_gcc")"
-h_clang="$(cat "$TMP/hash_arm64_clang")"
-h_x86="$(cat "$TMP/hash_x86_64_musl")"
-h_x86_v3="$(cat "$TMP/hash_x86_64_v3_musl")"
-lh_gcc="$(cat "$TMP/lockhash_arm64_gcc")"
-lh_clang="$(cat "$TMP/lockhash_arm64_clang")"
-lh_x86="$(cat "$TMP/lockhash_x86_64_musl")"
-lh_x86_v3="$(cat "$TMP/lockhash_x86_64_v3_musl")"
+h0="$(cat "$TMP/hash_${LABELS[0]}")"
+h1="$(cat "$TMP/hash_${LABELS[1]}")"
+h2="$(cat "$TMP/hash_${LABELS[2]}")"
+h3="$(cat "$TMP/hash_${LABELS[3]}")"
+lh0="$(cat "$TMP/lockhash_${LABELS[0]}")"
+lh1="$(cat "$TMP/lockhash_${LABELS[1]}")"
+lh2="$(cat "$TMP/lockhash_${LABELS[2]}")"
+lh3="$(cat "$TMP/lockhash_${LABELS[3]}")"
 
-echo "=== Cross-ISA Comparison ==="
-echo "ARM64 GCC     : $h_gcc"
-echo "ARM64 Clang   : $h_clang"
-echo "x86-64 Zig    : $h_x86"
-echo "x86-64-v3 Zig : $h_x86_v3"
-echo "Lockstep GCC  : $lh_gcc"
-echo "Lockstep Clang: $lh_clang"
-echo "Lockstep x86  : $lh_x86"
-echo "Lockstep v3   : $lh_x86_v3"
+echo "=== Cross-ISA Comparison ($HOST_ARCH host) ==="
+printf '%-14s: %s\n' "${NAMES[0]}" "$h0" "${NAMES[1]}" "$h1" "${NAMES[2]}" "$h2" "${NAMES[3]}" "$h3"
+printf 'Lock %-9s: %s\n' "${NAMES[0]}" "$lh0" "${NAMES[1]}" "$lh1" "${NAMES[2]}" "$lh2" "${NAMES[3]}" "$lh3"
 
-if [ "$h_gcc" != "$h_clang" ] || [ "$h_gcc" != "$h_x86" ] || [ "$h_gcc" != "$h_x86_v3" ]; then
+if [ "$h0" != "$h1" ] || [ "$h0" != "$h2" ] || [ "$h0" != "$h3" ]; then
     echo "ERROR: Cross-ISA simulation stateHash mismatch!" >&2
     exit 1
 fi
-if [ "$lh_gcc" != "$lh_clang" ] || [ "$lh_gcc" != "$lh_x86" ] || [ "$lh_gcc" != "$lh_x86_v3" ]; then
+if [ "$lh0" != "$lh1" ] || [ "$lh0" != "$lh2" ] || [ "$lh0" != "$lh3" ]; then
     echo "ERROR: Cross-ISA lockstep stateHash mismatch!" >&2
     exit 1
 fi
@@ -181,21 +193,26 @@ int main() {
 }
 EOF
 
-g++ -std=c++20 -O3 -ffp-contract=off -I"$ROOT/src" "$TMP/fma_probe.cpp" -o "$TMP/fma_arm64_off"
+"${FMA_HOST_CMD[@]}" -I"$ROOT/src" "$TMP/fma_probe.cpp" -o "$TMP/fma_host_off"
 zig c++ -target x86_64-linux-musl -mcpu=x86_64_v3 -O2 -ffp-contract=off -std=c++20 -I"$ROOT/src" "$TMP/fma_probe.cpp" -o "$TMP/fma_x86_v3_off"
 zig c++ -target x86_64-linux-musl -mcpu=x86_64_v3 -O2 -ffp-contract=fast -std=c++20 -I"$ROOT/src" "$TMP/fma_probe.cpp" -o "$TMP/fma_x86_v3_fast"
 
-p_arm="$("$TMP/fma_arm64_off")"
-p_v3_off="$(qemu-x86_64-static "$TMP/fma_x86_v3_off")"
-p_v3_fast="$(qemu-x86_64-static "$TMP/fma_x86_v3_fast")"
+p_arm="$("$TMP/fma_host_off")"
+if [ -n "$FMA_V3_RUNNER" ]; then
+    p_v3_off="$("$FMA_V3_RUNNER" "$TMP/fma_x86_v3_off")"
+    p_v3_fast="$("$FMA_V3_RUNNER" "$TMP/fma_x86_v3_fast")"
+else
+    p_v3_off="$("$TMP/fma_x86_v3_off")"
+    p_v3_fast="$("$TMP/fma_x86_v3_fast")"
+fi
 
 echo "=== x86-64-v3 FMA Negative-Control Probe ==="
-echo "ARM64 GCC (-ffp-contract=off)     : $p_arm"
+printf '%-26s: %s\n' "$FMA_HOST_LABEL (-ffp-contract=off)" "$p_arm"
 echo "x86-64-v3 (-ffp-contract=off)     : $p_v3_off"
 echo "x86-64-v3 (-ffp-contract=fast)    : $p_v3_fast"
 
 if [ "$p_arm" != "$p_v3_off" ]; then
-    echo "ERROR: x86-64-v3 strict hash diverged from ARM64 GCC!" >&2
+    echo "ERROR: x86-64-v3 strict hash diverged from host GCC!" >&2
     exit 1
 fi
 if [ "$p_v3_fast" = "$p_v3_off" ]; then

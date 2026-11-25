@@ -1,7 +1,7 @@
 #include "audio/sound_player.hpp"
+#include <SDL3/SDL_loadso.h>
 #include <algorithm>
 #include <array>
-#include <dlfcn.h>
 #include <iostream>
 
 namespace ss2 {
@@ -21,7 +21,7 @@ using OvClearFn = int (*)(void*);
 } // namespace
 
 struct SoundPlayer::MusicState {
-    void* lib{nullptr};
+    SDL_SharedObject* lib{nullptr};
     OvFopenFn ov_fopen{nullptr};
     OvInfoFn ov_info{nullptr};
     OvReadFn ov_read{nullptr};
@@ -33,7 +33,7 @@ struct SoundPlayer::MusicState {
     float gain{0.28f};
     bool muted{false};
 
-    // Opaque 2048-byte aligned storage for OggVorbis_File (~840 bytes on 64-bit Linux).
+    // Opaque 2048-byte aligned storage for OggVorbis_File (~840 bytes on 64-bit).
     alignas(16) std::array<std::uint64_t, 256> vfStorage{};
     bool vfOpen{false};
 
@@ -43,7 +43,7 @@ struct SoundPlayer::MusicState {
             vfOpen = false;
         }
         if (stream) SDL_DestroyAudioStream(stream);
-        if (lib) dlclose(lib);
+        if (lib) SDL_UnloadObject(lib);
     }
 };
 
@@ -226,7 +226,8 @@ bool SoundPlayer::openMusicTrack(std::size_t index) {
     }
     music_->trackIndex = index % music_->playlist.size();
     const auto& path = music_->playlist[music_->trackIndex];
-    if (music_->ov_fopen(path.c_str(), music_->vfStorage.data()) != 0) return false;
+    const std::string pathStr = path.string();
+    if (music_->ov_fopen(pathStr.c_str(), music_->vfStorage.data()) != 0) return false;
     music_->vfOpen = true;
     const auto* info = music_->ov_info(music_->vfStorage.data(), -1);
     if (!info || info->channels < 1 || info->channels > 2 || info->rate < 8000) {
@@ -260,21 +261,29 @@ bool SoundPlayer::startMusic(const std::filesystem::path& musicDir, float gain) 
     std::sort(tracks.begin(), tracks.end());
 
     auto st = std::make_unique<MusicState>();
-    st->lib = dlopen("libvorbisfile.so.3", RTLD_LAZY);
-    if (!st->lib) st->lib = dlopen("libvorbisfile.so", RTLD_LAZY);
+#ifdef _WIN32
+    constexpr const char* kVorbisLibs[] = {"libvorbisfile-3.dll", "vorbisfile.dll", "libvorbisfile.dll"};
+#else
+    constexpr const char* kVorbisLibs[] = {"libvorbisfile.so.3", "libvorbisfile.so"};
+#endif
+    for (const char* libName : kVorbisLibs) {
+        st->lib = SDL_LoadObject(libName);
+        if (st->lib) break;
+    }
     if (!st->lib) return false;
 
-    st->ov_fopen = reinterpret_cast<OvFopenFn>(dlsym(st->lib, "ov_fopen"));
-    st->ov_info = reinterpret_cast<OvInfoFn>(dlsym(st->lib, "ov_info"));
-    st->ov_read = reinterpret_cast<OvReadFn>(dlsym(st->lib, "ov_read"));
-    st->ov_clear = reinterpret_cast<OvClearFn>(dlsym(st->lib, "ov_clear"));
+    st->ov_fopen = reinterpret_cast<OvFopenFn>(SDL_LoadFunction(st->lib, "ov_fopen"));
+    st->ov_info = reinterpret_cast<OvInfoFn>(SDL_LoadFunction(st->lib, "ov_info"));
+    st->ov_read = reinterpret_cast<OvReadFn>(SDL_LoadFunction(st->lib, "ov_read"));
+    st->ov_clear = reinterpret_cast<OvClearFn>(SDL_LoadFunction(st->lib, "ov_clear"));
     if (!st->ov_fopen || !st->ov_info || !st->ov_read || !st->ov_clear) return false;
 
     // Keep only the tracks the Ogg Vorbis decoder can open, so a next-track
     // press never lands on a file the decoder rejects.
     std::vector<std::filesystem::path> playable;
     for (const auto& path : tracks) {
-        if (st->ov_fopen(path.c_str(), st->vfStorage.data()) != 0) continue;
+        const std::string pathStr = path.string();
+        if (st->ov_fopen(pathStr.c_str(), st->vfStorage.data()) != 0) continue;
         const auto* info = st->ov_info(st->vfStorage.data(), -1);
         const bool ok = info && info->channels >= 1 && info->channels <= 2 && info->rate >= 8000;
         st->ov_clear(st->vfStorage.data());

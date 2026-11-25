@@ -3,8 +3,15 @@
 #include <iostream>
 #include <stdexcept>
 #include <string_view>
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#endif
 
 int main(int argc, char** argv) try {
+#ifdef _WIN32
+    _setmode(_fileno(stdout), _O_BINARY);
+#endif
     if (argc != 4) throw std::invalid_argument("Usage: ss2_sprite ARCHIVE ENTRY FRAME > pixels.le16");
     const std::string_view text(argv[3]);
     size_t index{};

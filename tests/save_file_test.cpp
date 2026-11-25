@@ -476,11 +476,20 @@ int main() try {
         struct EnvRestore {
             std::optional<std::string> prev;
             ~EnvRestore() {
+#ifdef _WIN32
+                _putenv_s("XDG_DATA_HOME", prev ? prev->c_str() : "");
+#else
                 if (prev) ::setenv("XDG_DATA_HOME", prev->c_str(), 1);
                 else ::unsetenv("XDG_DATA_HOME");
+#endif
             }
         } envRestore{savedXdg};
-        ::setenv("XDG_DATA_HOME", guard.dir.c_str(), 1);
+        const std::string guardDirStr = guard.dir.string();
+#ifdef _WIN32
+        _putenv_s("XDG_DATA_HOME", guardDirStr.c_str());
+#else
+        ::setenv("XDG_DATA_HOME", guardDirStr.c_str(), 1);
+#endif
 
         const auto pNorm = ss2::campaignPoolPathForMission("YourID", "maps/campaign/030001.ssc");
         const auto pEasy = ss2::campaignPoolPathForMission("yourid", "maps/campaign/EASY/030001.ssc");

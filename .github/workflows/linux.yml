@@ -71,6 +71,13 @@ jobs:
           SDL_VIDEO_DRIVER: offscreen
           VK_DRIVER_FILES: /usr/share/vulkan/icd.d/lvp_icd.${{ matrix.icd_arch }}.json
           UBSAN_OPTIONS: halt_on_error=1
+      - name: Install desktop & packaging smoke check
+        run: >
+          cmake --install build --prefix dist/ss2-linux-${{ matrix.icd_arch }}
+          && test -x dist/ss2-linux-${{ matrix.icd_arch }}/bin/ss2
+          && test -f dist/ss2-linux-${{ matrix.icd_arch }}/share/applications/io.github.biosed.ss2.desktop
+          && test -f dist/ss2-linux-${{ matrix.icd_arch }}/share/icons/hicolor/scalable/apps/io.github.biosed.ss2.svg
+          && test -f dist/ss2-linux-${{ matrix.icd_arch }}/share/metainfo/io.github.biosed.ss2.metainfo.xml
       - name: Upload failure artifacts
         if: failure()
         uses: actions/upload-artifact@v4
@@ -81,3 +88,12 @@ jobs:
             build
           retention-days: 7
           if-no-files-found: ignore
+
+  cross-isa-determinism:
+    runs-on: ubuntu-24.04
+    container: fedora:45
+    timeout-minutes: 15
+    steps:
+      - run: dnf install -y gcc-c++ clang zig qemu-user-static-aarch64 qemu-user-static-x86
+      - uses: actions/checkout@v4
+      - run: ./tools/check-cross-isa-sim.sh

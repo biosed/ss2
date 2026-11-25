@@ -314,7 +314,11 @@ Bytes buildSyntheticMissionBytes(const MissionSpec& spec, const SupportSpec* sup
 
 void writeGzipFile(const std::filesystem::path& path, std::span<const std::uint8_t> payload) {
     std::filesystem::create_directories(path.parent_path());
+#ifdef _WIN32
+    std::unique_ptr<gzFile_s, decltype(&gzclose)> gz(gzopen_w(path.c_str(), "wb"), gzclose);
+#else
     std::unique_ptr<gzFile_s, decltype(&gzclose)> gz(gzopen(path.c_str(), "wb"), gzclose);
+#endif
     if (!gz) {
         throw std::runtime_error("Failed to open gzip file for writing: " + path.string());
     }

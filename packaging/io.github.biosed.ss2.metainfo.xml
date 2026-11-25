@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.biosed.ss2</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>Unlicense</project_license>
+  <name>Sudden Strike II (Native Engine)</name>
+  <summary>Native SDL3 and Vulkan reimplementation of Sudden Strike II Gold 2.2</summary>
+  <description>
+    <p>
+      An open, cross-platform native C++20/SDL3/Vulkan 1.3 engine for Sudden Strike II (Gold 2.2)
+      supporting the full 136-mission campaign and single-player suite, 2-4 player lockstep multiplayer,
+      2x HD packs, and out-of-the-box community mods (sudtest.ini VFS chains, unpacked/gzip overlays,
+      and .ssx addon packs). User-supplied original or GOG game files are required.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.biosed.ss2.desktop</launchable>
+  <url type="homepage">https://github.com/biosed/ss2</url>
+  <provides>
+    <binary>ss2</binary>
+  </provides>
+  <content_rating type="oars-1.1"/>
+</component>

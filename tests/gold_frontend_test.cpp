@@ -28,7 +28,11 @@ bool near(double a, double b, double eps = 0.01) {
 }
 
 void writePng(const std::filesystem::path& path, int w, int h, const std::vector<std::uint8_t>& rgba) {
+#ifdef _WIN32
+    std::FILE* fp = _wfopen(path.c_str(), L"wb");
+#else
     std::FILE* fp = std::fopen(path.c_str(), "wb");
+#endif
     if (!fp) throw std::runtime_error("Cannot open PNG output: " + path.string());
     png_structp png = png_create_write_struct(PNG_LIBPNG_VER_STRING, nullptr, nullptr, nullptr);
     png_infop info = png_create_info_struct(png);

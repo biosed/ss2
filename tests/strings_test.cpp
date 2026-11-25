@@ -10,6 +10,14 @@
 #include <string>
 
 namespace {
+void setEnvVar(const char* name, const char* value) {
+#ifdef _WIN32
+    _putenv_s(name, value ? value : "");
+#else
+    if (value) ::setenv(name, value, 1);
+    else ::unsetenv(name);
+#endif
+}
 void check(bool condition, const std::string& what) {
     if (!condition) throw std::runtime_error(what);
 }
@@ -68,15 +76,15 @@ int main() {
         check(languageFromCode("es-MX") == Language::spanish && languageFromCode("Spanish") == Language::spanish, "Spanish codes");
         check(languageFromCode("en_GB.UTF-8") == Language::english && languageFromCode("C") == Language::english, "English codes");
         check(!languageFromCode("de_DE") && !languageFromCode("") && !languageFromCode("12"), "unknown codes");
-        setenv("LC_ALL", "", 1);
-        setenv("LC_MESSAGES", "es_ES.UTF-8", 1);
-        setenv("LANG", "fr_FR.UTF-8", 1);
+        setEnvVar("LC_ALL", "");
+        setEnvVar("LC_MESSAGES", "es_ES.UTF-8");
+        setEnvVar("LANG", "fr_FR.UTF-8");
         check(languageFromEnvironment() == Language::spanish, "LC_MESSAGES comes before LANG");
-        setenv("LC_ALL", "fr_CA", 1);
+        setEnvVar("LC_ALL", "fr_CA");
         check(languageFromEnvironment() == Language::french, "LC_ALL comes first");
-        setenv("LC_ALL", "de_DE.UTF-8", 1);
+        setEnvVar("LC_ALL", "de_DE.UTF-8");
         check(languageFromEnvironment() == Language::english, "an unknown language means English");
-        unsetenv("LC_ALL"); unsetenv("LC_MESSAGES"); unsetenv("LANG");
+        setEnvVar("LC_ALL", nullptr); setEnvVar("LC_MESSAGES", nullptr); setEnvVar("LANG", nullptr);
         check(languageFromEnvironment() == Language::english, "nothing set means English");
 
         // Every entry: unique key, both translations present, valid UTF-8, one line, and

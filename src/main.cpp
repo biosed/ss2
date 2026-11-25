@@ -732,18 +732,29 @@ int main(int argc, char** argv) try {
         if (parsedReplay->autoEngage && cliAutoEngageSet && autoEngage != *parsedReplay->autoEngage)
             throw std::invalid_argument("--no-auto-engage conflicts with recorded auto_engage in --replay file");
     }
-    std::filesystem::path dataHome;
-    if (const char* xdg = std::getenv("XDG_DATA_HOME"); xdg && *xdg) dataHome = xdg;
-    else if (const char* home = std::getenv("HOME")) dataHome = std::filesystem::path(home) / ".local/share";
-    const auto resolveGameDir = [&]() -> std::filesystem::path {
-        if (!gameDir.empty()) return gameDir;
-        if (const char* configured = std::getenv("SS2_GAME_DIR"); configured && *configured) return configured;
-        if (!dataHome.empty() && std::filesystem::is_directory(dataHome / "ss2/game")) return dataHome / "ss2/game";
-        return {};
+    const auto dataHome = ss2::platformAppDataRoot();
+    const auto hasGameDataAt = [](const std::filesystem::path& dir) {
+        std::error_code ec;
+        if (dir.empty() || !std::filesystem::is_directory(dir, ec) || ec) return false;
+        const auto ini = ss2::assets::resolveCaseInsensitivePath(dir, "sudtest.ini");
+        const auto commonSue = ss2::assets::resolveCaseInsensitivePath(dir, "game_common.sue");
+        return std::filesystem::is_regular_file(ini, ec) || std::filesystem::is_regular_file(commonSue, ec);
     };
     const auto settingsPath = ss2::defaultSettingsPath();
     const bool persistSettings = !limit && !timing && !overviewOnly && recordPath.empty() && !parsedReplay &&
                                  !settingsPath.empty();
+    const auto resolveGameDir = [&]() -> std::filesystem::path {
+        if (!gameDir.empty()) return gameDir;
+        if (const char* configured = std::getenv("SS2_GAME_DIR"); configured && *configured) return configured;
+        if (!dataHome.empty() && std::filesystem::is_directory(dataHome / "game")) return dataHome / "game";
+        if (persistSettings) {
+            if (const char* base = SDL_GetBasePath(); base && *base) {
+                const std::filesystem::path baseDir(base);
+                if (hasGameDataAt(baseDir)) return baseDir;
+            }
+        }
+        return {};
+    };
     ss2::UserSettings settings = persistSettings ? ss2::loadUserSettings(settingsPath) : ss2::UserSettings{};
     if (cliMod) {
         if (ss2::assets::equalsIgnoreCaseAscii(*cliMod, "none") ||

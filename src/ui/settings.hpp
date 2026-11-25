@@ -71,64 +71,75 @@ inline std::string normalizeMissionKey(std::string_view raw) {
     return out;
 }
 
-inline std::filesystem::path defaultSettingsPath() {
+inline std::filesystem::path platformAppConfigRoot() {
     if (const char* xdg = std::getenv("XDG_CONFIG_HOME"); xdg && *xdg) {
-        return std::filesystem::path(xdg) / "ss2" / "settings.ini";
+        return std::filesystem::path(xdg) / "ss2";
     }
+#ifdef _WIN32
+    if (const char* appData = std::getenv("APPDATA"); appData && *appData) {
+        return std::filesystem::path(appData) / "ss2";
+    }
+    if (const char* profile = std::getenv("USERPROFILE"); profile && *profile) {
+        return std::filesystem::path(profile) / "AppData" / "Roaming" / "ss2";
+    }
+#else
     if (const char* home = std::getenv("HOME"); home && *home) {
-        return std::filesystem::path(home) / ".config" / "ss2" / "settings.ini";
+        return std::filesystem::path(home) / ".config" / "ss2";
     }
+#endif
     return {};
+}
+
+inline std::filesystem::path platformAppDataRoot() {
+    if (const char* xdg = std::getenv("XDG_DATA_HOME"); xdg && *xdg) {
+        return std::filesystem::path(xdg) / "ss2";
+    }
+#ifdef _WIN32
+    if (const char* localAppData = std::getenv("LOCALAPPDATA"); localAppData && *localAppData) {
+        return std::filesystem::path(localAppData) / "ss2";
+    }
+    if (const char* appData = std::getenv("APPDATA"); appData && *appData) {
+        return std::filesystem::path(appData) / "ss2";
+    }
+    if (const char* profile = std::getenv("USERPROFILE"); profile && *profile) {
+        return std::filesystem::path(profile) / "AppData" / "Local" / "ss2";
+    }
+#else
+    if (const char* home = std::getenv("HOME"); home && *home) {
+        return std::filesystem::path(home) / ".local" / "share" / "ss2";
+    }
+#endif
+    return {};
+}
+
+inline std::filesystem::path defaultSettingsPath() {
+    const auto root = platformAppConfigRoot();
+    return root.empty() ? std::filesystem::path{} : (root / "settings.ini");
 }
 
 inline std::filesystem::path defaultReplaysDir() {
-    if (const char* xdg = std::getenv("XDG_DATA_HOME"); xdg && *xdg) {
-        return std::filesystem::path(xdg) / "ss2" / "replays";
-    }
-    if (const char* home = std::getenv("HOME"); home && *home) {
-        return std::filesystem::path(home) / ".local" / "share" / "ss2" / "replays";
-    }
-    return {};
+    const auto root = platformAppDataRoot();
+    return root.empty() ? std::filesystem::path{} : (root / "replays");
 }
 
 inline std::filesystem::path defaultSavesDir() {
-    if (const char* xdg = std::getenv("XDG_DATA_HOME"); xdg && *xdg) {
-        return std::filesystem::path(xdg) / "ss2" / "saves";
-    }
-    if (const char* home = std::getenv("HOME"); home && *home) {
-        return std::filesystem::path(home) / ".local" / "share" / "ss2" / "saves";
-    }
-    return {};
+    const auto root = platformAppDataRoot();
+    return root.empty() ? std::filesystem::path{} : (root / "saves");
 }
 
 inline std::filesystem::path defaultCustomCampaignsDir() {
-    if (const char* xdg = std::getenv("XDG_DATA_HOME"); xdg && *xdg) {
-        return std::filesystem::path(xdg) / "ss2" / "custom_campaigns";
-    }
-    if (const char* home = std::getenv("HOME"); home && *home) {
-        return std::filesystem::path(home) / ".local" / "share" / "ss2" / "custom_campaigns";
-    }
-    return {};
+    const auto root = platformAppDataRoot();
+    return root.empty() ? std::filesystem::path{} : (root / "custom_campaigns");
 }
 
 inline std::filesystem::path defaultCampaignPoolsDir() {
-    if (const char* xdg = std::getenv("XDG_DATA_HOME"); xdg && *xdg) {
-        return std::filesystem::path(xdg) / "ss2" / "campaigns";
-    }
-    if (const char* home = std::getenv("HOME"); home && *home) {
-        return std::filesystem::path(home) / ".local" / "share" / "ss2" / "campaigns";
-    }
-    return {};
+    const auto root = platformAppDataRoot();
+    return root.empty() ? std::filesystem::path{} : (root / "campaigns");
 }
 
 inline std::filesystem::path defaultModsDir() {
-    if (const char* xdg = std::getenv("XDG_DATA_HOME"); xdg && *xdg) {
-        return std::filesystem::path(xdg) / "ss2" / "mods";
-    }
-    if (const char* home = std::getenv("HOME"); home && *home) {
-        return std::filesystem::path(home) / ".local" / "share" / "ss2" / "mods";
-    }
-    return {};
+    const auto root = platformAppDataRoot();
+    return root.empty() ? std::filesystem::path{} : (root / "mods");
 }
 
 inline bool profileNameEquals(std::string_view a, std::string_view b) {

@@ -1,0 +1,99 @@
+name: Windows x86-64
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          pacboy: >-
+            gcc:p
+            cmake:p
+            ninja:p
+            ccache:p
+            pkgconf:p
+            python:p
+            SDL3:p
+            pango:p
+            zlib:p
+            libjpeg-turbo:p
+            libpng:p
+            ffmpeg:p
+            libvorbis:p
+            vulkan-headers:p
+            vulkan-loader:p
+      - name: Compute ccache cache epoch (UTC day)
+        run: echo "DATE_EPOCH=$(date -u -d 'today 00:00' +%s)" >> "$GITHUB_ENV"
+      - name: Restore ccache cache
+        uses: actions/cache/restore@v4
+        with:
+          path: D:\a\_temp\msys64\home\runneradmin\.ccache
+          key: ccache-win64-ucrt64-${{ env.DATE_EPOCH }}
+          restore-keys: |
+            ccache-win64-ucrt64-
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=gcc \
+            -DCMAKE_CXX_COMPILER=g++ \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+      - name: Build
+        run: cmake --build build -j"$(nproc)"
+      - name: Save ccache cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: D:\a\_temp\msys64\home\runneradmin\.ccache
+          key: ccache-win64-ucrt64-${{ env.DATE_EPOCH }}
+      - name: Test
+        run: ctest --test-dir build --output-on-failure --no-tests=error 2>&1 | tee ctest.log
+      - name: Package portable Windows bundle
+        run: |
+          rm -rf dist/ss2-windows-x86_64
+          cmake --install build --prefix dist/ss2-windows-x86_64
+          cp /ucrt64/bin/libvorbisfile-3.dll dist/ss2-windows-x86_64/
+          for round in 1 2 3; do
+            for bin in dist/ss2-windows-x86_64/*.exe dist/ss2-windows-x86_64/*.dll; do
+              ldd "$bin" | awk '/\/ucrt64\/bin\// {print $3}' | while read -r dll; do
+                cp -n "$dll" dist/ss2-windows-x86_64/
+              done
+            done
+          done
+          ls -lh dist/ss2-windows-x86_64
+      - name: Verify standalone launch on clean Windows PATH
+        shell: pwsh
+        run: |
+          $env:PATH = "C:\Windows\System32;C:\Windows"
+          .\dist\ss2-windows-x86_64\ss2.exe --help
+      - name: Upload Windows build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ss2-windows-x86_64
+          path: dist/ss2-windows-x86_64
+          retention-days: 14
+      - name: Upload failure logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: failure-windows-x86_64
+          path: |
+            ctest.log
+            build/CMakeCache.txt
+          retention-days: 7
+          if-no-files-found: ignore

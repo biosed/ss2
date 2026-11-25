@@ -1,152 +1,128 @@
-# Sudden Strike II native Linux engine
+# Sudden Strike II Native Engine (Linux & Windows)
 
-A native Linux executable that plays the first movement objective of Tutorial I from a private Gold 2.2 installation. Drag-select the starting squad and right-click the wreck; the original mission script advances when the units reach its marked area. The SDL3/Vulkan renderer and the single-player mission clock run independently of each other.
+A native C++20 / SDL3 / Vulkan 1.3 reimplementation of *Sudden Strike II (Gold 2.2)* for **Linux** (x86-64 and ARM64, Wayland/X11, Bazzite/SteamOS) and **Windows** (x86-64). Requires user-supplied original or GOG *Sudden Strike II* game data.
 
-The native engine now also reproduces the original fog of war, infantry spotting, infantry combat and the Group-3 elimination phrase for that scenario, each pinned by an automated test. Later campaign objectives, the original AI and full parity beyond the matched encounter are still open. [Play the verified opening](docs/tutorial-simulation.md#first-playable-objective)
+The engine runs all 136 retail `.ssc`/`.ssm`/`.smm` missions (`0` unhandled CAOF opcodes), bit-exact retail visibility, combat, group AI, progressive `dom.res` building and `MOST.RES` bridge destruction, the Gold 2.2 front end, 2–4 player deterministic TCP lockstep multiplayer, 2× HD asset packs, and out-of-the-box community mods.
 
-## Run Tutorial I
+## Quick start
 
 ```sh
+# Linux (auto-checks SS2_GAME_DIR, ~/.local/share/ss2/game, or executable folder)
 ./build/ss2 --game-dir "$HOME/ss2-private/game/app"
+
+# Windows (drop ss2.exe + bundled DLLs into your SS2 folder, or pass --game-dir)
+ss2.exe --game-dir "C:\Games\Sudden Strike II"
 ```
 
-The tutorial opens in a large window sized to your desktop. F11 switches between fullscreen and windowed play, and `--fullscreen` or `--windowed` selects the same two modes from the command line. The interface is available in English, French and Spanish: it follows your locale (`LC_ALL`, `LC_MESSAGES` or `LANG`), `--lang en`, `--lang fr` or `--lang es` overrides it, and the pause menu has a Language row that switches while playing. Mission briefings come from the game data and stay in English. Press Enter or click a briefing panel to acknowledge it. After the movement briefing, drag a box around the starting soldiers and right-click the abandoned vehicle. You can also give individual soldiers separate orders. A short message shows how many units accepted the order.
+When launched without `--frames` or `--timing`, `ss2` searches in order:
+1. `--game-dir DIR`
+2. `SS2_GAME_DIR`
+3. `$XDG_DATA_HOME/ss2/game` (default `~/.local/share/ss2/game` on Linux; `%LOCALAPPDATA%\ss2\game` on Windows)
+4. The executable directory itself (`SDL_GetBasePath()`) if `sudtest.ini` or `game_common.sue` is present (so `ss2.exe` runs directly when copied into a retail/GOG folder)
 
-With a game directory present, the retail opening movies play first: the publisher logo (`movies/logo1.BIK`) then the intro cinematic (`movies/intro.BIK`). They are decoded from the original Bink files with FFmpeg and shown in their own window with sound, before the game window opens. Press Esc, Space, Enter or click to skip a movie, or pass `--no-movies` to go straight to the game. Movies are skipped automatically in headless runs and with `--frames`, `--timing` or `--overview`.
+Opening cinematics (`movies/logo1.BIK`, `movies/intro.BIK`, or HD `movies-hd/*.mkv`) play via FFmpeg before the main menu (`--no-movies` skips them).
 
-Enemies are hidden until the squad spots them, and they fire back. Right-clicking a spotted enemy issues an attack order. Pass `--no-auto-engage` to disable automatic firing on spotted enemies so that every attack is a manual order.
+## Features
 
-When a mission ends, the debrief reports the battle score, the enemy losses broken down into armor and guns, and the aircraft shot down. The best score for that mission is kept in `settings.ini` and shown next to the mission in the mission list. The force-status panel (`O`) carries a live battle score and air-support row.
+- **Full Retail Single-Player & Campaign Parity**: `Single Player` multi-profile manager (`New` / `Rename` / `Delete`), all 5 retail campaigns + `Custom Campaigns` (`maps/custom_campaign/`, `~/.local/share/ss2/custom_campaigns/`, or `%LOCALAPPDATA%\ss2\custom_campaigns`), animated `I-BRF` briefings with OKI ADPCM commander voices and looping `backwav` / `briefing` music, Screen 5 `loadscr.dat`, post-mission `Ratings` / battle stats, persistent `SS2SAVE2` save/load (`F1–F8` quick-save / bookmark slots), `Replay Browser` (`--record`, `--replay`), and `Options`.
+- **2–4 Player Lockstep Multiplayer**: Deterministic Star Host-Relay over TCP (`--host PORT`, `--join HOST:PORT`, `--mp-players`, `--mp-teams`, `--mp-nation`, `--list-multiplayer`), FFA / `2v2` / custom teams, Zeppelin capture economy, allied (`Shift+Enter` / `/a `) & global (`Enter`) chat, and `Alt+LeftClick` tactical flare beacons. Cross-ISA bit-for-bit simulation determinism is verified across ARM64 GCC, ARM64 Clang, x86-64, and x86-64-v3 (`-ffp-contract=off`).
+- **Out-of-the-Box Mods**: Supports `sudtest.ini` `[Data]` `;`-chains (`Common=`, `Menu=`, `Game=`, `Sounds=`, `Movies=`, `BackWav=`, `Addons=`, `Scheme1..N=`) and `[Game]` keys (`TurnDelay`, prefixes), `Scheme3` `desc_scheme3.sue` / `lang_desc_scheme3.sue`, unpacked raw or RFC-1952 gzip folder mounts (`mycommon\`), `FZFS` and standalone `addons/*.ssx` mission packs, and automatic discovery under `<gameDir>/mods/*`, `<gameDir>/Run/*` (MultiModSwitcher layout), `<gameDir>/switcher/*`, `<gameDir>/sudtest_*.ini`, and user `mods/`. Switch mods live in `Options -> Mod` or via `--list-mods` / `--mod NAME|DIR|INI`.
+- **Localization**: Full EN / FR / ES interface auto-detected from locale (`LC_ALL`, `LC_MESSAGES`, `LANG`), `--lang en|fr|es`, or `Options`.
+- **Optional 2× HD Pack**: Pass `--hd-pack DIR` or place `infantry-art/`, `audio-hd/`, `movies-hd/` under `~/.local/share/ss2/hd-pack` (`%LOCALAPPDATA%\ss2\hd-pack` on Windows). Pass `--original-infantry` for vanilla sizing.
 
-### Controls
+### In-game controls
 
 | Input | Effect |
 | --- | --- |
-| Left-click | Select one soldier and show its ID, HP, ammunition, group and owner |
-| Left-drag | Box-select a squad |
-| Double-click | Select all matching infantry in view |
-| Ctrl-double-click | Extend that selection across the map |
-| Shift | Toggle units in the selection |
-| Right-click | Order the selection to move, or to attack a spotted enemy |
-| Middle-drag, arrow keys | Pan the camera |
-| Wheel | Zoom |
-| Home | Fit the map |
-| Tab | Centre the camera on the selected squad; with one or no soldiers selected, cycle through the infantry |
-| M | Return to the latest mission marker, keeping the selection; zooms in first from the whole-map view |
-| V | Visit the eight placed tanks and guns |
-| S | Stop: cancel movement, attack and auto-target for the selection |
-| H | Toggle hold fire for the selection |
-| C | Toggle crouch stance for the selection (cover bonus, shorter sight) |
-| B | Toggle Officer binoculars for extended fog-of-war vision (cleared on movement) |
-| Ctrl+0..9, 0..9 | Assign the selection to a group number, recall it |
-| Ctrl+P or Pause | Pause and resume the mission clock |
-| F11 | Toggle fullscreen and windowed |
-| L | Open the message log with every briefing and order notice |
-| N | Play the next music track |
-| Ctrl+M | Mute or unmute the music |
-| Escape | Open or close the pause menu |
+| Left-click / Left-drag | Select unit or box-select squad |
+| Double-click / Ctrl-double-click | Select all matching types in view / across map |
+| Shift | Add or toggle units in selection |
+| Right-click | Move, board/enter, repair, attack spotted enemy, or issue command-bar action |
+| Middle-drag / Arrow keys / Wheel / Home | Pan, zoom, fit entire map |
+| `Tab` / `M` / `V` | Cycle infantry / jump to mission marker / cycle tanks & guns |
+| `S` / `H` / `C` / `B` / `X` | Stop / Hold fire / Crouch / Officer binoculars / Hatch toggle |
+| `Ctrl+0..9`, `0..9` | Assign / recall control group |
+| `F1–F8` | Quick-save / bookmark slots |
+| `Enter` / `Shift+Enter` / `Alt+Click` | Global chat / Allied chat / Tactical flare beacon (MP) |
+| `Ctrl+P` or `Pause`, `L`, `O`, `N`, `Ctrl+M` | Pause, Message Log, Force Status, Next Music Track, Mute Music |
+| `F11`, `Escape` | Toggle fullscreen, Open Pause Menu |
 
-### Optional HD pack
+## Build & Install
 
-A private HD pack can supply painted infantry for Tutorial I. Pass `--hd-pack DIR`, or install the pack under `$XDG_DATA_HOME/ss2/hd-pack` (default `~/.local/share/ss2/hd-pack`) for interactive launches. The renderer reads the separate ground layer `tutorial1_ground_2x.ss2hd` and the directional standing and walking sheets in `infantry-art/UNITID.png`. Each 512×320 RGBA sheet has eight columns (SE, S, SW, W, NW, N, NE, E), one standing row and four walking rows. Each 64×64 cell shares a foot anchor at (32, 58). Types without a painted sheet use their enlarged Gold frames. To use the original infantry size and artwork, pass `--original-infantry`.
+### Linux (Fedora / Bazzite / Debian / Asahi ARM64)
 
-The same pack may also carry audio. `audio-hd/` holds 48 kHz 16-bit or 24-bit WAV overrides for the sound groups (`<group>_<variant>.wav`), and `audio-hd/music/` holds the soundtrack tracks. Both are optional: without them the retail sound bank and the retail `MUSIC` folder are used. `--hd-pack DIR` selects the pack for all of them at once.
-
-The pack may also carry `movies-hd/<name>.mkv`, AI-upscaled replacements for the retail opening movies; the game prefers them over the retail BIK when present.
-
-### Where the game data comes from
-
-For interactive runs, `./build/ss2` also checks `SS2_GAME_DIR` and then `$XDG_DATA_HOME/ss2/game` (default `~/.local/share/ss2/game`). A directory or symlink there can point to the privately extracted game. A launch without game data still provides the original renderer smoke test. `--frames` and `--timing` only load retail data when a path is supplied explicitly.
-
-Use `--list-missions` to list all installed single-player missions (with map dimensions, terrain scheme, and descriptions). Pass `--mission NAME|INDEX|FILE.ssm` together with `--game-dir` (or `SS2_GAME_DIR`) to launch any single-player mission playable, or press **Escape → Missions** in-game to switch missions. Pass `--overview` (or `--mission FILE.ssm` without a game directory) to view only the mission's embedded JPEG overview. Tutorial I remains the default when `--mission` is omitted. [Format evidence and remaining gaps](docs/tutorial-map.md)
-
-## Build and run
-
-Use a C++20 toolchain, CMake 3.24+, SDL3 3.2+ and PangoCairo development files, zlib 1.2.9+ and libjpeg and libpng 1.6 development files, Vulkan 1.3 headers and loader, and a Vulkan-capable Linux driver. Python 3 runs the asset fixtures when building with tests. On this Apple M1 Pro, the same CMake commands build native ARM64 Linux and SDL selects the Wayland/Honeykrisp path. On Bazzite, build in a development environment with these packages and run in the desktop session with Mesa RADV. On this Mac, run `./build/ss2` from the checkout. To close automatically after 32 frames, run `./build/ss2 --frames 32`. The executable uses the system SDL3 and Vulkan libraries. Tutorial I uses the purchased game data and runs entirely in the Linux executable.
+Requirements: C++20 compiler (`g++` or `clang++`), CMake 3.24+, Ninja, SDL3 3.2+, PangoCairo, zlib 1.2.9+, libjpeg, libpng 1.6+, libvorbis (`libvorbisfile.so.3` loaded at runtime), FFmpeg (`libavformat`, `libavcodec`, `libswscale`, `libswresample`, `libavutil`), Vulkan 1.3 headers/loader + driver, and Python 3 (for CTest).
 
 ```sh
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
-./build/ss2
+./build/ss2 --help
+
+# Optional desktop & binary install (e.g. ~/.local or /usr/local)
+cmake --install build --prefix "$HOME/.local"
 ```
 
-`./build/ss2 --help` lists every option.
+Desktop files installed by `cmake --install`: `bin/ss2`, `share/applications/io.github.biosed.ss2.desktop`, `share/icons/hicolor/scalable/apps/io.github.biosed.ss2.svg`, and `share/metainfo/io.github.biosed.ss2.metainfo.xml`.
 
-For a bounded smoke run, use `./build/ss2 --frames 120`. For a timing run, select the desired desktop display mode first, then run `./build/ss2 --4k --fullscreen --timing`. Inspect the logged **actual swapchain extent**, device, driver, format and present mode. The timing run warms up for one second and measures at least ten seconds of intervals between successful application present returns. Display scanout timing requires compositor or display instrumentation.
+### Windows (x86-64 via MSYS2 UCRT64)
 
-## Tests
-
-Install the Khronos validation layer and configure a build with window tests enabled. A requested validation run fails if the layer is unavailable. SDL's offscreen driver plus Mesa lavapipe provides a headless test path on systems with headless surface support.
+Automated Windows builds (`ss2-windows-x86_64`) are built on every push by [`.github/workflows/windows.yml`](.github/workflows/windows.yml). To build locally in an MSYS2 `UCRT64` shell:
 
 ```sh
+pacman -S --needed \
+  mingw-w64-ucrt-x86_64-{gcc,cmake,ninja,ccache,pkgconf,python,SDL3,pango,zlib,libjpeg-turbo,libpng,ffmpeg,libvorbis,vulkan-headers,vulkan-loader}
+
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j"$(nproc)"
+ctest --test-dir build --output-on-failure
+cmake --install build --prefix dist/ss2-windows-x86_64
+```
+
+(Pass `-DSS2_WITH_FFMPEG=OFF` if building a minimal headless/CI target without FFmpeg.)
+
+## Tests & Verification
+
+Fifty-nine tests are registered in [CMakeLists.txt](CMakeLists.txt):
+
+```sh
+# Standard asset-free test suite (33 tests on Linux & Windows)
+ctest --test-dir build --output-on-failure
+
+# Full Linux Vulkan + Khronos validation suite (45 tests without retail data, 59 with SS2_PRIVATE_GAME)
 cmake --preset validation
 cmake --build --preset validation
 tools/ctest-validation.sh build-validation
-./build-validation/ss2 --validate --frames 16
-# Clang Debug ASan + UBSan sweep:
-cmake --preset sanitize && cmake --build --preset sanitize && tools/ctest-validation.sh build-sanitize
+
+# Clang ASan + UBSan + LSan sweep
+cmake --preset sanitize -DSS2_PRIVATE_GAME="$HOME/ss2-private/game/app"
+cmake --build --preset sanitize
+tools/ctest-validation.sh build-sanitize
+
+# Cross-ISA deterministic simulation verification (GCC, Clang, x86-64, x86-64-v3 FMA probe)
+./tools/check-cross-isa-sim.sh
 ```
-
-On the original ARM64 development host the Fedora layer was staged privately. To use that copy, set `VK_LAYER_PATH="$HOME/ss2-private/tools/fedora-aarch64/usr/share/vulkan/explicit_layer.d"` and add `$HOME/ss2-private/tools/fedora-aarch64/usr/lib64` to `LD_LIBRARY_PATH`. The default build requires the layer only when validation is requested.
-
-### What the suite contains
-
-Fifty-nine tests are registered. Which of them run depends on the configuration:
 
 | Configuration | Tests | Notes |
 | --- | --- | --- |
-| Default (`--preset release`) | 33 | Asset fixtures, movement, combat, `combat_parity`, `sim_determinism`, `visibility_parity`, `command_replay` (`stateHash()`), `lockstep`, HiDPI/frontend/`save_file`/movie/mission/string fixtures, clock and CLI checks |
-| `-DSS2_PRIVATE_GAME=DIR` | 45 | Adds the twelve private-gated retail tests that need the Gold installation |
-| `-DSS2_TEST_WINDOW=ON` | 44 | Adds the eleven window and WSI tests |
-| `-DSS2_TEST_WINDOW=ON -DSS2_TEST_VALIDATION=ON` (`--preset validation`) | 45 | Adds `missing_validation_layer` as the 12th validation/window check (requires the Khronos layer) |
-| `-DSS2_PRIVATE_GAME=DIR -DSS2_TEST_WINDOW=ON` | 58 | Both sets above plus `gold_cli_record_replay` (`--record` / `--replay` end-to-end check) and `gold_session_input` |
-| All three | 59 | Everything, on a host with the validation layer |
+| Default / Windows (`--preset release`) | 33 | Sim determinism, `combat_parity`, `visibility_parity`, `tutorial_vm`, `lockstep` TCP, SUE/mission/addon/mod VFS, `save_file`, frontend/strings/movie, CLI |
+| `-DSS2_TEST_WINDOW=ON -DSS2_TEST_VALIDATION=ON` (`--preset validation`) | 45 | Adds 12 Vulkan window/WSI/UI/VFX validation tests (Linux CI matrix in `.github/workflows/linux.yml` inside `fedora:45`, plus `cross-isa-determinism`) |
+| `-DSS2_PRIVATE_GAME=DIR` (with window+validation) | 59 | Adds 12 retail trace/VM/scene/sound/movie tests plus `gold_cli_record_replay` & `gold_session_input` |
 
-The twelve private-gated retail tests are skipped without `-DSS2_PRIVATE_GAME` because they need the purchased installation, which is never committed. The eleven window/WSI tests need a Vulkan WSI surface, the 12th validation check (`missing_validation_layer`) needs the Khronos validation layer to be installed, and the two combined session tests (`gold_cli_record_replay`, `gold_session_input`) require both `-DSS2_PRIVATE_GAME` and `-DSS2_TEST_WINDOW`.
-
-### Hosted CI
-
-`.github/workflows/linux.yml` defines matrix legs across `ubuntu-24.04` (x86-64) and `ubuntu-24.04-arm` (ARM64) for `g++` Release and `clang++` Debug with AddressSanitizer and UndefinedBehaviorSanitizer inside `fedora:44`. It configures `-DSS2_TEST_WINDOW=ON -DSS2_TEST_VALIDATION=ON` with `SDL_VIDEO_DRIVER=offscreen`, covering all 45 tests that need no private game data. The workflow has never been dispatched: no Git remote is configured for this repository. [Validation record](docs/validation.md)
-
-### Coverage of the combat path
-
-`combat_parity` replays the matched-fields encounter from the Gold 2.2 oracle fixture and compares every tick and every event: 120 ticks × 13 fields and all 21 events, down to the final RNG state. A second, clearly labelled section of the same table pins native behaviour for the two-sided duel and the march-pause engage, which no oracle fixture covers. Both sections fail the build on the first divergent tick, and the regression section can be regenerated with one command when a change is intentional. [Parity and regression coverage](docs/validation.md#coverage-of-the-combat-path)
-
-Later milestones widened that coverage beyond the matched encounter. One milestone added the retail secondary-explosion chain, crew degradation from the `attackcrew` and `movecrew` keys with Medic and Ambulance recovery, water and shallows movement for naval units, and the battle scoring described above. The next added finite supply crates and supply trucks, and the retail High Ground sight advantage (`0x2000u`), which gives two extra sight tiles and twelve percent more firing range when firing downhill. A third added the retail `attackpref` target-priority matrix, infantry suppression from machine gun, heavy machine gun and mortar fire with an Officer nearby clearing it faster, and a live morale meter `M` in the HUD selection panel. Wheeled and tracked vehicles now differ in the shallows, and the Armored Train carries its own tooltip. Sixteen further milestones (Phase 5D through Phase 5S) continued the retail parity work. They added the aircraft catalog, turret traverse and aim gating, gun crushing and open-top passenger fire; bombardment scatter, per-shot experience and the lossless `SS2SNAP3` save format; exposed tank desant riders, General and Officer command auras, repair spare-parts costs, gun stabilization delays, qualified-crew capture and propaganda leaflet bombers. Later phases added garrisoned firing rules, prone anti-tank deployment and multi-round ammunition; crew vulnerability scaling, experience under fire and under-crewed immobility; vehicle crew shock, air-versus-ground flak audio and building occupant suppression; indirect ballistic fire with crater scaling and open-cab triage; building armour, a mission star rating and French voice routing; altitude-scaled anti-aircraft fire, rocket salvos and garrison range bonuses; mine warfare parity, airborne drops and rider protection; and ground-attack hit-type parity, secondary turrets, artillery bailout crews and fearless fire. The last two wired the OP(3)/OP(4) unit-state count masks end to end with cook-off and plane-crash blasts, then corrected the crew-first reinforcement passenger order, raised the landing-craft capacity and added mission-authored experience scaling and `movespeed`/`crouchmovespeed` veterancy mobility. Phase 5R added spatial ambient sound emitters, weather visibility scaling (not yet selected at mission runtime), submachine-gun grenade ground-attack, an open-top firing dead zone and vehicle scan-delay and crush experience. Phase 5S added the retail commander hatch toggle with sniper exposure, logistics and mine veterancy, vehicle morale panic reverse and officer fervor, and infantry death voice cues. [Validation record](docs/validation.md#coverage-of-the-combat-path)
-
-## Hardware acceptance
-
-The acceptance target is a BC-250 running Bazzite with RADV at 3840×2160 and 120 Hz. It is the one gate that no software-only run can close: the presentation figures in the validation record characterise the application on an M1 Pro, not the physical scanout of that machine. [BC-250 run](docs/validation.md#hardware-acceptance-bc-250)
+**Hardware acceptance (passed)**: Native x86-64 Fedora 44 container on Bazzite 45 (AMD BC-250 / RADV GFX1013, 3840×2160@120 Hz Wayland): `59/59` validation CTests, `8/8` live Wayland WSI tests, zero Vulkan validation errors, steady `p50=8.33 ms` frame pacing, and bit-identical simulation hashes with ARM64. See [docs/validation.md](docs/validation.md).
 
 ## Repository layout
 
 | Path | Responsibility |
 | --- | --- |
-| src/main.cpp | SDL application lifetime, input, presentation loop and optional frame statistics |
-| src/assets/ | Read SUE, PCK, mission and tutorial scene assets, the optional HD pack, painted infantry atlases and the sound bank |
-| src/audio/ | SDL3 audio stream playback for the decoded sound bank |
-| src/sim/ | Platform-independent mission clock, movement, vehicles, unit orders, fog of war, lockstep coordinator and combat |
-| src/net/ | Non-blocking POSIX TCP transport and lockstep multiplayer handshake |
-| src/session/ | Playable mission session orchestrator, `SS2SAVE1` save files and lockstep pumping |
-| src/render/ | Vulkan device selection, presentation, swapchain lifecycle and validation callbacks |
-| src/ui/ | Briefing panel, HUD, pause menu, tooltips, localization strings and unit/vehicle selection |
-| src/video/ | FFmpeg Bink movie decoder and SDL3 opening cinematic player |
-| include/ss2/simulation.hpp | Platform-independent step, tick accumulator and snapshot boundary |
-| tests/ | Clock behavior, CLI diagnostics, real window resizing, injected WSI recovery, movement, combat and the parity test |
-| tools/ | Private installation inventory, repeatable Ghidra analysis scripts and the X11 playtest driver |
-| docs/ | Version-pinned upstream audit, original module evidence, validation results and milestone plan |
-| .github/workflows/ | x86-64 and ARM64 GCC Release and Clang sanitizer build/test definitions |
-
-The `ss2_sprite` executable runs the [SUE/PCK reference slice](docs/asset-reference.md) against a private game installation. Reserve `src/sim/` for behavior supported by original observations. Keep private installations, captures, save files, and Ghidra databases in a directory outside this project.
-
-## Documents
-
-| Document | Contents |
-| --- | --- |
-| [Validation record](docs/validation.md) | Current status, test coverage, timing measurements, the Gold comparison and the dated run log |
-| [Tutorial simulation evidence](docs/tutorial-simulation.md) | The playable opening objective, movement orders and convoy replay |
-| [Tutorial I map](docs/tutorial-map.md) | Scene reconstruction, decoded placements, tanks and guns |
-| [Reverse engineering](docs/reverse-engineering.md) | Gold 2.2 binary evidence and the Ghidra workflow |
-| [Source audit](docs/source-audit.md) | Version-pinned audit of the upstream references |
-| [Implementation plan](docs/implementation-plan.md) | Milestone plan and division of work |
-| [Asset reference](docs/asset-reference.md) | Supported SUE/PCK subset and retail comparison |
+| `src/main.cpp` | CLI flags (`--mod`, `--list-mods`, `--host`, `--join`, `--record`, `--replay`), startup/game-dir discovery, Vulkan/SDL main loop |
+| `src/assets/` | SUE/SSX archives, `sudtest.ini` VFS & loose/gzip mod mounts, missions, CAOF assets, PCK/ANI/RS2 sprites, terrains, catalogs, sound banks |
+| `src/audio/` | SDL3 audio stream SFX mixer and dynamic `libvorbisfile` Ogg soundtrack player |
+| `src/sim/` | Fixed-36 ms deterministic mission clock, infantry/vehicle/air/bridge/building/mine sim, CAOF VM, lockstep protocol |
+| `src/net/` | Cross-platform non-blocking TCP (`Winsock2` + POSIX sockets) and 2–4p Star Host-Relay transport |
+| `src/session/` | Playable session orchestrator, input/orders/menus, `SS2SAVE2` save/load, replay, and lockstep sync |
+| `src/render/` | Vulkan 1.3 device selection, swapchain lifecycle, sprite/terrain shaders, validation reporting |
+| `src/ui/` | Gold 2.2 front end, `Options -> Mod`, `I-BRF` briefings, tactical HUD, tooltips, EN/FR/ES strings |
+| `src/video/` | FFmpeg `.BIK`/`.MKV` decoder and SDL3 opening cinematic player |
+| `packaging/` | Freedesktop `.desktop`, vector icon, and AppStream metadata for Linux desktop/Bazzite installs |
+| `.github/workflows/` | `linux.yml` (`fedora:45` x86-64/ARM64 Release+ASan/UBSan + `cross-isa-determinism`) & `windows.yml` (MSYS2 UCRT64 + standalone zip) |
+| `docs/` | Reverse engineering (`gog-13718-pe.tsv`), source audit, determinism audit, implementation plan, and validation record |

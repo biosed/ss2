@@ -286,7 +286,11 @@ std::vector<std::uint8_t> readMission(const std::filesystem::path& mission) {
         }
     }
 
+#ifdef _WIN32
+    std::unique_ptr<gzFile_s, decltype(&gzclose)> file(gzopen_w(mission.c_str(), "rb"), gzclose);
+#else
     std::unique_ptr<gzFile_s, decltype(&gzclose)> file(gzopen(mission.c_str(), "rb"), gzclose);
+#endif
     if (!file || gzdirect(file.get())) throw std::runtime_error("Expected a gzip-compressed mission");
     std::array<std::uint8_t, 65536> buffer;
     std::vector<std::uint8_t> bytes;

@@ -1,9 +1,21 @@
 #include "net/tcp_transport.hpp"
 
 #include <algorithm>
-#include <arpa/inet.h>
 #include <cerrno>
 #include <cstring>
+#include <utility>
+
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
+#include <arpa/inet.h>
 #include <fcntl.h>
 #include <netdb.h>
 #include <netinet/in.h>
@@ -12,17 +24,87 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
-#include <utility>
+#endif
 
 namespace ss2 {
 namespace {
 
-bool setNonBlockingAndNoDelay(int fd) {
-    const int flags = ::fcntl(fd, F_GETFL, 0);
-    if (flags < 0 || ::fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) return false;
-    const int one = 1;
-    (void)::setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
+using SocketHandle = TcpConnection::SocketHandle;
+constexpr SocketHandle kInvalidSocket = TcpConnection::kInvalidSocket;
+
+void ensureWinsockInitialized() {
+#ifdef _WIN32
+    static const bool initialized = [] {
+        WSADATA wsa{};
+        return ::WSAStartup(MAKEWORD(2, 2), &wsa) == 0;
+    }();
+    (void)initialized;
+#endif
+}
+
+void closeSocket(SocketHandle fd) {
+    if (fd == kInvalidSocket) return;
+#ifdef _WIN32
+    ::closesocket(static_cast<SOCKET>(fd));
+#else
+    ::close(static_cast<int>(fd));
+#endif
+}
+
+int lastSockError() {
+#ifdef _WIN32
+    return ::WSAGetLastError();
+#else
+    return errno;
+#endif
+}
+
+std::string sockErrorString(int err) {
+#ifdef _WIN32
+    return "Winsock error " + std::to_string(err);
+#else
+    return std::strerror(err);
+#endif
+}
+
+bool isWouldBlockErr(int err) {
+#ifdef _WIN32
+    return err == WSAEWOULDBLOCK || err == WSAEINPROGRESS;
+#else
+    return err == EAGAIN || err == EWOULDBLOCK;
+#endif
+}
+
+bool isConnectInProgressErr(int err) {
+#ifdef _WIN32
+    return err == WSAEWOULDBLOCK || err == WSAEINPROGRESS;
+#else
+    return err == EINPROGRESS;
+#endif
+}
+
+bool isIntrErr(int err) {
+#ifdef _WIN32
+    return err == WSAEINTR;
+#else
+    return err == EINTR;
+#endif
+}
+
+bool setNonBlockingAndNoDelay(SocketHandle fd) {
+#ifdef _WIN32
+    u_long nonBlock = 1;
+    if (::ioctlsocket(static_cast<SOCKET>(fd), FIONBIO, &nonBlock) != 0) return false;
+    const char one = 1;
+    (void)::setsockopt(static_cast<SOCKET>(fd), IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
     return true;
+#else
+    const int flags = ::fcntl(static_cast<int>(fd), F_GETFL, 0);
+    if (flags < 0 || ::fcntl(static_cast<int>(fd), F_SETFL, flags | O_NONBLOCK) < 0) return false;
+    const int one = 1;
+    (void)::setsockopt(static_cast<int>(fd), IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
+    return true;
+#endif
 }
 
 std::string formatSockAddr(const struct sockaddr* sa, socklen_t len) {
@@ -39,7 +121,7 @@ std::string formatSockAddr(const struct sockaddr* sa, socklen_t len) {
 TcpConnection::~TcpConnection() { close(); }
 
 TcpConnection::TcpConnection(TcpConnection&& other) noexcept
-    : fd_(std::exchange(other.fd_, -1)),
+    : fd_(std::exchange(other.fd_, kInvalidSocket)),
       connected_(std::exchange(other.connected_, false)),
       connecting_(std::exchange(other.connecting_, false)),
       peerAddress_(std::move(other.peerAddress_)),
@@ -50,7 +132,7 @@ TcpConnection::TcpConnection(TcpConnection&& other) noexcept
 TcpConnection& TcpConnection::operator=(TcpConnection&& other) noexcept {
     if (this != &other) {
         close();
-        fd_ = std::exchange(other.fd_, -1);
+        fd_ = std::exchange(other.fd_, kInvalidSocket);
         connected_ = std::exchange(other.connected_, false);
         connecting_ = std::exchange(other.connecting_, false);
         peerAddress_ = std::move(other.peerAddress_);
@@ -61,20 +143,21 @@ TcpConnection& TcpConnection::operator=(TcpConnection&& other) noexcept {
     return *this;
 }
 
-TcpConnection TcpConnection::adoptConnectedSocket(int fd, std::string peerAddr) {
+TcpConnection TcpConnection::adoptConnectedSocket(SocketHandle fd, std::string peerAddr) {
     TcpConnection c;
     c.fd_ = fd;
-    c.connected_ = (fd >= 0);
+    c.connected_ = (fd != kInvalidSocket);
     c.connecting_ = false;
     c.peerAddress_ = std::move(peerAddr);
-    if (fd >= 0 && !setNonBlockingAndNoDelay(fd)) {
-        c.lastError_ = std::strerror(errno);
+    if (fd != kInvalidSocket && !setNonBlockingAndNoDelay(fd)) {
+        c.lastError_ = sockErrorString(lastSockError());
         c.close();
     }
     return c;
 }
 
 TcpConnection TcpConnection::connectNonBlocking(const std::string& host, std::uint16_t port) {
+    ensureWinsockInitialized();
     TcpConnection conn;
     if (host.empty() || port == 0) {
         conn.lastError_ = "Invalid host or port";
@@ -92,50 +175,74 @@ TcpConnection TcpConnection::connectNonBlocking(const std::string& host, std::ui
         return conn;
     }
 
-    int lastErr = ECONNREFUSED;
+    int lastErr = 0;
     for (struct addrinfo* it = res; it != nullptr; it = it->ai_next) {
-        const int fd = ::socket(it->ai_family, it->ai_socktype, it->ai_protocol);
-        if (fd < 0) {
-            lastErr = errno;
+#ifdef _WIN32
+        const SOCKET rawSock = ::socket(it->ai_family, it->ai_socktype, it->ai_protocol);
+        const SocketHandle fd = (rawSock == INVALID_SOCKET) ? kInvalidSocket : static_cast<SocketHandle>(rawSock);
+#else
+        const SocketHandle fd = static_cast<SocketHandle>(::socket(it->ai_family, it->ai_socktype, it->ai_protocol));
+#endif
+        if (fd == kInvalidSocket) {
+            lastErr = lastSockError();
             continue;
         }
         if (!setNonBlockingAndNoDelay(fd)) {
-            lastErr = errno;
-            ::close(fd);
+            lastErr = lastSockError();
+            closeSocket(fd);
             continue;
         }
-        const int rc = ::connect(fd, it->ai_addr, it->ai_addrlen);
+        const int rc = ::connect(fd, it->ai_addr, static_cast<socklen_t>(it->ai_addrlen));
         if (rc == 0) {
             conn.fd_ = fd;
             conn.connected_ = true;
             conn.connecting_ = false;
-            conn.peerAddress_ = formatSockAddr(it->ai_addr, it->ai_addrlen);
+            conn.peerAddress_ = formatSockAddr(it->ai_addr, static_cast<socklen_t>(it->ai_addrlen));
             ::freeaddrinfo(res);
             return conn;
         }
-        if (errno == EINPROGRESS) {
+        const int err = lastSockError();
+        if (isConnectInProgressErr(err)) {
             conn.fd_ = fd;
             conn.connected_ = false;
             conn.connecting_ = true;
-            conn.peerAddress_ = formatSockAddr(it->ai_addr, it->ai_addrlen);
+            conn.peerAddress_ = formatSockAddr(it->ai_addr, static_cast<socklen_t>(it->ai_addrlen));
             ::freeaddrinfo(res);
             return conn;
         }
-        lastErr = errno;
-        ::close(fd);
+        lastErr = err;
+        closeSocket(fd);
     }
     ::freeaddrinfo(res);
-    conn.lastError_ = std::strerror(lastErr);
+    conn.lastError_ = lastErr != 0 ? sockErrorString(lastErr) : "Connection refused";
     return conn;
 }
 
 bool TcpConnection::pollConnected() {
-    if (fd_ < 0) return false;
+    if (fd_ == kInvalidSocket) return false;
     if (connected_) return true;
     if (!connecting_) return false;
 
+#ifdef _WIN32
+    fd_set wfds;
+    fd_set efds;
+    FD_ZERO(&wfds);
+    FD_ZERO(&efds);
+    FD_SET(static_cast<SOCKET>(fd_), &wfds);
+    FD_SET(static_cast<SOCKET>(fd_), &efds);
+    struct timeval tv{0, 0};
+    const int rc = ::select(0, nullptr, &wfds, &efds, &tv);
+    if (rc < 0) {
+        const int err = lastSockError();
+        if (isIntrErr(err)) return false;
+        lastError_ = sockErrorString(err);
+        close();
+        return false;
+    }
+    if (rc == 0) return false;
+#else
     struct pollfd pfd{};
-    pfd.fd = fd_;
+    pfd.fd = static_cast<int>(fd_);
     pfd.events = POLLOUT;
     const int rc = ::poll(&pfd, 1, 0);
     if (rc < 0) {
@@ -145,16 +252,21 @@ bool TcpConnection::pollConnected() {
         return false;
     }
     if (rc == 0) return false;
+#endif
 
     int err = 0;
     socklen_t errLen = sizeof(err);
-    if (::getsockopt(fd_, SOL_SOCKET, SO_ERROR, &err, &errLen) < 0) {
-        lastError_ = std::strerror(errno);
+#ifdef _WIN32
+    if (::getsockopt(static_cast<SOCKET>(fd_), SOL_SOCKET, SO_ERROR, reinterpret_cast<char*>(&err), &errLen) < 0) {
+#else
+    if (::getsockopt(static_cast<int>(fd_), SOL_SOCKET, SO_ERROR, &err, &errLen) < 0) {
+#endif
+        lastError_ = sockErrorString(lastSockError());
         close();
         return false;
     }
     if (err != 0) {
-        lastError_ = std::strerror(err);
+        lastError_ = sockErrorString(err);
         close();
         return false;
     }
@@ -164,25 +276,33 @@ bool TcpConnection::pollConnected() {
 }
 
 bool TcpConnection::sendPacket(const LockstepPacket& packet) {
-    if (fd_ < 0) return false;
+    if (fd_ == kInvalidSocket) return false;
     const auto frame = encodeLockstepPacket(packet);
     txBuf_.insert(txBuf_.end(), frame.begin(), frame.end());
     return flush();
 }
 
 bool TcpConnection::flush() {
-    if (fd_ < 0) return false;
+    if (fd_ == kInvalidSocket) return false;
     if (!connected_ && !pollConnected()) return !connecting_ ? false : true;
     std::size_t sentOffset = 0;
     while (sentOffset < txBuf_.size()) {
-        const ssize_t n = ::send(fd_, txBuf_.data() + sentOffset, txBuf_.size() - sentOffset, MSG_NOSIGNAL);
+        const auto remaining = txBuf_.size() - sentOffset;
+#ifdef _WIN32
+        const int chunk = static_cast<int>(std::min<std::size_t>(remaining, 1u << 20));
+        const int n = ::send(static_cast<SOCKET>(fd_),
+                             reinterpret_cast<const char*>(txBuf_.data() + sentOffset), chunk, 0);
+#else
+        const ssize_t n = ::send(static_cast<int>(fd_), txBuf_.data() + sentOffset, remaining, MSG_NOSIGNAL);
+#endif
         if (n > 0) {
             sentOffset += static_cast<std::size_t>(n);
             continue;
         }
-        if (n < 0 && (errno == EINTR)) continue;
-        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) break;
-        lastError_ = n == 0 ? "Connection closed during send" : std::strerror(errno);
+        const int err = lastSockError();
+        if (n < 0 && isIntrErr(err)) continue;
+        if (n < 0 && isWouldBlockErr(err)) break;
+        lastError_ = n == 0 ? "Connection closed during send" : sockErrorString(err);
         close();
         return false;
     }
@@ -193,14 +313,19 @@ bool TcpConnection::flush() {
 }
 
 bool TcpConnection::pollPackets(std::vector<LockstepPacket>& outPackets) {
-    if (fd_ < 0) return false;
+    if (fd_ == kInvalidSocket) return false;
     if (!connected_ && !pollConnected()) return connecting_;
     (void)flush();
-    if (fd_ < 0) return false;
+    if (fd_ == kInvalidSocket) return false;
 
     std::array<std::uint8_t, 16384> tmp{};
     for (;;) {
-        const ssize_t n = ::recv(fd_, tmp.data(), tmp.size(), 0);
+#ifdef _WIN32
+        const int n = ::recv(static_cast<SOCKET>(fd_), reinterpret_cast<char*>(tmp.data()),
+                             static_cast<int>(tmp.size()), 0);
+#else
+        const ssize_t n = ::recv(static_cast<int>(fd_), tmp.data(), tmp.size(), 0);
+#endif
         if (n > 0) {
             rxBuf_.insert(rxBuf_.end(), tmp.begin(), tmp.begin() + n);
             continue;
@@ -210,9 +335,10 @@ bool TcpConnection::pollPackets(std::vector<LockstepPacket>& outPackets) {
             close();
             break;
         }
-        if (errno == EINTR) continue;
-        if (errno == EAGAIN || errno == EWOULDBLOCK) break;
-        lastError_ = std::strerror(errno);
+        const int err = lastSockError();
+        if (isIntrErr(err)) continue;
+        if (isWouldBlockErr(err)) break;
+        lastError_ = sockErrorString(err);
         close();
         return false;
     }
@@ -231,13 +357,13 @@ bool TcpConnection::pollPackets(std::vector<LockstepPacket>& outPackets) {
         }
         break;
     }
-    return fd_ >= 0;
+    return fd_ != kInvalidSocket;
 }
 
 void TcpConnection::close() {
-    if (fd_ >= 0) {
-        ::close(fd_);
-        fd_ = -1;
+    if (fd_ != kInvalidSocket) {
+        closeSocket(fd_);
+        fd_ = kInvalidSocket;
     }
     connected_ = false;
     connecting_ = false;
@@ -246,29 +372,35 @@ void TcpConnection::close() {
 TcpListener::~TcpListener() { close(); }
 
 TcpListener::TcpListener(TcpListener&& other) noexcept
-    : fd_(std::exchange(other.fd_, -1)), lastError_(std::move(other.lastError_)) {}
+    : fd_(std::exchange(other.fd_, TcpConnection::kInvalidSocket)), lastError_(std::move(other.lastError_)) {}
 
 TcpListener& TcpListener::operator=(TcpListener&& other) noexcept {
     if (this != &other) {
         close();
-        fd_ = std::exchange(other.fd_, -1);
+        fd_ = std::exchange(other.fd_, TcpConnection::kInvalidSocket);
         lastError_ = std::move(other.lastError_);
     }
     return *this;
 }
 
 bool TcpListener::listen(std::uint16_t port, const std::string& bindAddr) {
+    ensureWinsockInitialized();
     close();
-    const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) {
-        lastError_ = std::strerror(errno);
+#ifdef _WIN32
+    const SOCKET rawSock = ::socket(AF_INET, SOCK_STREAM, 0);
+    const SocketHandle fd = (rawSock == INVALID_SOCKET) ? kInvalidSocket : static_cast<SocketHandle>(rawSock);
+#else
+    const SocketHandle fd = static_cast<SocketHandle>(::socket(AF_INET, SOCK_STREAM, 0));
+    const int one = 1;
+    if (fd != kInvalidSocket) (void)::setsockopt(static_cast<int>(fd), SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+#endif
+    if (fd == kInvalidSocket) {
+        lastError_ = sockErrorString(lastSockError());
         return false;
     }
-    const int one = 1;
-    (void)::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
     if (!setNonBlockingAndNoDelay(fd)) {
-        lastError_ = std::strerror(errno);
-        ::close(fd);
+        lastError_ = sockErrorString(lastSockError());
+        closeSocket(fd);
         return false;
     }
     struct sockaddr_in addr{};
@@ -278,13 +410,13 @@ bool TcpListener::listen(std::uint16_t port, const std::string& bindAddr) {
         addr.sin_addr.s_addr = htonl(INADDR_ANY);
     } else if (::inet_pton(AF_INET, bindAddr.c_str(), &addr.sin_addr) != 1) {
         lastError_ = "Invalid bind address: " + bindAddr;
-        ::close(fd);
+        closeSocket(fd);
         return false;
     }
     if (::bind(fd, reinterpret_cast<const struct sockaddr*>(&addr), sizeof(addr)) < 0 ||
         ::listen(fd, 8) < 0) {
-        lastError_ = std::strerror(errno);
-        ::close(fd);
+        lastError_ = sockErrorString(lastSockError());
+        closeSocket(fd);
         return false;
     }
     fd_ = fd;
@@ -293,7 +425,7 @@ bool TcpListener::listen(std::uint16_t port, const std::string& bindAddr) {
 }
 
 std::uint16_t TcpListener::boundPort() const {
-    if (fd_ < 0) return 0;
+    if (fd_ == kInvalidSocket) return 0;
     struct sockaddr_in addr{};
     socklen_t len = sizeof(addr);
     if (::getsockname(fd_, reinterpret_cast<struct sockaddr*>(&addr), &len) < 0) return 0;
@@ -301,13 +433,19 @@ std::uint16_t TcpListener::boundPort() const {
 }
 
 std::optional<TcpConnection> TcpListener::pollAccept() {
-    if (fd_ < 0) return std::nullopt;
+    if (fd_ == kInvalidSocket) return std::nullopt;
     struct sockaddr_storage ss{};
     socklen_t len = sizeof(ss);
-    const int clientFd = ::accept(fd_, reinterpret_cast<struct sockaddr*>(&ss), &len);
-    if (clientFd < 0) {
-        if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
-            lastError_ = std::strerror(errno);
+#ifdef _WIN32
+    const SOCKET clientRaw = ::accept(static_cast<SOCKET>(fd_), reinterpret_cast<struct sockaddr*>(&ss), &len);
+    const SocketHandle clientFd = (clientRaw == INVALID_SOCKET) ? kInvalidSocket : static_cast<SocketHandle>(clientRaw);
+#else
+    const SocketHandle clientFd = static_cast<SocketHandle>(::accept(static_cast<int>(fd_), reinterpret_cast<struct sockaddr*>(&ss), &len));
+#endif
+    if (clientFd == kInvalidSocket) {
+        const int err = lastSockError();
+        if (!isWouldBlockErr(err) && !isIntrErr(err)) {
+            lastError_ = sockErrorString(err);
         }
         return std::nullopt;
     }
@@ -318,9 +456,9 @@ std::optional<TcpConnection> TcpListener::pollAccept() {
 }
 
 void TcpListener::close() {
-    if (fd_ >= 0) {
-        ::close(fd_);
-        fd_ = -1;
+    if (fd_ != kInvalidSocket) {
+        closeSocket(fd_);
+        fd_ = kInvalidSocket;
     }
 }
 
