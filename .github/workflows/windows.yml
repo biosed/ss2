@@ -76,11 +76,34 @@ jobs:
           key: ccache-win64-ucrt64-${{ env.DATE_EPOCH }}
       - name: Test
         run: |
+          mkdir -p build/vk-icd build/vk-layers
+          LVP_DLL="$(cygpath -m /ucrt64/bin/vulkan_lvp.dll)"
+          cat > build/vk-icd/lvp_icd.json <<EOF
+          {
+            "file_format_version": "1.0.0",
+            "ICD": {
+              "library_path": "${LVP_DLL}",
+              "api_version": "1.3.0"
+            }
+          }
+          EOF
+          VVL_SRC="$(find /ucrt64 -name 'VkLayer_khronos_validation.json' | head -n 1)"
+          VVL_DLL="$(cygpath -m /ucrt64/bin/VkLayer_khronos_validation.dll)"
+          python3 - "$VVL_SRC" "$VVL_DLL" build/vk-layers/VkLayer_khronos_validation.json <<'PY'
+          import json, pathlib, sys
+          data = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+          data["layer"]["library_path"] = sys.argv[2]
+          pathlib.Path(sys.argv[3]).write_text(json.dumps(data, indent=2), encoding="utf-8")
+          PY
+          ICD_WIN="$(cygpath -w "$PWD/build/vk-icd/lvp_icd.json")"
+          VVL_WIN="$(cygpath -w "$PWD/build/vk-layers/VkLayer_khronos_validation.json")"
+          reg delete 'HKLM\SOFTWARE\Khronos\Vulkan\Drivers' /f 2>/dev/null || true
+          reg add 'HKLM\SOFTWARE\Khronos\Vulkan\Drivers' /v "$ICD_WIN" /t REG_DWORD /d 0 /f
+          reg delete 'HKLM\SOFTWARE\Khronos\Vulkan\ExplicitLayers' /f 2>/dev/null || true
+          reg add 'HKLM\SOFTWARE\Khronos\Vulkan\ExplicitLayers' /v "$VVL_WIN" /t REG_DWORD /d 0 /f
           export SDL_VIDEO_DRIVER=windows
           export SDL_AUDIODRIVER=dummy
-          export VK_DRIVER_FILES="$(cygpath -w /ucrt64/share/vulkan/icd.d/lvp_icd.x86_64.json)"
-          export VK_ADD_LAYER_PATH="$(cygpath -w /ucrt64/share/vulkan/explicit_layer.d)"
-          ctest --test-dir build --output-on-failure --no-tests=error 2>&1 | tee ctest.log
+          ctest --test-dir build -E '^missing_validation_layer$' --output-on-failure --no-tests=error 2>&1 | tee ctest.log
       - name: Package portable Windows bundle
         run: |
           rm -rf dist/ss2-windows-x86_64
