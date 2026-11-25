@@ -536,6 +536,7 @@ bool GameSession::updateViewTooltipAndPresent() {
         if (!showTip) tooltip.hide();
     }
     if (audio) audio->updateMusic();
+    if (enhancedGraphics && !paused) applyMapGraphics();
     if (orderNotice.advance(noticeFrame - lastNoticeFrame) && paused && !menu.active()) showPause();
     lastNoticeFrame = noticeFrame;
     tooltip.draw(renderer);

@@ -755,6 +755,12 @@ void GoldFrontEnd::onScreenChanged(FrontEnd::Screen previous) {
         if (previous == FrontEnd::Screen::Briefing) {
             clearBriefingMedia();
         }
+        if (assets_ && previous == FrontEnd::Screen::Multiplayer &&
+            fe_.screen() != FrontEnd::Screen::Multiplayer && assets_->lanScannerActive) {
+            assets_->lanScanner.stop();
+            assets_->lanScannerActive = false;
+            assets_->lastLanCount = 0u;
+        }
         hoveredId_.clear();
         draggingThumb_ = false;
         briefScroll_ = 0.0;
@@ -825,6 +831,10 @@ void GoldFrontEnd::onScreenChanged(FrontEnd::Screen previous) {
             ensureSelectionVisible();
             if (const auto sel = fe_.selectedMultiplayerMission(); sel < mpMissions_.size()) {
                 ensureOverviewLoaded(mpMissions_[sel].path);
+            }
+            if (assets_ && !fe_.mpIsHost() && !assets_->lanScannerActive) {
+                assets_->lanScannerActive = assets_->lanScanner.start(kDefaultLanDiscoveryPort);
+                assets_->lastLanCount = assets_->lanScanner.games().size();
             }
         } else if (fe_.screen() == FrontEnd::Screen::Options) {
             beginOptionsEdit();
@@ -1074,6 +1084,11 @@ void GoldFrontEnd::activateId(const std::string& id) {
         return;
     }
     if (prev == FrontEnd::Screen::Options) {
+        if (id == "opt_enhanced_gfx") {
+            focusedId_ = id;
+            adjustOption(id, 1);
+            return;
+        }
         if (id == "ok") commitOptionsEdit();
         else if (id == "cancel" || id == "back") cancelOptionsEdit();
     }
@@ -1417,6 +1432,24 @@ void GoldFrontEnd::advance(std::chrono::nanoseconds dt) {
     }
     if (fe_.screen() == FrontEnd::Screen::Briefing) {
         advanceBriefingMedia(dt);
+    }
+    if (assets_ && fe_.screen() == FrontEnd::Screen::Multiplayer) {
+        if (!fe_.mpIsHost()) {
+            if (!assets_->lanScannerActive) {
+                assets_->lanScannerActive = assets_->lanScanner.start(kDefaultLanDiscoveryPort);
+            }
+            if (assets_->lanScannerActive) {
+                assets_->lanScanner.poll();
+                if (assets_->lanScanner.games().size() != assets_->lastLanCount) {
+                    assets_->lastLanCount = assets_->lanScanner.games().size();
+                    dirty_ = true;
+                }
+            }
+        } else if (assets_->lanScannerActive) {
+            assets_->lanScanner.stop();
+            assets_->lanScannerActive = false;
+            assets_->lastLanCount = 0u;
+        }
     }
     if (fe_.screen() == FrontEnd::Screen::Credits && !creditsPaused_) {
         const double dtSec = std::clamp(std::chrono::duration<double>(dt).count(), 0.0, 0.25);

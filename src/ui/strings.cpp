@@ -1064,6 +1064,10 @@ constexpr Entry table[] = {
      "{0} ({1} disponibles) : clic gauche sur la zone cible.",
      "{0} ({1} listas): clic izquierdo en la zona objetivo."},
     {"{0} dispatched!", "{0} en route !", "¡{0} enviado!"},
+    {"Joined LAN lobby: {0}:{1}", "Salon LAN sélectionné : {0}:{1}", "Sala LAN seleccionada: {0}:{1}"},
+    {"Select your Sudden Strike II folder (GOG or Retail CD).",
+     "Sélectionnez votre dossier Sudden Strike II (GOG ou CD original).",
+     "Selecciona tu carpeta de Sudden Strike II (GOG o CD original)."},
 };
 
 std::atomic<Language> current{Language::english};

@@ -873,7 +873,27 @@ int main(int argc, char** argv) {
             frame = capture();
             if (frame.at(128 + 1, 96 + 1).r >= frame.at(128 + 32, 96 + 24).r)
                 throw std::runtime_error("MapGrade Catmull-Rom mode vignette failed");
+
+            // Animated water shimmer modulates deep blue river texels over time while leaving stone calm.
+            const Rgb water{36, 78, 128};
             renderer.setMapFilterLinear(false);
+            renderer.setMap(solid(64, 48, water));
+            renderer.setMapGrade({true, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 0.0f, 1.0f});
+            const auto waterT0 = capture();
+            renderer.setMapGrade({true, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.4f, 1.0f});
+            const auto waterT1 = capture();
+            bool waterAnimated = false;
+            for (int px = 128 + 8; px < 128 + 48 && !waterAnimated; ++px) {
+                const auto c0 = waterT0.at(px, 96 + 24);
+                const auto c1 = waterT1.at(px, 96 + 24);
+                if (std::abs(int(c0.b) - int(c1.b)) >= 4 || std::abs(int(c0.g) - int(c1.g)) >= 4) {
+                    waterAnimated = true;
+                }
+            }
+            if (!waterAnimated)
+                throw std::runtime_error("MapGrade waterShimmer did not animate water texels across timeSec");
+
+            renderer.setMap(solid(64, 48, ground));
             renderer.setMapGrade({});
             frame = capture();
             expect(frame, 128 + 32, 96 + 24, ground, 0, "disabling MapGrade restores exact map color");

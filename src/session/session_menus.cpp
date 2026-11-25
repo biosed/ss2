@@ -913,6 +913,7 @@ bool GameSession::loadSaveFromPath(const std::filesystem::path& path, const std:
                                                std::clamp(vp.hp, 1, 100), vp.ammo, vp.group, vp.owner, {}, 0};
                 if (const auto vIdx = vehicleScene->spawn(vpPlace)) {
                     ensureUnitPortrait(wantVeh, true);
+                    (void)ensureGpuVehicleSlot(wantVeh);
                     selection->addVehicle(scaleVehicle(vehicleScene->vehicles().at(*vIdx), mapScale));
                 } else {
                     const auto phIdx = vehicleScene->spawnVisualPlaceholder(vpPlace, 24, 20);
@@ -922,9 +923,10 @@ bool GameSession::loadSaveFromPath(const std::filesystem::path& path, const std:
             }
             if (vp.index < vehicleScene->vehicles().size()) {
                 vehicleScene->setOwner(vp.index, vp.owner);
+                const bool isGpuVeh = gpuVehicleIds.contains(vehicleScene->vehicles().at(vp.index).id);
                 const auto dirty = vehicleScene->update(vp.index, vp.x, vp.y, vp.hullDir, vp.turretDir,
                                                         vp.hp, vp.visible ? 1 : 0, vp.ammo);
-                if (mapScale == 1 && dirty.valid()) {
+                if (mapScale == 1 && dirty.valid() && !isGpuVeh) {
                     const auto patch = scene->repaintRegion(dirty.left, dirty.top, dirty.right, dirty.bottom);
                     if (patch.pixels.width && patch.pixels.height)
                         renderer.updateMapRegion(patch.x, patch.y, patch.pixels);
@@ -945,8 +947,9 @@ bool GameSession::loadSaveFromPath(const std::filesystem::path& path, const std:
         }
         for (std::size_t i = snap.vehicles.size(); i < vehicleScene->vehicles().size(); ++i) {
             const auto& v = vehicleScene->vehicles().at(i);
+            const bool isGpuVeh = gpuVehicleIds.contains(v.id);
             const auto dirty = vehicleScene->update(i, v.x, v.y, v.hullDir, v.turretDir, 0, 0, 0);
-            if (mapScale == 1 && dirty.valid()) {
+            if (mapScale == 1 && dirty.valid() && !isGpuVeh) {
                 const auto patch = scene->repaintRegion(dirty.left, dirty.top, dirty.right, dirty.bottom);
                 if (patch.pixels.width && patch.pixels.height)
                     renderer.updateMapRegion(patch.x, patch.y, patch.pixels);

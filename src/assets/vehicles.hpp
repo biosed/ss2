@@ -1,6 +1,7 @@
 #pragma once
 #include "assets/map_image.hpp"
 #include "assets/placement.hpp"
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -9,6 +10,7 @@
 #include <set>
 #include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace ss2::assets {
@@ -29,6 +31,30 @@ struct VehicleUnit {
     bool operator==(const VehicleUnit&) const = default;
 };
 
+struct GpuFrameRect {
+    std::uint16_t u{0}, v{0}, w{0}, h{0};
+    std::int16_t ox{0}, oy{0};
+    bool valid{false};
+};
+
+struct GpuVehicleAtlas {
+    MapImage atlas;
+    unsigned scale{1};
+    std::size_t frameCount{0};
+    bool hasHot{false};
+    std::array<std::pair<std::int16_t, std::int16_t>, 32> hotOffsets{};
+    std::map<std::size_t, GpuFrameRect> frames;
+    std::map<std::size_t, GpuFrameRect> fallbackWreckFrames;
+};
+
+struct GpuVehicleSprite {
+    float x{}, y{}, width{}, height{};
+    float u0{}, v0{}, u1{}, v1{};
+    bool isShadow{false};
+    bool isTurret{false};
+    int sortYOffset{0};
+};
+
 class VehicleScene {
 public:
     using DirtyRect = ss2::assets::DirtyRect;
@@ -37,6 +63,11 @@ public:
     VehicleScene(const std::filesystem::path& gameDir, std::span<const Placement> placements);
 
     const std::vector<VehicleUnit>& vehicles() const { return units_; }
+    void setGpuRenderedIds(const std::set<std::string>* ids) noexcept { gpuRenderedIds_ = ids; }
+    std::optional<GpuVehicleAtlas> buildGpuAtlas(const std::string& id, bool scale2xEpx = true);
+    void appendGpuSprites(std::size_t unitIndex, const GpuVehicleAtlas& gpu, int mapScale,
+                          float recoilDx, float recoilDy,
+                          std::vector<GpuVehicleSprite>& out) const;
     std::optional<std::size_t> spawn(const Placement& p);
     std::size_t spawnVisualPlaceholder(const Placement& p, int boxW = 24, int boxH = 20);
     void drawAll(MapImage& target, const SceneryDepth* depth = nullptr) const;
@@ -72,6 +103,7 @@ private:
     std::vector<std::size_t> unitAsset_;
     std::vector<unsigned> unitTrackPhase_;
     std::vector<int> unitMoveAccum_;
+    const std::set<std::string>* gpuRenderedIds_{nullptr};
 };
 
 std::vector<Placement> drawTutorialVehicles(MapImage&, const std::filesystem::path& gameDir, std::span<const Placement>);

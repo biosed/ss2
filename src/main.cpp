@@ -1,4 +1,5 @@
 #include "assets/mission.hpp"
+#include "net/lan_discovery.hpp"
 #include "net/tcp_transport.hpp"
 #include "render/window.hpp"
 #include "session/game_session.hpp"
@@ -35,6 +36,7 @@
 #endif
 #include <windows.h>
 #include <shellapi.h>
+#include <winreg.h>
 #endif
 
 namespace {
@@ -688,6 +690,7 @@ int main(int argc, char** argv) try {
     bool listCampaigns = false;
     bool listMultiplayer = false;
     bool listMods = false;
+    bool discoverLan = false;
     std::optional<std::string> cliMod;
     bool overviewOnly = false;
     bool noMovies = false;
@@ -701,10 +704,11 @@ int main(int argc, char** argv) try {
     for (int i = 1; i < argc; ++i) {
         const std::string_view arg(argv[i]);
         if (arg == "--help") {
-            std::cout << "ss2 [--game-dir DIR] [--mod NAME|DIR|INI] [--mission FILE.ssm|NAME|INDEX] [--campaign QUERY] [--overview] [--list-missions] [--list-campaigns] [--list-multiplayer] [--list-mods] [--host PORT | --join HOST:PORT] [--mp-nation NATION] [--mp-players 2|3|4] [--mp-teams ffa|2v2|T0,T1,T2,T3] [--hd-pack DIR] [--original-infantry] [--no-auto-engage] [--classic-gfx] [--difficulty easy|normal|hard] [--record FILE | --replay FILE | --watch-replay FILE | --load-save FILE] [--4k] [--fullscreen | --windowed] [--lang en|fr|es] [--frames N] [--no-movies] [--validate] [--timing]\n"
+            std::cout << "ss2 [--game-dir DIR] [--mod NAME|DIR|INI] [--mission FILE.ssm|NAME|INDEX] [--campaign QUERY] [--overview] [--list-missions] [--list-campaigns] [--list-multiplayer] [--list-mods] [--discover-lan] [--host PORT | --join HOST:PORT] [--mp-nation NATION] [--mp-players 2|3|4] [--mp-teams ffa|2v2|T0,T1,T2,T3] [--hd-pack DIR] [--original-infantry] [--no-auto-engage] [--classic-gfx] [--difficulty easy|normal|hard] [--record FILE | --replay FILE | --watch-replay FILE | --load-save FILE] [--4k] [--fullscreen | --windowed] [--lang en|fr|es] [--frames N] [--no-movies] [--validate] [--timing]\n"
                          "--game-dir opens Tutorial I (or --mission) from an extracted Gold 2.2 game directory.\n"
                          "--mod NAME|DIR|INI activates a mod (under mods/, Run/, switcher/, ~/.local/share/ss2/mods/, a directory, or a sudtest*.ini file; use 'vanilla' for unmodded).\n"
                          "--list-mods lists discovered mods in the game directory and user mods directory.\n"
+                         "--discover-lan listens briefly for hosted SS2 LAN lobbies on UDP port " << ss2::kDefaultLanDiscoveryPort << ".\n"
                          "--list-missions lists all installed single-player missions (including addons/*.ssx), their map sizes and descriptions.\n"
                          "--list-campaigns lists all installed campaigns and missions.\n"
                          "--list-multiplayer lists all installed multiplayer missions (maps/mplay/*.smm).\n"
@@ -747,6 +751,7 @@ int main(int argc, char** argv) try {
         else if (arg == "--list-campaigns") listCampaigns = true;
         else if (arg == "--list-multiplayer") listMultiplayer = true;
         else if (arg == "--list-mods") listMods = true;
+        else if (arg == "--discover-lan") discoverLan = true;
         else if (arg == "--host" && i + 1 < argc) {
             mpHostPort = parsePortArg(argv[++i]);
             if (!mpHostPort) throw std::invalid_argument("--host requires a TCP port (1..65535)");
@@ -843,22 +848,91 @@ int main(int argc, char** argv) try {
     const auto settingsPath = ss2::defaultSettingsPath();
     const bool persistSettings = !limit && !timing && !overviewOnly && recordPath.empty() && !parsedReplay &&
                                  !settingsPath.empty();
+    ss2::UserSettings settings = persistSettings ? ss2::loadUserSettings(settingsPath) : ss2::UserSettings{};
+    if (cliClassicGfx) settings.enhancedGraphics = false;
+    if (discoverLan) {
+        ss2::LanScanner scanner;
+        if (!scanner.start(ss2::kDefaultLanDiscoveryPort)) {
+            std::cout << "LAN games: discovery socket busy on UDP port " << ss2::kDefaultLanDiscoveryPort << '\n';
+            return 0;
+        }
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(350);
+        while (std::chrono::steady_clock::now() < deadline) {
+            scanner.poll();
+            SDL_Delay(20);
+        }
+        const auto& games = scanner.games();
+        std::cout << "LAN games (" << games.size() << "):\n";
+        for (const auto& g : games) {
+            std::cout << "  " << g.hostAddress << ':' << g.tcpPort
+                      << "  host=" << (g.hostName.empty() ? "Host" : g.hostName)
+                      << "  players=" << int(g.currentPlayers) << '/' << int(g.maxPlayers)
+                      << "  map=" << g.missionSpec << '\n';
+        }
+        if (games.empty()) std::cout << "  (no LAN games found)\n";
+        return 0;
+    }
     const auto resolveGameDir = [&]() -> std::filesystem::path {
         if (!gameDir.empty()) return gameDir;
         if (const auto configured = ss2::getenvPath("SS2_GAME_DIR", L"SS2_GAME_DIR"); !configured.empty()) {
             return configured;
         }
-        if (!dataHome.empty() && std::filesystem::is_directory(dataHome / "game")) return dataHome / "game";
+        auto checkRootOrApp = [&](const std::filesystem::path& cand) -> std::filesystem::path {
+            if (cand.empty()) return {};
+            if (hasGameDataAt(cand)) return cand;
+            const auto appDir = cand / "app";
+            if (hasGameDataAt(appDir)) return appDir;
+            return {};
+        };
+        if (persistSettings && !settings.gameDir.empty()) {
+            if (const auto saved = checkRootOrApp(ss2::pathFromUtf8(settings.gameDir)); !saved.empty()) {
+                return saved;
+            }
+        }
+        if (!dataHome.empty()) {
+            if (const auto dh = checkRootOrApp(dataHome / "game"); !dh.empty()) return dh;
+            std::error_code dhEc;
+            if (std::filesystem::is_directory(dataHome / "game", dhEc)) return dataHome / "game";
+        }
         if (persistSettings) {
             if (const char* base = SDL_GetBasePath(); base && *base) {
                 const auto baseDir = ss2::pathFromUtf8(base);
                 if (hasGameDataAt(baseDir)) return baseDir;
             }
+#ifdef _WIN32
+            for (const wchar_t* regKey : {
+                    L"SOFTWARE\\WOW6432Node\\GOG.com\\Games\\1207659026",
+                    L"SOFTWARE\\WOW6432Node\\GOG.com\\Games\\1432568986",
+                    L"SOFTWARE\\GOG.com\\Games\\1207659026",
+                    L"SOFTWARE\\GOG.com\\Games\\1432568986"}) {
+                wchar_t regPath[MAX_PATH * 2]{};
+                DWORD cb = sizeof(regPath);
+                if (RegGetValueW(HKEY_LOCAL_MACHINE, regKey, L"path", RRF_RT_REG_SZ, nullptr, regPath, &cb) == ERROR_SUCCESS &&
+                    regPath[0] != L'\0') {
+                    if (const auto r = checkRootOrApp(std::filesystem::path(regPath)); !r.empty()) return r;
+                }
+            }
+            for (const wchar_t* cand : {
+                    L"C:\\GOG Games\\Sudden Strike 2",
+                    L"C:\\GOG Games\\Sudden Strike II",
+                    L"C:\\Program Files (x86)\\GOG Galaxy\\Games\\Sudden Strike 2",
+                    L"C:\\Program Files\\GOG Games\\Sudden Strike 2",
+                    L"D:\\GOG Games\\Sudden Strike 2"}) {
+                if (const auto r = checkRootOrApp(std::filesystem::path(cand)); !r.empty()) return r;
+            }
+#else
+            if (const auto home = ss2::getenvPath("HOME", L"HOME"); !home.empty()) {
+                for (const auto& cand : {
+                        home / "GOG Games" / "Sudden Strike 2",
+                        home / "GOG Games" / "Sudden Strike II",
+                        home / ".wine" / "drive_c" / "GOG Games" / "Sudden Strike 2"}) {
+                    if (const auto r = checkRootOrApp(cand); !r.empty()) return r;
+                }
+            }
+#endif
         }
         return {};
     };
-    ss2::UserSettings settings = persistSettings ? ss2::loadUserSettings(settingsPath) : ss2::UserSettings{};
-    if (cliClassicGfx) settings.enhancedGraphics = false;
     if (cliMod) {
         if (ss2::assets::equalsIgnoreCaseAscii(*cliMod, "none") ||
             ss2::assets::equalsIgnoreCaseAscii(*cliMod, "vanilla") ||
@@ -1016,7 +1090,13 @@ int main(int argc, char** argv) try {
             throw std::invalid_argument("--join requires --game-dir or --mission");
         }
     }
-    if (!hdPack.empty() && resolveGameDir().empty()) throw std::invalid_argument("--hd-pack requires --game-dir");
+    if (!hdPack.empty()) {
+        std::error_code hdExistEc;
+        if (!std::filesystem::exists(hdPack, hdExistEc)) {
+            throw std::invalid_argument("--hd-pack path does not exist: " + hdPack.string());
+        }
+        if (resolveGameDir().empty()) throw std::invalid_argument("--hd-pack requires --game-dir");
+    }
     if (mission.empty() && !limit && !timing && gameDir.empty()) {
         gameDir = resolveGameDir();
     }
@@ -1067,6 +1147,54 @@ int main(int argc, char** argv) try {
     discoverWindowsSoftwareVulkanIcd(dataHome, preferSoftwareRenderer);
 #endif
     SDLSession sdl;
+    if (gameDir.empty() && persistSettings && mission.empty() && campaignQuery.empty() && !mpRequested &&
+        !listMissions && !listCampaigns && !listMultiplayer && !listMods &&
+        ss2::getenvPath("CI", L"CI").empty() && ss2::getenvPath("SS2_NO_ERROR_BOX", L"SS2_NO_ERROR_BOX").empty()) {
+        const std::string promptMsg = ss2::tr("Select your Sudden Strike II folder (GOG or Retail CD).");
+        (void)SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_INFORMATION, "Sudden Strike II", promptMsg.c_str(), nullptr);
+        struct FolderPickState {
+            bool done{false};
+            std::filesystem::path chosen{};
+        } pickState{};
+        auto onFolderPicked = [](void* userdata, const char* const* filelist, int) {
+            auto* st = static_cast<FolderPickState*>(userdata);
+            if (filelist && filelist[0] && filelist[0][0] != '\0') {
+                st->chosen = ss2::pathFromUtf8(filelist[0]);
+            }
+            st->done = true;
+        };
+        SDL_ShowOpenFolderDialog(onFolderPicked, &pickState, nullptr, nullptr, false);
+        const auto waitStart = std::chrono::steady_clock::now();
+        while (!pickState.done && std::chrono::steady_clock::now() - waitStart < std::chrono::minutes(5)) {
+            SDL_Event ev;
+            while (SDL_PollEvent(&ev)) {
+                if (ev.type == SDL_EVENT_QUIT) pickState.done = true;
+            }
+            SDL_Delay(20);
+        }
+        if (!pickState.chosen.empty()) {
+            const std::filesystem::path picked = hasGameDataAt(pickState.chosen)
+                ? pickState.chosen
+                : (hasGameDataAt(pickState.chosen / "app") ? (pickState.chosen / "app") : std::filesystem::path{});
+            if (!picked.empty()) {
+                gameDir = picked;
+                settings.gameDir = ss2::pathToUtf8(picked);
+                (void)ss2::saveUserSettings(settingsPath, settings);
+                if (!originalInfantry && hdPack.empty()) {
+                    if (const auto userHd = ss2::defaultHdPackDir(); ss2::hasInstalledHdPackAt(userHd)) {
+                        hdPack = userHd;
+                    } else if (ss2::hasInstalledHdPackAt(gameDir / "hd-pack")) {
+                        hdPack = gameDir / "hd-pack";
+                    }
+                }
+            } else {
+                const std::string errTxt = "No Sudden Strike II game data (sudtest.ini / game_common.sue) found in:\n" +
+                                           pickState.chosen.string();
+                (void)SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_WARNING, "Sudden Strike II", errTxt.c_str(), nullptr);
+                return 0;
+            }
+        }
+    }
     if (!noMovies && !settings.skipIntro && !gameDir.empty() && !limit && !timing && !overviewOnly &&
         !parsedReplay && !parsedSave && !mpRequested)
         ss2::playOpeningMovies(gameDir, fullscreen.value_or(false), hdPack);

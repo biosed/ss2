@@ -71,6 +71,7 @@ struct UserSettings {
     std::string activeProfile{"YourID"};
     std::vector<PlayerProfile> profiles;
     std::string activeMod;
+    std::string gameDir;
     bool operator==(const UserSettings&) const = default;
 };
 
@@ -180,6 +181,7 @@ inline bool hasInstalledHdPackAt(const std::filesystem::path& dir) {
     std::error_code ec;
     if (dir.empty() || !std::filesystem::is_directory(dir, ec) || ec) return false;
     return std::filesystem::is_directory(dir / "infantry-art-4x", ec) ||
+           std::filesystem::is_directory(dir / "vehicles-art-4x", ec) ||
            std::filesystem::is_directory(dir / "infantry-art", ec) ||
            std::filesystem::is_directory(dir / "hud-portraits", ec) ||
            std::filesystem::is_directory(dir / "audio-hd", ec) ||
@@ -401,6 +403,9 @@ inline std::string serializeUserSettings(const UserSettings& input) {
     if (!s.activeMod.empty()) {
         out << "active_mod=" << s.activeMod << '\n';
     }
+    if (!s.gameDir.empty()) {
+        out << "game_dir=" << s.gameDir << '\n';
+    }
     out << "profiles=";
     for (std::size_t i = 0; i < s.profiles.size(); ++i) {
         if (i > 0u) out << ',';
@@ -528,6 +533,9 @@ inline UserSettings parseUserSettings(std::string_view text) {
             if (!modStr.empty() && modStr != "none" && modStr != "vanilla" && modStr != "original") {
                 s.activeMod = std::move(modStr);
             }
+        } else if (key == "game_dir") {
+            std::string gd(trimAscii(val));
+            if (!gd.empty()) s.gameDir = std::move(gd);
         } else if (key == "profiles") {
             std::size_t itemPos = 0;
             while (itemPos <= val.size()) {

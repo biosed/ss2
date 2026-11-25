@@ -1536,6 +1536,22 @@ void testOptionalRetailSweep() {
             }
             check(maxR - minR > 12, "Vehicle portrait has non-uniform sprite detail");
         }
+        {
+            ss2::assets::Placement pantherPl{"panther", 200, 200, 12, 100, 100, 1, 0};
+            ss2::assets::VehicleScene gpuVs(gameDir, std::span<const ss2::assets::Placement>(&pantherPl, 1u));
+            const auto gpuAtlas = gpuVs.buildGpuAtlas("panther", true);
+            check(gpuAtlas.has_value() && gpuAtlas->scale == 2u && gpuAtlas->atlas.width >= 256u &&
+                      gpuAtlas->atlas.height >= 256u && !gpuAtlas->frames.empty(),
+                  "VehicleScene::buildGpuAtlas builds 2x EPX GPU atlas for retail panther");
+            std::vector<ss2::assets::GpuVehicleSprite> aliveSp, deadSp;
+            gpuVs.appendGpuSprites(0, *gpuAtlas, 1, 2.0f, -1.0f, aliveSp);
+            check(aliveSp.size() >= 3u && std::ranges::any_of(aliveSp, [](const auto& s) { return s.isShadow; }) &&
+                      std::ranges::any_of(aliveSp, [](const auto& s) { return s.isTurret; }),
+                  "VehicleScene::appendGpuSprites emits shadow, hull, and turret sprites");
+            (void)gpuVs.update(0, 200, 200, 12, 12, 0, 1, 0);
+            gpuVs.appendGpuSprites(0, *gpuAtlas, 1, 0.0f, 0.0f, deadSp);
+            check(!deadSp.empty(), "VehicleScene::appendGpuSprites emits wreck sprites when destroyed");
+        }
         const auto cat4g = ss2::assets::UnitCatalog::load(gameDir);
         const auto* bm31 = cat4g ? cat4g->find("bm-31") : nullptr;
         const auto* nebel = cat4g ? cat4g->find("nebelwerfer.42") : nullptr;

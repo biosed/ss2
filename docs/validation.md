@@ -410,3 +410,16 @@ Phase 5S landed and was verified on 21 November 2026 (Gemini, board #699): a cle
 - **Verification**:
   - Verified locally under 4 GiB cgroup limits (`cmake --build build`, `59/59` `tools/ctest-validation.sh build`, `./tools/check-cross-isa-sim.sh` across all 4 ISA targets + FMA probe, and clean-install `ss2-v0.1.0-hd-infantry-pack.zip` offscreen *Tutorial I* smoke test with `0` `.ss2hd` files).
   - Published `v0.1.1` across GitHub `Linux Vulkan`, `Windows x86-64`, and `Release` workflows and verified `%LOCALAPPDATA%\ss2\hd-pack` out-of-the-box auto-discovery + Enhanced Graphics live 4× HD rendering on AWS `eu-west-1` Windows Server 2022 (`c6i.xlarge`, Mesa `26.3.1` Lavapipe), followed by complete AWS teardown.
+
+### 2026-11-25: v0.1.2 GPU Vehicle Pipeline, World Shaders, 60-Class 4× HD Pack & LAN Discovery
+- **Vulkan Shader Pass 2 & Weather VFX (`src/render/window.{hpp,cpp}`, `src/render/sprite_shaders.hpp`, `src/session/{session_view,session_hud}.cpp`, `tests/sprite_pass_test.cpp`)**:
+  - Expanded `VulkanWindow::spriteAtlasSlots` to `128` (`planeAtlasBase = 120u`), extended `MapGrade` / `MapPush` (`96` bytes) with world-space animated water shimmer, drifting cloud shadows, and `Fog`/`Rain`/`Snow` atmospheric grading plus GPU `Rain`/`Snow` weather beams.
+- **GPU-Accelerated Vehicle Pipeline (`src/assets/vehicles.{hpp,cpp}`, `src/session/{session_setup,session_tick,session_menus}.cpp`, `tests/mission_test.cpp`)**:
+  - Added GPU vehicle rendering across `2048×768` 4× HD sheets (`vehicles-art-4x/<id>.png`) and automatic `2× EPX` shelf-packed `.PCK` atlases (`buildGpuAtlas`/`appendGpuSprites`) with directional shadows, independent turret rotation + cannon recoil, dynamic combat lighting, `96×96` vehicle portraits, and skip-CPU `repaintRegion` fast path.
+- **UX, First-Run Discovery & UDP LAN Beacon (`src/net/lan_discovery.{hpp,cpp}`, `src/ui/gold_frontend*.cpp`, `src/assets/hd_pack.cpp`, `src/main.cpp`)**:
+  - Added Gold Front-End `Options -> Enhanced graphics` toggle (`opt_enhanced_gfx`), GOG/common-folder auto-detection + interactive `SDL_ShowOpenFolderDialog` picker (`UserSettings::gameDir`), explicit `--hd-pack` path validation, and non-blocking UDP LAN host beacon + scanner (`--discover-lan` + Multiplayer Join picker).
+- **Clean-Room 60-Class 4× HD Pack (`ss2-v0.1.2-hd-infantry-pack.zip`)**:
+  - Expanded clean-room pack to **60/60** RS2 infantry sheets (`1024×640` 8×5 RGBA8), **14** 4× HD vehicle & field-gun sheets (`2048×768` 8×3 RGBA8), and **74** `96×96` HUD portraits.
+- **Verification**:
+  - Verified locally under 4 GiB / 6 GiB cgroup limits (`cmake --build build` `0` warnings, `60/60` `tools/ctest-validation.sh build`, Clang `ASan+UBSan` `34/34` pass via `build-sanitize`, `./tools/check-cross-isa-sim.sh` across all 4 ISA targets + FMA probe, and clean-install `ss2-v0.1.2-hd-infantry-pack.zip` *Tutorial I* `Validation errors: 0` smoke test).
+  - Verified on real `AMD BC-250 (RADV GFX1013)` Bazzite `x86_64` (`10.20.0.132`, Mesa `26.2.7`): `59/59` Release CTests passed inside `ss2-build`, desktop launcher installed, and live 4K Wayland `Tutorial I` rendered cleanly with the full 4× HD pack (`Swapchain 3840x2012 FIFO`).

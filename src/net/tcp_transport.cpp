@@ -481,6 +481,8 @@ bool MultiplayerHandshake::startHost(std::uint16_t port,
         return false;
     }
     state_ = State::Listening;
+    (void)lanBeacon_.start(kDefaultLanDiscoveryPort, listener_.boundPort(), 1u, setup_.playerCount,
+                           setup_.mapHash, setup_.playerNames[0], setup_.missionSpec);
     statusText_ = setup_.playerCount > 2u
         ? ("Waiting for players (1/" + std::to_string(setup_.playerCount) + ")...")
         : ("Listening on port " + std::to_string(listener_.boundPort()) + "...");
@@ -573,10 +575,13 @@ MultiplayerHandshake::State MultiplayerHandshake::poll() {
         for (const auto& p : pendingPeers_) {
             if (p.helloDone) ++readyCount;
         }
+        lanBeacon_.updatePlayerCount(static_cast<std::uint8_t>(std::min<std::size_t>(255u, readyCount)));
+        lanBeacon_.tick(kDefaultLanDiscoveryPort);
         statusText_ = "Waiting for players (" + std::to_string(readyCount) + "/" +
                       std::to_string(setup_.playerCount) + ")...";
 
         if (pendingPeers_.size() == expectedClients && readyCount == setup_.playerCount) {
+            lanBeacon_.stop();
             listener_.close();
             std::sort(pendingPeers_.begin(), pendingPeers_.end(),
                       [](const PendingPeer& a, const PendingPeer& b) { return a.seat < b.seat; });
@@ -669,6 +674,7 @@ MultiplayerHandshake::State MultiplayerHandshake::poll() {
 }
 
 void MultiplayerHandshake::cancel() {
+    lanBeacon_.stop();
     listener_.close();
     if (conn_) {
         if (conn_->isConnected()) {

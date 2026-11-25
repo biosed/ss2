@@ -90,12 +90,16 @@ HdMap decodeHdMap(std::span<const std::uint8_t> bytes) {
 }
 
 HdMap loadHdPackMap(const std::filesystem::path& hdPackDir) {
-    const auto path = std::filesystem::is_directory(hdPackDir) ? (hdPackDir / "tutorial1_2x.ss2hd") : hdPackDir;
-    const auto size = std::filesystem::file_size(path);
+    std::error_code ec;
+    const auto path = std::filesystem::is_directory(hdPackDir, ec) ? (hdPackDir / "tutorial1_2x.ss2hd") : hdPackDir;
+    const auto size = std::filesystem::file_size(path, ec);
+    if (ec) {
+        throw std::runtime_error("Cannot inspect HD pack map '" + path.string() + "': " + ec.message());
+    }
     if (size < 24 || size > kMaxPackedBytes)
-        throw std::runtime_error("HD pack file size out of range");
+        throw std::runtime_error("HD pack file size out of range: " + path.string());
     std::ifstream file(path, std::ios::binary);
-    if (!file) throw std::runtime_error("Cannot open HD pack file");
+    if (!file) throw std::runtime_error("Cannot open HD pack file: " + path.string());
     std::vector<std::uint8_t> bytes(static_cast<std::size_t>(size));
     if (!file.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size())))
         throw std::runtime_error("Truncated HD pack file");

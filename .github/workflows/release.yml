@@ -192,10 +192,11 @@ jobs:
           > **Note:** Original or GOG *Sudden Strike II (Gold 2.2)* game data is required and not included.
 
           ### Highlights
+          - **Enhanced Vulkan Graphics**: Animated world-space river/water shimmer, cloud-drift shadows, `Rain`/`Snow` GPU weather grading & particles, GPU-accelerated vehicle rendering (`4x HD` sprite sheets + auto `2x EPX` `.PCK` atlases across 128 sprite slots with independent turret recoil, shadows & dynamic combat lighting), selectable via `Options -> Enhanced graphics` (`--classic-gfx` for vanilla look).
           - **Full Retail Parity**: All 136 `.ssc`/`.ssm`/`.smm` missions (`0` unhandled CAOF opcodes), bit-identical visibility/combat/AI, progressive `dom.res` building & `MOST.RES` bridge destruction, Gold 2.2 front end, animated `I-BRF` briefings & voices, looping menu/in-game music, and persistent `SS2SAVE2` save/load.
-          - **2–4 Player Lockstep Multiplayer**: Cross-architecture deterministic TCP Star Host-Relay (`x86_64`, `x86-64-v3`, `ARM64` GCC/Clang).
-          - **Out-of-the-Box Mods**: `sudtest.ini` `[Data]`/`[Game]` VFS chains, unpacked/gzip folders (`mycommon\`), `Scheme1..N` (`Scheme3` `desc_scheme3.sue`/`lang_desc_scheme3.sue`), `addons/*.ssx`, `mods/`/`Run/` discovery, `--mod`/`--list-mods`, and live `Options -> Mod` switching.
-          - **Portable Linux & Optional HD Pack**: AppImage (`x86_64` & `ARM64`), Flatpak manifest (`packaging/io.github.biosed.ss2.yml`), and clean-room 17-class 4×/2× HD Infantry & HUD Portrait pack (`ss2-__TAG__-hd-infantry-pack.zip`).
+          - **2–4 Player Lockstep & LAN Discovery**: Cross-architecture deterministic TCP Star Host-Relay (`x86_64`, `x86-64-v3`, `ARM64` GCC/Clang) plus automatic UDP LAN session broadcast/scanner (`--discover-lan` and Multiplayer Join list).
+          - **Out-of-the-Box Setup & Mods**: GOG/common-folder auto-detection, interactive folder picker on first launch, `sudtest.ini` `[Data]`/`[Game]` VFS chains, `Scheme1..N`, `addons/*.ssx`, `mods/`/`Run/` discovery, `--mod`/`--list-mods`, and live `Options -> Mod` switching.
+          - **Portable Linux & Clean-Room 60-Class 4× HD Pack**: AppImage (`x86_64` & `ARM64`), Flatpak manifest (`packaging/io.github.biosed.ss2.yml`), and clean-room 60-class RS2 4× HD Infantry + 14 signature 4× HD Vehicles/Guns + 74 `96×96` HUD Portraits pack (`ss2-__TAG__-hd-infantry-pack.zip`).
 
           ### Quick Start
           - **Windows**: Extract `ss2-*-windows-x86_64.zip` (self-contained with bundled `vulkan-1.dll` + dependencies) and either copy its contents into your *Sudden Strike II* folder or run `ss2.exe --game-dir "C:\path\to\Sudden Strike 2"`.

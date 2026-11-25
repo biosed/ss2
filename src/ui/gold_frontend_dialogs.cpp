@@ -25,6 +25,7 @@ constexpr double kOptionsRowY0 = 94.0;
 constexpr double kOptionsRowStep = 42.0;
 constexpr double kOptionsRowH = 36.0;
 constexpr RectD kOptionsOkRect{132, 524, 112, 35};
+constexpr RectD kOptionsEnhancedGfxRect{264, 524, 258, 35};
 constexpr RectD kOptionsCancelRect{542, 524, 118, 35};
 
 RectD optionRowRect(std::size_t idx) {
@@ -223,6 +224,8 @@ void GoldFrontEnd::adjustOption(const std::string& id, int delta) {
         optionsDraft_.speedPercent = kSpeeds[(idx + std::size_t(step + int(kSpeeds.size()))) % kSpeeds.size()];
     } else if (id == "opt_smooth") {
         optionsDraft_.smoothTerrain = !optionsDraft_.smoothTerrain;
+    } else if (id == "opt_enhanced_gfx") {
+        optionsDraft_.enhancedGraphics = !optionsDraft_.enhancedGraphics;
     } else if (id == "opt_effects") {
         optionsDraft_.combatEffects = !optionsDraft_.combatEffects;
     } else if (id == "opt_skip_intro") {
@@ -268,6 +271,7 @@ void GoldFrontEnd::scrollRatingsBy(int deltaRows) {
 
 std::string GoldFrontEnd::hitTestOptions(double sx, double sy) const {
     if (kOptionsOkRect.contains(sx, sy)) return "ok";
+    if (kOptionsEnhancedGfxRect.contains(sx, sy)) return "opt_enhanced_gfx";
     if (kOptionsCancelRect.contains(sx, sy)) return "cancel";
     for (std::size_t i = 0; i < kOptionRowIds.size(); ++i) {
         if (optionDecRect(i).contains(sx, sy)) return std::string("opt_dec:") + kOptionRowIds[i];
@@ -309,7 +313,7 @@ void GoldFrontEnd::handleOptionsKey(SDL_Keycode key) {
     static const std::vector<std::string> kOrder{
         "opt_difficulty", "opt_language", "opt_sfx", "opt_music_vol",
         "opt_music_mute", "opt_speed", "opt_smooth", "opt_effects",
-        "opt_skip_intro", "opt_mod", "ok", "cancel"
+        "opt_skip_intro", "opt_mod", "opt_enhanced_gfx", "ok", "cancel"
     };
     if (key == SDLK_UP) cycleFocus(kOrder, -1);
     else if (key == SDLK_DOWN || key == SDLK_TAB) cycleFocus(kOrder, 1);
@@ -494,6 +498,16 @@ void GoldFrontEnd::renderOptions(const RenderEnv& env) {
 
     drawGoldStencilButton(cr, pangoCtx, kOptionsOkRect, tr("OK"), '\0',
                           hoveredId_ == "ok", focusedId_ == "ok", true, 24.0);
+    {
+        const bool egHov = (hoveredId_ == "opt_enhanced_gfx");
+        const bool egFoc = (focusedId_ == "opt_enhanced_gfx");
+        drawBronzeBox(cr, kOptionsEnhancedGfxRect.x, kOptionsEnhancedGfxRect.y,
+                      kOptionsEnhancedGfxRect.w, kOptionsEnhancedGfxRect.h, (egHov || egFoc) ? 0.94 : 0.85);
+        const std::string egLabel = tr("Enhanced graphics") + ": " +
+            tr(optionsDraft_.enhancedGraphics ? "On" : "Off");
+        drawGoldStencilButton(cr, pangoCtx, kOptionsEnhancedGfxRect, egLabel, '\0',
+                              egHov, egFoc, true, 14.5, true);
+    }
     drawGoldStencilButton(cr, pangoCtx, kOptionsCancelRect, tr("Cancel"), '\0',
                           hoveredId_ == "cancel", focusedId_ == "cancel", true, 24.0);
 }

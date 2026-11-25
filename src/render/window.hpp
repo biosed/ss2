@@ -48,13 +48,15 @@ struct MapBeam {
 };
 
 // Optional GPU terrain reconstruction (subpixel pixel-AA / 5-tap Catmull-Rom + CAS),
-// theater atmospheric color grading, and subtle viewport vignette. Disabled by default.
+// theater atmospheric color grading, subtle viewport vignette, and animated water/clouds.
 struct MapGrade {
     bool enabled = false;
     float sharpness = 0.40f;
     float vignette = 0.14f;
     float rGain = 1.0f, gGain = 1.0f, bGain = 1.0f;
     float contrast = 1.04f;
+    float timeSec = 0.0f;
+    float waterShimmer = 0.0f;
 };
 
 // A textured rectangle drawn above the terrain and below outlines, markers and panels.
@@ -100,9 +102,9 @@ public:
     static void setPreferSoftwareRendererDefault(bool prefer);
     void setMarkers(std::vector<MapMarker>);
     // Sprite atlases: RGBA8 with straight (non-premultiplied) alpha, sampled with
-    // linear filtering. Replacing a slot is allowed at any time. Slots [16,24) are
-    // reserved for plane sprites (7 live + 1 overflow); infantry/world stay below 16.
-    static constexpr unsigned spriteAtlasSlots = 24;
+    // linear filtering. Replacing a slot is allowed at any time. Slots [120,128) are
+    // reserved for plane sprites (7 live + 1 overflow); infantry/vehicles/world stay below 120.
+    static constexpr unsigned spriteAtlasSlots = 128;
     void setSpriteAtlas(unsigned slot, const assets::MapImage& atlas);
     // Replaces all sprites. They are alpha blended in list order, clipped to the map's
     // on-screen rectangle, and follow the camera. Replacing the map removes them.

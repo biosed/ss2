@@ -93,7 +93,7 @@ assets::Infantry scaleInfantry(assets::Infantry unit, int scale);
 assets::VehicleUnit scaleVehicle(assets::VehicleUnit unit, int scale);
 
 struct GameSession {
-    static constexpr unsigned planeAtlasBase = 16u;
+    static constexpr unsigned planeAtlasBase = 120u;
     static constexpr unsigned planeAtlasCount = 8u;
     static_assert(planeAtlasBase + planeAtlasCount <= VulkanWindow::spriteAtlasSlots,
                   "plane atlas range must fit below the beam/hud slots");
@@ -220,9 +220,19 @@ struct GameSession {
     std::optional<assets::InfantryScene> scene;
     std::map<std::string, unsigned> gpuAtlasSlots;
     std::filesystem::path gpuArtDir;
+    std::filesystem::path gpuVehicleArtDir;
+    struct GpuHdVehicleMeta {
+        unsigned atlasSlot{0};
+        bool hasTurret{false};
+    };
+    std::map<std::string, GpuHdVehicleMeta> gpuHdVehicles;
+    std::map<std::string, unsigned> gpuPckVehicleSlots;
+    std::map<std::string, ss2::assets::GpuVehicleAtlas> gpuPckVehicleAtlases;
+    std::set<std::string> gpuVehicleIds;
     unsigned gpuNextSlot = 0;
     bool gpuPreloadLogged = false;
     std::set<std::string> gpuFallbackIds;
+    std::map<std::size_t, std::chrono::steady_clock::time_point> vehRecoilUntil;
     std::vector<WorldGpuSprite> worldGpuSprites;
     std::map<std::uint32_t, LivePlane> livePlanes;
     std::map<std::uint32_t, ParachutePose> liveParachutes;
@@ -292,6 +302,7 @@ struct GameSession {
     PlaneAtlasAllocator planeAtlas{planeAtlasBase, planeAtlasCount};
     bool planeOverflowLogged = false;
     unsigned mapScheme = 0;
+    assets::WeatherKind missionWeather{assets::WeatherKind::Clear};
     std::shared_ptr<const assets::UnitCatalog> unitCatalog;
     std::string pendingMissionBriefing;
     std::string missionBriefingText;
@@ -395,6 +406,7 @@ struct GameSession {
     void applyMapGraphics();
     float fogBrightnessAt(int mx, int my) const;
     bool ensureGpuInfantrySlot(const std::string& id);
+    bool ensureGpuVehicleSlot(const std::string& id);
     void syncGpuSprites();
     bool isAllyOwner(int owner) const;
     bool isHostileOwner(int owner) const;

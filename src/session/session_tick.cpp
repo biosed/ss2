@@ -475,9 +475,13 @@ void GameSession::stepSimulationEvents() {
                     if (combatVfx.activeDecalCount() != prevDecals) spritesDirty = true;
                 }
                 const bool effVehVis = vp.visible || (replayAllVision() && vp.alive && vp.hp > 0);
+                const std::string& vehId = vehicleScene->vehicles().at(vp.index).id;
+                const bool isGpuVeh = gpuVehicleIds.contains(vehId);
                 const auto dirty = vehicleScene->update(vp.index, vp.x, vp.y, vp.hullDir, vp.turretDir,
                                                         vp.hp, effVehVis ? 1 : 0, vp.ammo);
-                if (mapScale == 1 && dirty.valid()) {
+                if (isGpuVeh) {
+                    spritesDirty = true;
+                } else if (mapScale == 1 && dirty.valid()) {
                     const auto patch = scene->repaintRegion(dirty.left, dirty.top, dirty.right, dirty.bottom);
                     if (patch.pixels.width && patch.pixels.height)
                         renderer.updateMapRegion(patch.x, patch.y, patch.pixels);
@@ -562,6 +566,10 @@ void GameSession::stepSimulationEvents() {
                     }
                 }
                 if (vp.fired) {
+                    if (!vp.firedSecondary) {
+                        vehRecoilUntil[vp.index] = now + std::chrono::milliseconds(160);
+                        spritesDirty = true;
+                    }
                     if (audio) {
                         const std::string sndGroup = !vp.fireSound.empty()
                             ? vp.fireSound
@@ -1224,7 +1232,7 @@ void GameSession::stepSimulationEvents() {
                 showNotice(ss2::tr("Aircraft shot down by AA flak!"), ss2::NoticeKind::blocked);
             }
         }
-        if (!paused && !gpuAtlasSlots.empty()) {
+        if (!paused && (!gpuAtlasSlots.empty() || !gpuVehicleIds.empty())) {
             const auto now = std::chrono::steady_clock::now();
             if (now - lastAnimSync >= std::chrono::milliseconds(50)) {
                 spritesDirty = true;

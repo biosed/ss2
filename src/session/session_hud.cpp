@@ -500,11 +500,13 @@ void GameSession::updateHudAndBeams() {
     const bool hasAirTrailBeams = combatEffects && hud && hud->hasActiveAirTrails();
     const bool hasSelectionRings = enhancedGraphics && selection &&
         (!selection->selected().empty() || !selection->selectedVehicles().empty());
+    const bool hasWeatherBeams = enhancedGraphics && combatEffects &&
+        (missionWeather == assets::WeatherKind::Rain || missionWeather == assets::WeatherKind::Snow);
     if (!activeVfx.empty() || !burningWrecks.empty() || !crippledSmokeVehicles.empty() ||
         !movingSmokeVehicles.empty() || !livePlanes.empty() || hasAirTrailBeams || !orderLines.empty() ||
         previewRing || facePreview || !rangePreviews.empty() || !visibleOnScreenMines.empty() ||
         !statusBadges.empty() || !beamZeppelins.empty() || !activeBeacons.empty() ||
-        hasSelectionRings || vfxWasNonEmpty) {
+        hasSelectionRings || hasWeatherBeams || vfxWasNonEmpty) {
         const auto now = std::chrono::steady_clock::now();
         std::erase_if(activeVfx, [&](const ActiveVfx& v) { return now - v.start >= v.duration; });
         std::erase_if(burningWrecks, [&](const BurningWreck& w) { return now >= w.until; });
@@ -869,6 +871,41 @@ void GameSession::updateHudAndBeams() {
                                      0.65f * fade, 0.45f * fade});
                     break;
                 }
+                }
+            }
+        }
+        if (hasWeatherBeams && beams.size() < 112u) {
+            int wPts = 1280, hPts = 720;
+            SDL_GetWindowSize(window, &wPts, &hPts);
+            const auto [wLeft, wTop] = renderer.mapPosition(0.0f, 0.0f);
+            const auto [wRight, wBottom] = renderer.mapPosition(static_cast<float>(wPts), static_cast<float>(hPts));
+            const float wx0 = static_cast<float>(wLeft);
+            const float wy0 = static_cast<float>(wTop);
+            const float spanW = std::max(120.0f, static_cast<float>(wRight - wLeft));
+            const float spanH = std::max(90.0f, static_cast<float>(wBottom - wTop));
+            const float wt = paused
+                ? std::chrono::duration<float>(lastNoticeFrame - animStart).count()
+                : std::chrono::duration<float>(now - animStart).count();
+            const unsigned avail = 112u - static_cast<unsigned>(beams.size());
+            if (missionWeather == assets::WeatherKind::Rain) {
+                const unsigned dropCount = std::min(18u, avail);
+                for (unsigned d = 0u; d < dropCount; ++d) {
+                    const float h1 = std::fmod(static_cast<float>((d * 73u + 19u) % 97u) / 97.0f + wt * 0.22f, 1.0f);
+                    const float h2 = std::fmod(static_cast<float>((d * 41u + 11u) % 89u) / 89.0f + wt * 1.45f, 1.0f);
+                    const float rx = wx0 + (1.0f - h1) * spanW;
+                    const float ry = wy0 + h2 * spanH;
+                    beams.push_back({rx, ry, rx - 6.0f * s, ry + 18.0f * s, 1.25f * s,
+                                     105, 212, 235, 0.04f, 0.28f});
+                }
+            } else if (missionWeather == assets::WeatherKind::Snow) {
+                const unsigned flakeCount = std::min(18u, avail);
+                for (unsigned f = 0u; f < flakeCount; ++f) {
+                    const float baseU = static_cast<float>((f * 59u + 7u) % 101u) / 101.0f;
+                    const float h2 = std::fmod(static_cast<float>((f * 37u + 13u) % 83u) / 83.0f + wt * 0.16f, 1.0f);
+                    const float sway = std::sin(wt * 1.8f + static_cast<float>(f) * 0.9f) * 18.0f * s;
+                    const float fx = wx0 + baseU * spanW + sway;
+                    const float fy = wy0 + h2 * spanH;
+                    beams.push_back({fx, fy, fx, fy, 3.2f * s, 255, 240, 190, 0.42f, 0.42f});
                 }
             }
         }

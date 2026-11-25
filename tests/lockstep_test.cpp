@@ -1,5 +1,6 @@
 #include "assets/mission.hpp"
 #include "assets/unit_catalog.hpp"
+#include "net/lan_discovery.hpp"
 #include "net/tcp_transport.hpp"
 #include "sim/command.hpp"
 #include "sim/lockstep.hpp"
@@ -925,6 +926,35 @@ void testFourPlayerStarRelay2v2() {
     std::cout << "Four-player 2v2 StarRelay TCP lockstep session PASSED\n";
 }
 
+void testLanDiscoveryLoopback() {
+    const auto pkt = ss2::encodeLanBeaconPacket(27111u, 1u, 4u, 0x123456789abcdef0ULL, "Commander", "dnepr");
+    ss2::LanGameInfo parsed;
+    require(ss2::decodeLanBeaconPacket(pkt.data(), pkt.size(), parsed), "decodeLanBeaconPacket failed");
+    require(parsed.tcpPort == 27111u && parsed.currentPlayers == 1u && parsed.maxPlayers == 4u &&
+            parsed.mapHash == 0x123456789abcdef0ULL && parsed.hostName == "Commander" && parsed.missionSpec == "dnepr",
+            "LAN beacon codec mismatch");
+
+    constexpr std::uint16_t kTestDiscPort = 37419u;
+    ss2::LanScanner scanner;
+    if (!scanner.start(kTestDiscPort)) {
+        std::cout << "LanScanner loopback skipped (UDP bind restricted)\n";
+        return;
+    }
+    ss2::LanBeacon beacon;
+    require(beacon.start(kTestDiscPort, 27111u, 1u, 4u, 0x123456789abcdef0ULL, "Commander", "dnepr"),
+            "LanBeacon::start failed");
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+    while (std::chrono::steady_clock::now() < deadline && scanner.games().empty()) {
+        beacon.tick(kTestDiscPort);
+        scanner.poll();
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    require(!scanner.games().empty() && scanner.games().front().tcpPort == 27111u &&
+            scanner.games().front().missionSpec == "dnepr",
+            "LanScanner did not discover loopback LanBeacon lobby");
+    std::cout << "UDP LAN discovery loopback PASSED\n";
+}
+
 }  // namespace
 
 int main(int argc, char** argv) try {
@@ -939,6 +969,7 @@ int main(int argc, char** argv) try {
     if (!simOnly) {
         testLoopbackTcpSession();
         testFourPlayerStarRelay2v2();
+        testLanDiscoveryLoopback();
     }
 
     std::cout << "lockstep_test PASSED\n";

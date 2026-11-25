@@ -208,6 +208,7 @@ void GameSession::initializeMission() {
         fogGridW = data.width;
         fogGridH = data.height;
         mapScheme = data.scheme;
+        missionWeather = data.weather;
         unitCatalog = ss2::assets::UnitCatalog::load(gameDir, data.scheme);
         reportLoadProgress(0.10f);
         auto map = isTutorial1
@@ -256,6 +257,23 @@ void GameSession::initializeMission() {
                 }
             } else {
                 gpuArtDir.clear();
+            }
+            const auto candVehArt = hdPack / "vehicles-art-4x";
+            std::error_code vehEc;
+            if (std::filesystem::is_directory(candVehArt, vehEc)) {
+                gpuVehicleArtDir = candVehArt;
+            } else {
+                gpuVehicleArtDir.clear();
+            }
+        }
+        if (vehicleScene) {
+            for (const auto& v : vehicleUnits) {
+                (void)ensureGpuVehicleSlot(v.id);
+            }
+            if (!gpuVehicleIds.empty()) {
+                vehicleScene->setGpuRenderedIds(&gpuVehicleIds);
+                std::cout << "GPU vehicles: " << gpuHdVehicles.size() << " 4x HD + "
+                          << gpuPckVehicleSlots.size() << " 2x EPX classes\n";
             }
         }
         if (isTutorial1 && !hdPack.empty()) {
@@ -923,13 +941,33 @@ void GameSession::applyMapGraphics() {
         renderer.setMapGrade({});
         return;
     }
+    const float tSec = std::fmod(
+        std::chrono::duration<float>(std::chrono::steady_clock::now() - animStart).count(), 3600.0f);
+    const float shimmer = (mapScheme == 3u) ? 0.45f : 0.85f;
+    MapGrade g{};
     switch (mapScheme) {
-    case 0u: renderer.setMapGrade({true, 0.42f, 0.14f, 1.02f, 1.01f, 0.97f, 1.05f}); break; // Summer
-    case 1u: renderer.setMapGrade({true, 0.40f, 0.15f, 0.96f, 0.99f, 1.05f, 1.06f}); break; // Winter
-    case 2u: renderer.setMapGrade({true, 0.42f, 0.14f, 1.01f, 1.02f, 0.98f, 1.05f}); break; // Beach / Pacific
-    case 3u: renderer.setMapGrade({true, 0.38f, 0.15f, 1.04f, 1.00f, 0.93f, 1.05f}); break; // Desert
-    default: renderer.setMapGrade({true, 0.40f, 0.14f, 1.00f, 1.00f, 1.00f, 1.04f}); break;
+    case 0u: g = {true, 0.42f, 0.14f, 1.02f, 1.01f, 0.97f, 1.05f, tSec, shimmer}; break; // Summer
+    case 1u: g = {true, 0.40f, 0.15f, 0.96f, 0.99f, 1.05f, 1.06f, tSec, shimmer}; break; // Winter
+    case 2u: g = {true, 0.42f, 0.14f, 1.01f, 1.02f, 0.98f, 1.05f, tSec, shimmer}; break; // Beach / Pacific
+    case 3u: g = {true, 0.38f, 0.15f, 1.04f, 1.00f, 0.93f, 1.05f, tSec, shimmer}; break; // Desert
+    default: g = {true, 0.40f, 0.14f, 1.00f, 1.00f, 1.00f, 1.04f, tSec, shimmer}; break;
     }
+    if (missionWeather == assets::WeatherKind::Fog) {
+        g.contrast = 1.01f;
+        g.vignette = 0.17f;
+        g.bGain = std::min(1.10f, g.bGain + 0.03f);
+    } else if (missionWeather == assets::WeatherKind::Rain) {
+        g.contrast = 1.06f;
+        g.vignette = 0.16f;
+        g.rGain *= 0.97f;
+        g.bGain = std::min(1.10f, g.bGain * 1.03f);
+    } else if (missionWeather == assets::WeatherKind::Snow) {
+        g.contrast = 1.04f;
+        g.vignette = 0.16f;
+        g.rGain *= 0.96f;
+        g.bGain = std::min(1.10f, g.bGain * 1.04f);
+    }
+    renderer.setMapGrade(g);
 }
 
 bool GameSession::ensureGpuInfantrySlot(const std::string& id) {
@@ -960,6 +998,47 @@ bool GameSession::ensureGpuInfantrySlot(const std::string& id) {
     return true;
 }
 
+bool GameSession::ensureGpuVehicleSlot(const std::string& id) {
+    if (gpuVehicleIds.contains(id)) return true;
+    const auto* sp = unitCatalog ? unitCatalog->find(id) : nullptr;
+    if ((sp && sp->isSupplyCrate()) || id == "ammo.box" || id == "spare.parts") return false;
+    const unsigned maxWorldSlot = combatVfx.atlasSlot().has_value() ? planeAtlasBase : (planeAtlasBase - 1u);
+    if (gpuNextSlot >= maxWorldSlot) return false;
+    if (!gpuVehicleArtDir.empty()) {
+        const auto path = gpuVehicleArtDir / (id + ".png");
+        std::error_code ec;
+        if (std::filesystem::is_regular_file(path, ec)) {
+            auto atlas = ss2::assets::loadPngRgba(path);
+            if (atlas.width == 2048 && atlas.height == 768) {
+                bool hasTurret = false;
+                for (unsigned y = 256u; y < 512u && !hasTurret; y += 2u) {
+                    for (unsigned x = 0u; x < 2048u; x += 2u) {
+                        if (atlas.rgba[(std::size_t(y) * 2048u + x) * 4u + 3u] > 20u) {
+                            hasTurret = true;
+                            break;
+                        }
+                    }
+                }
+                renderer.setSpriteAtlas(gpuNextSlot, atlas);
+                gpuHdVehicles.emplace(id, GpuHdVehicleMeta{gpuNextSlot++, hasTurret});
+                gpuVehicleIds.insert(id);
+                if (gpuPreloadLogged)
+                    std::cout << "GPU 4x HD vehicle lazy slot: " << id << " (slot " << (gpuNextSlot - 1) << ")\n";
+                return true;
+            }
+        }
+    }
+    if (!vehicleScene) return false;
+    if (auto pckAtlas = vehicleScene->buildGpuAtlas(id, true)) {
+        renderer.setSpriteAtlas(gpuNextSlot, pckAtlas->atlas);
+        gpuPckVehicleSlots.emplace(id, gpuNextSlot++);
+        gpuPckVehicleAtlases.emplace(id, std::move(*pckAtlas));
+        gpuVehicleIds.insert(id);
+        return true;
+    }
+    return false;
+}
+
 void GameSession::syncGpuSprites() {
     if (!scene) return;
     const bool hasAirTrails = hud && hud->hasActiveAirTrails() && hud->airVfxAtlasSlot().has_value();
@@ -977,7 +1056,7 @@ void GameSession::syncGpuSprites() {
     const bool hasLiveParas = !liveParachutes.empty() && combatVfx.atlasSlot().has_value();
     const bool hasCombatVfx = combatVfx.atlasSlot().has_value() &&
                               ((combatEffects && combatVfx.hasActiveSprites()) || hasLiveCrates || hasLiveParas);
-    if (gpuAtlasSlots.empty() && worldGpuSprites.empty() && livePlanes.empty() && !hasAirTrails && !hasCombatVfx) {
+    if (gpuAtlasSlots.empty() && gpuVehicleIds.empty() && worldGpuSprites.empty() && livePlanes.empty() && !hasAirTrails && !hasCombatVfx) {
         if (planesClearedNeeded) {
             renderer.setSprites({});
             planesClearedNeeded = false;
@@ -1110,6 +1189,130 @@ void GameSession::syncGpuSprites() {
             },
             u.y
         });
+    }
+    if (vehicleScene && !gpuVehicleIds.empty()) {
+        constexpr float vRecoilDx[8] = {-2.2f, 0.0f, 2.2f, 3.0f, 2.2f, 0.0f, -2.2f, -3.0f};
+        constexpr float vRecoilDy[8] = {-1.4f, -2.2f, -1.4f, 0.0f, 1.4f, 2.2f, 1.4f, 0.0f};
+        const auto& vehs = vehicleScene->vehicles();
+        std::vector<ss2::assets::GpuVehicleSprite> pckSprites;
+        for (std::size_t vi = 0; vi < vehs.size(); ++vi) {
+            const auto& v = vehs[vi];
+            if (!v.visible) continue;
+            const bool hasHd = gpuHdVehicles.contains(v.id);
+            const bool hasPck = gpuPckVehicleSlots.contains(v.id);
+            if (!hasHd && !hasPck) continue;
+            const bool alive = v.alive && v.hp > 0;
+            const float vx = static_cast<float>(v.x) * fMapScale;
+            const float vy = static_cast<float>(v.y) * fMapScale;
+            const float baseBright = fogBrightnessAt(v.x, v.y);
+            float lightBoost = 0.0f;
+            if (enhancedGraphics && combatEffects && alive) {
+                for (const auto& vfx : activeVfx) {
+                    if (lightBoost >= 0.36f) break;
+                    if (vfx.kind != ActiveVfx::Kind::Explosion && vfx.kind != ActiveVfx::Kind::VehicleExplosion &&
+                        vfx.kind != ActiveVfx::Kind::Flamer && vfx.kind != ActiveVfx::Kind::CannonShell) {
+                        continue;
+                    }
+                    const float dx = vx - vfx.x0;
+                    const float dy = vy - vfx.y0;
+                    const float distSq = dx * dx + dy * dy;
+                    if (distSq < lightRadiusSq) {
+                        const float falloff = 1.0f - std::sqrt(distSq / lightRadiusSq);
+                        lightBoost = std::max(lightBoost, 0.34f * falloff);
+                    }
+                }
+            }
+            const float litBright = std::min(1.42f, baseBright + lightBoost);
+            float rDx = 0.0f, rDy = 0.0f;
+            if (alive) {
+                if (const auto rit = vehRecoilUntil.find(vi); rit != vehRecoilUntil.end() && now < rit->second) {
+                    const unsigned tcol = ((v.turretDir + 2u) >> 2u) & 7u;
+                    rDx = vRecoilDx[tcol] * fMapScale;
+                    rDy = vRecoilDy[tcol] * fMapScale;
+                }
+            }
+            if (hasHd) {
+                const auto& meta = gpuHdVehicles.at(v.id);
+                const unsigned hcol = ((v.hullDir + 2u) >> 2u) & 7u;
+                const unsigned tcol = ((v.turretDir + 2u) >> 2u) & 7u;
+                const float maxRetail = static_cast<float>(std::max(v.width, v.height));
+                const float cellOut = (maxRetail > 4.0f ? std::clamp(maxRetail * 1.25f, 38.0f, 88.0f) : 68.0f) * fMapScale;
+                constexpr float hdCell = 256.0f;
+                if (enhancedGraphics) {
+                    const float shW = cellOut * 1.04f;
+                    const float shH = cellOut * 0.50f;
+                    items.push_back({
+                        {
+                            vx - 0.5f * shW + 5.0f * fMapScale,
+                            vy - 0.5f * shH + 2.5f * fMapScale,
+                            shW, shH,
+                            static_cast<float>(hcol) * hdCell, alive ? 0.0f : 512.0f,
+                            static_cast<float>(hcol + 1u) * hdCell, alive ? 256.0f : 768.0f,
+                            meta.atlasSlot, 0.0f, 0.34f * baseBright
+                        },
+                        alive ? (v.y - 3) : (-9502 + v.y)
+                    });
+                }
+                if (alive) {
+                    const float hullOffX = meta.hasTurret ? 0.0f : rDx;
+                    const float hullOffY = meta.hasTurret ? 0.0f : rDy;
+                    items.push_back({
+                        {
+                            vx - 0.5f * cellOut + hullOffX,
+                            vy - 0.5f * cellOut + hullOffY,
+                            cellOut, cellOut,
+                            static_cast<float>(hcol) * hdCell, 0.0f,
+                            static_cast<float>(hcol + 1u) * hdCell, 256.0f,
+                            meta.atlasSlot, litBright, 1.0f
+                        },
+                        v.y
+                    });
+                    if (meta.hasTurret) {
+                        items.push_back({
+                            {
+                                vx - 0.5f * cellOut + rDx,
+                                vy - 0.5f * cellOut + rDy,
+                                cellOut, cellOut,
+                                static_cast<float>(tcol) * hdCell, 256.0f,
+                                static_cast<float>(tcol + 1u) * hdCell, 512.0f,
+                                meta.atlasSlot, litBright, 1.0f
+                            },
+                            v.y + 1
+                        });
+                    }
+                } else {
+                    items.push_back({
+                        {
+                            vx - 0.5f * cellOut,
+                            vy - 0.5f * cellOut,
+                            cellOut, cellOut,
+                            static_cast<float>(hcol) * hdCell, 512.0f,
+                            static_cast<float>(hcol + 1u) * hdCell, 768.0f,
+                            meta.atlasSlot, baseBright * 0.78f, 0.96f
+                        },
+                        -9500 + v.y
+                    });
+                }
+            } else {
+                const unsigned slot = gpuPckVehicleSlots.at(v.id);
+                const auto& atlas = gpuPckVehicleAtlases.at(v.id);
+                pckSprites.clear();
+                vehicleScene->appendGpuSprites(vi, atlas, mapScale, rDx, rDy, pckSprites);
+                for (const auto& gs : pckSprites) {
+                    if (gs.isShadow && !enhancedGraphics) continue;
+                    items.push_back({
+                        {
+                            gs.x, gs.y, gs.width, gs.height,
+                            gs.u0, gs.v0, gs.u1, gs.v1,
+                            slot,
+                            gs.isShadow ? 0.0f : (alive ? litBright : (baseBright * 0.94f)),
+                            gs.isShadow ? (0.34f * baseBright) : 1.0f
+                        },
+                        v.y + gs.sortYOffset
+                    });
+                }
+            }
+        }
     }
     for (const auto& [sid, lp] : livePlanes) {
         (void)sid;
@@ -1462,7 +1665,7 @@ void GameSession::ensureUnitPortrait(const std::string& id, bool isVehicle) {
     const std::string disp = hudDisplayName(id);
     if (registeredPortraits.contains(disp)) return;
     std::optional<ss2::assets::MapImage> portrait;
-    if (!isVehicle && !hdPack.empty() && !originalInfantry) {
+    if (!hdPack.empty() && !originalInfantry) {
         const auto pp = hdPack / "hud-portraits" / (id + ".png");
         std::error_code ec;
         if (std::filesystem::is_regular_file(pp, ec)) {
@@ -1664,6 +1867,7 @@ std::optional<std::pair<size_t, size_t>> GameSession::spawnAndRegisterVehicle(co
         v.hasCrew = true;
     }
     ensureUnitPortrait(v.id, true);
+    (void)ensureGpuVehicleSlot(v.id);
     const size_t simVIdx = simulation->spawnVehicle(v);
     int maxVehHp = std::max(1, v.hp);
     int realHp = v.hp;
@@ -1704,7 +1908,7 @@ std::optional<std::pair<size_t, size_t>> GameSession::spawnAndRegisterVehicle(co
     vehicleMoveImpaired.push_back(false);
     vehicleSuppressed.push_back(false);
     vehicleHatchOpen.push_back(hatchOpen);
-    if (mapScale == 1 && scene) {
+    if (mapScale == 1 && scene && !gpuVehicleIds.contains(v.id)) {
         const int l = v.width > 0 ? v.left - 4 : v.x - 24;
         const int t = v.height > 0 ? v.top - 4 : v.y - 24;
         const int r = v.width > 0 ? v.left + v.width + 4 : v.x + 24;
@@ -1713,6 +1917,8 @@ std::optional<std::pair<size_t, size_t>> GameSession::spawnAndRegisterVehicle(co
         if (patch.pixels.width && patch.pixels.height) {
             renderer.updateMapRegion(patch.x, patch.y, patch.pixels);
         }
+    } else if (gpuVehicleIds.contains(v.id)) {
+        syncGpuSprites();
     }
     return std::pair{*vIdx, simVIdx};
 }
@@ -1766,6 +1972,7 @@ void GameSession::registerSimSpawnedVehicle(std::size_t simVIdx, const std::stri
         }
         const auto& v = vehicleScene->vehicles().at(vIdx);
         ensureUnitPortrait(v.id, true);
+        (void)ensureGpuVehicleSlot(v.id);
         int maxVehHp = std::max(1, v.hp);
         int realHp = v.hp;
         int realAmmo = v.ammo;
@@ -1800,7 +2007,7 @@ void GameSession::registerSimSpawnedVehicle(std::size_t simVIdx, const std::stri
         vehicleMoveImpaired.push_back(false);
         vehicleSuppressed.push_back(false);
         vehicleHatchOpen.push_back(hatchOpen);
-        if (mapScale == 1 && scene && dirty.valid()) {
+        if (mapScale == 1 && scene && dirty.valid() && !gpuVehicleIds.contains(v.id)) {
             const auto patch = scene->repaintRegion(dirty.left, dirty.top, dirty.right, dirty.bottom);
             if (patch.pixels.width && patch.pixels.height) {
                 renderer.updateMapRegion(patch.x, patch.y, patch.pixels);

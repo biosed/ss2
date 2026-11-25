@@ -106,7 +106,7 @@ run_toolchain() {
         -I"$ROOT/src" "${SIM_SRCS[@]}" "$ROOT/tests/combat_parity_test.cpp" \
         -lpthread -o "$TMP/combat_$label"
     "${cxx[@]}" -std=c++20 -ffp-contract=off -Wall -Wextra -Wpedantic -UNDEBUG \
-        -I"$ROOT/src" "${SIM_SRCS[@]}" "$ROOT/src/net/tcp_transport.cpp" "$ROOT/tests/lockstep_test.cpp" \
+        -I"$ROOT/src" "${SIM_SRCS[@]}" "$ROOT/src/net/tcp_transport.cpp" "$ROOT/src/net/lan_discovery.cpp" "$ROOT/tests/lockstep_test.cpp" \
         -lpthread -o "$TMP/lockstep_$label"
 
     echo "=== Running $label ==="

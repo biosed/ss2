@@ -5,6 +5,7 @@
 #include "assets/briefing_media.hpp"
 #include "assets/mission.hpp"
 #include "assets/sprite.hpp"
+#include "net/lan_discovery.hpp"
 #include "ui/cursor_bank.hpp"
 #include "ui/strings.hpp"
 
@@ -206,6 +207,9 @@ struct GoldFrontEnd::Assets {
     SDL_AudioDeviceID musicAudioDev{0};
     SDL_AudioStream* musicAudioStream{nullptr};
     MenuCursorAnimator menuCursor;
+    LanScanner lanScanner;
+    bool lanScannerActive{false};
+    std::size_t lastLanCount{0};
     bool loadedMenuSue{false};
 
     cairo_surface_t* overviewOrPlate(cairo_surface_t* overview) const noexcept {

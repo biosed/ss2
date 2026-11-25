@@ -29,6 +29,7 @@ struct MapPush {
     float params[4];
     float grade[4];
     float extra[4];
+    float worldAnim[4];
 };
 constexpr auto transferStage = vk::PipelineStageFlagBits::eTransfer;
 constexpr std::uint64_t acquireTimeoutNs = 50'000'000;
@@ -740,7 +741,8 @@ struct VulkanWindow::Impl {
                     {float(tile.width), float(tile.height), float(left), float(top)},
                     {viewInvW, viewInvH, smoothMode, mapGrade.sharpness},
                     {mapGrade.rGain, mapGrade.gGain, mapGrade.bGain, mapGrade.vignette},
-                    {mapGrade.contrast, texelsPerScreenPx, srgbFlag, 0.0f}
+                    {mapGrade.contrast, texelsPerScreenPx, srgbFlag, 0.0f},
+                    {float(tile.x), float(tile.y), mapGrade.timeSec, mapGrade.waterShimmer}
                 };
                 command.pushConstants(*mapPipelineLayout, vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
                                       0, sizeof(push), &push);
@@ -1662,7 +1664,8 @@ void VulkanWindow::setBars(std::vector<MapBar> list) {
 }
 void VulkanWindow::setMapFilterLinear(bool linear) { impl_->mapLinear = linear; }
 void VulkanWindow::setMapGrade(const MapGrade& grade) {
-    for (float v : {grade.sharpness, grade.vignette, grade.rGain, grade.gGain, grade.bGain, grade.contrast})
+    for (float v : {grade.sharpness, grade.vignette, grade.rGain, grade.gGain, grade.bGain,
+                    grade.contrast, grade.timeSec, grade.waterShimmer})
         if (!std::isfinite(v)) throw std::invalid_argument("Map grade has a non-finite value");
     MapGrade clamped = grade;
     clamped.sharpness = std::clamp(grade.sharpness, 0.f, 1.f);
@@ -1671,6 +1674,7 @@ void VulkanWindow::setMapGrade(const MapGrade& grade) {
     clamped.gGain = std::clamp(grade.gGain, 0.5f, 1.5f);
     clamped.bGain = std::clamp(grade.bGain, 0.5f, 1.5f);
     clamped.contrast = std::clamp(grade.contrast, 0.5f, 1.5f);
+    clamped.waterShimmer = std::clamp(grade.waterShimmer, 0.f, 2.f);
     impl_->mapGrade = clamped;
 }
 void VulkanWindow::setPreferSoftwareRenderer(bool prefer) { impl_->preferSoftware = prefer; }

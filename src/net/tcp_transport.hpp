@@ -1,5 +1,6 @@
 #pragma once
 
+#include "net/lan_discovery.hpp"
 #include "sim/lockstep.hpp"
 
 #include <array>
@@ -125,6 +126,7 @@ private:
     std::uint64_t expectedMapHash_{0};
     std::uint8_t nation_{0};
     bool helloSent_{false};
+    LanBeacon lanBeacon_;
     std::string statusText_;
     std::string errorText_;
 };

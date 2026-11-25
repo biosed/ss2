@@ -33,6 +33,7 @@ constexpr std::array<ButtonSpec, 2> kMultiplayerButtons{{
 }};
 
 constexpr RectD kMpModeRect{438, 136, 330, 34};
+constexpr RectD kMpLanPillRect{556, 178, 212, 22};
 constexpr RectD kMpHostFieldRect{438, 204, 330, 32};
 constexpr RectD kMpPortFieldRect{438, 268, 160, 32};
 constexpr RectD kMpNationRect{608, 268, 160, 32};
@@ -114,6 +115,10 @@ std::string GoldFrontEnd::hitTestMultiplayerOrBrowser(double sx, double sy) cons
         if (const auto id = hitTestButtons(kLoadGameButtons, sx, sy); !id.empty()) return id;
     } else if (fe_.screen() == FrontEnd::Screen::Multiplayer) {
         if (kMpModeRect.contains(sx, sy)) return "mp_mode";
+        if (assets_ && !fe_.mpIsHost() && !assets_->lanScanner.games().empty() &&
+            kMpLanPillRect.contains(sx, sy)) {
+            return "mp_lan_pick";
+        }
         if (kMpHostFieldRect.contains(sx, sy)) return "mp_host_field";
         if (kMpPortFieldRect.contains(sx, sy)) return "mp_port_field";
         if (kMpNationRect.contains(sx, sy)) return "mp_nation";
@@ -136,6 +141,31 @@ void GoldFrontEnd::finishMultiplayerEdit() {
 bool GoldFrontEnd::activateMultiplayer(const std::string& id) {
     if (const auto p = parsePortText(mpPortDraft_)) fe_.setMpPort(*p);
     mpPortDraft_ = std::to_string(fe_.mpPort());
+    if (id == "mp_lan_pick") {
+        if (assets_ && !assets_->lanScanner.games().empty()) {
+            const auto& g = assets_->lanScanner.games().front();
+            fe_.setMpHostAddress(g.hostAddress);
+            fe_.setMpPort(g.tcpPort);
+            mpPortDraft_ = std::to_string(g.tcpPort);
+            if (!g.missionSpec.empty()) {
+                for (std::size_t mi = 0; mi < mpMissions_.size(); ++mi) {
+                    const std::string stem = std::filesystem::path(mpMissions_[mi].path).stem().string();
+                    if (assets::equalsIgnoreCaseAscii(stem, g.missionSpec)) {
+                        fe_.selectMultiplayerMission(mi);
+                        ensureOverviewLoaded(mpMissions_[mi].path);
+                        break;
+                    }
+                }
+            }
+            if (mpEditField_ != MpEditField::None) {
+                mpEditField_ = MpEditField::None;
+                if (window_) SDL_StopTextInput(window_);
+            }
+            showNotice(trf("Joined LAN lobby: {0}:{1}", {g.hostAddress, std::to_string(g.tcpPort)}));
+            dirty_ = true;
+        }
+        return true;
+    }
     if (id == "mp_host_field") {
         mpEditField_ = MpEditField::HostAddress;
         focusedId_ = "mp_host_field";
@@ -531,6 +561,15 @@ void GoldFrontEnd::renderMultiplayer(const RenderEnv& env) {
     };
 
     drawFieldLabel(tr("Host Address") + ":", 182.0);
+    if (assets_ && !fe_.mpIsHost() && !assets_->lanScanner.games().empty()) {
+        const auto& g = assets_->lanScanner.games().front();
+        const bool lanHov = (hoveredId_ == "mp_lan_pick");
+        drawBronzeBox(cr, kMpLanPillRect.x, kMpLanPillRect.y, kMpLanPillRect.w, kMpLanPillRect.h,
+                      lanHov ? 0.95 : 0.85);
+        const std::string hostLabel = g.hostName.empty() ? g.hostAddress : g.hostName;
+        const std::string pillText = "LAN: " + hostLabel + ":" + std::to_string(g.tcpPort);
+        drawGoldStencilButton(cr, pangoCtx, kMpLanPillRect, pillText, '\0', lanHov, false, true, 11.5, true);
+    }
     drawInputField(kMpHostFieldRect, fe_.mpHostAddress(), tr("Enter address"),
                    mpEditField_ == MpEditField::HostAddress,
                    hoveredId_ == "mp_host_field", focusedId_ == "mp_host_field");

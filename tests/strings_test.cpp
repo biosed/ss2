@@ -121,8 +121,10 @@ int main() {
             us.skipIntro = true;
             us.completedMissions = {"022000", "barbarossa"};
             us.missionHighScores = {{"022000", 4250}, {"barbarossa", 9100}};
+            us.gameDir = "/home/user/GOG Games/Sudden Strike 2";
             const std::string ini = serializeUserSettings(us);
             const UserSettings parsed = parseUserSettings(ini);
+            check(parsed.gameDir == us.gameDir, "settings gameDir round-trip");
             check(parsed.language == Language::french, "settings language round-trip");
             check(std::abs(parsed.sfxVolume - 0.75f) < 0.01f, "settings sfxVolume round-trip");
             check(std::abs(parsed.musicVolume - 0.40f) < 0.01f, "settings musicVolume round-trip");
@@ -215,6 +217,9 @@ int main() {
             std::filesystem::create_directories(hdRoot / "hud-portraits", ec);
             check(hasInstalledHdPackAt(hdRoot), "hasInstalledHdPackAt accepts hud-portraits pack");
             std::filesystem::remove_all(hdRoot / "hud-portraits", ec);
+            std::filesystem::create_directories(hdRoot / "vehicles-art-4x", ec);
+            check(hasInstalledHdPackAt(hdRoot), "hasInstalledHdPackAt accepts vehicles-art-4x pack");
+            std::filesystem::remove_all(hdRoot / "vehicles-art-4x", ec);
             check(!hasInstalledHdPackAt(hdRoot), "hasInstalledHdPackAt rejects hd-pack once subdirectories removed");
             std::filesystem::remove_all(tmpRoot, ec);
             setEnvVar("XDG_DATA_HOME", oldXdg.empty() ? nullptr : oldXdg.c_str());

@@ -150,16 +150,21 @@ struct FrameLayer {
     View frame;
     int ox{0};
     int oy{0};
+    std::size_t frameIdx{0};
+    bool isTurret{false};
 };
 
 struct LayerList {
     std::array<FrameLayer, 4> items{};
     std::size_t count{0};
 
-    void push(View frame, int ox, int oy) {
+    void push(View frame, int ox, int oy, std::size_t frameIdx = 0, bool isTurret = false) {
         if (count < items.size() && isRenderableFrame(frame)) {
-            items[count++] = {frame, ox, oy};
+            items[count++] = {frame, ox, oy, frameIdx, isTurret};
         }
+    }
+    void pushIdx(View pck, std::size_t frameIdx, int ox, int oy, bool isTurret = false) {
+        push(pckFrame(pck, frameIdx), ox, oy, frameIdx, isTurret);
     }
 };
 
@@ -172,10 +177,13 @@ struct ShadowLayerList {
     std::array<FrameLayer, 2> items{};
     std::size_t count{0};
 
-    void push(View frame, int ox, int oy) {
+    void push(View frame, int ox, int oy, std::size_t frameIdx = 0, bool isTurret = false) {
         if (count < items.size() && isRenderableShadowFrame(frame)) {
-            items[count++] = {frame, ox, oy};
+            items[count++] = {frame, ox, oy, frameIdx, isTurret};
         }
+    }
+    void pushIdx(View pck, std::size_t frameIdx, int ox, int oy, bool isTurret = false) {
+        push(pckFrame(pck, frameIdx), ox, oy, frameIdx, isTurret);
     }
 };
 
@@ -201,23 +209,24 @@ LayerList collectVehicleLayers(View pck, View hot, std::size_t frameCount,
     const unsigned phase = trackPhase & 1u;
     LayerList layers;
     const auto pushWithPhase = [&](std::size_t base0, std::size_t base1) {
-        const auto fr = pckFrame(pck, (phase ? base1 : base0) + hull);
+        const std::size_t idx = (phase ? base1 : base0) + hull;
+        const auto fr = pckFrame(pck, idx);
         if (isRenderableFrame(fr)) {
-            layers.push(fr, x, y);
+            layers.push(fr, x, y, idx, false);
         } else if (phase) {
-            layers.push(pckFrame(pck, base0 + hull), x, y);
+            layers.pushIdx(pck, base0 + hull, x, y, false);
         }
     };
     switch (frameCount) {
     case 7u:
-        layers.push(pckFrame(pck, 0u), x, y);
-        layers.push(pckFrame(pck, 1u), x, y);
+        layers.pushIdx(pck, 0u, x, y);
+        layers.pushIdx(pck, 1u, x, y, true);
         break;
     case 160u:
         pushWithPhase(0u, 32u);
         break;
     case 192u:
-        layers.push(pckFrame(pck, hull), x, y);
+        layers.pushIdx(pck, hull, x, y);
         pushWithPhase(32u, 64u);
         break;
     case 256u:
@@ -225,18 +234,19 @@ LayerList collectVehicleLayers(View pck, View hot, std::size_t frameCount,
             pushWithPhase(32u, 96u);
             pushWithPhase(0u, 64u);
         } else {
-            layers.push(pckFrame(pck, 32u + hull), x, y);
-            layers.push(pckFrame(pck, hull), x, y);
+            layers.pushIdx(pck, 32u + hull, x, y);
+            layers.pushIdx(pck, hull, x, y);
         }
         break;
     case 288u: {
-        const auto block6 = pckFrame(pck, 192u + turret);
+        const std::size_t tIdx = 192u + turret;
+        const auto block6 = pckFrame(pck, tIdx);
         if (frameTag(block6) == 0xa2u) {
-            layers.push(pckFrame(pck, hull), x, y);
+            layers.pushIdx(pck, hull, x, y);
             pushWithPhase(32u, 64u);
             if (isRenderableFrame(block6) && hot.size() >= 32u * 8u) {
                 const auto [hotDx, hotDy] = readHotOffset(hot, hull);
-                layers.push(block6, x + hotDx, y + hotDy);
+                layers.push(block6, x + hotDx, y + hotDy, tIdx, true);
             }
         } else {
             pushWithPhase(32u, 96u);
@@ -246,28 +256,28 @@ LayerList collectVehicleLayers(View pck, View hot, std::size_t frameCount,
     }
     case 352u:
         if (frameTag(pckFrame(pck, 64u + hull)) == 0xa2u) {
-            layers.push(pckFrame(pck, hull), x, y);
-            layers.push(pckFrame(pck, 32u + hull), x, y);
-            layers.push(pckFrame(pck, 160u + turret), x, y);
+            layers.pushIdx(pck, hull, x, y);
+            layers.pushIdx(pck, 32u + hull, x, y);
+            layers.pushIdx(pck, 160u + turret, x, y, true);
         } else {
-            layers.push(pckFrame(pck, hull), x, y);
+            layers.pushIdx(pck, hull, x, y);
         }
         break;
     case 448u:
-        layers.push(pckFrame(pck, hull), x, y);
-        layers.push(pckFrame(pck, 32u + hull), x, y);
-        layers.push(pckFrame(pck, 128u + turret), x, y);
+        layers.pushIdx(pck, hull, x, y);
+        layers.pushIdx(pck, 32u + hull, x, y);
+        layers.pushIdx(pck, 128u + turret, x, y, true);
         break;
     default:
         if (frameCount < 96u) {
             const auto block0 = pckFrame(pck, hull);
             if (isRenderableFrame(block0)) {
-                layers.push(block0, x, y);
+                layers.push(block0, x, y, hull, false);
             } else if (32u + hull < frameCount) {
-                layers.push(pckFrame(pck, 32u + hull), x, y);
+                layers.pushIdx(pck, 32u + hull, x, y);
             }
         } else {
-            layers.push(pckFrame(pck, hull), x, y);
+            layers.pushIdx(pck, hull, x, y);
         }
         break;
     }
@@ -281,97 +291,97 @@ WreckLayers collectWreckLayers(View pck, View hot, std::size_t frameCount,
     WreckLayers out;
     switch (frameCount) {
     case 7u:
-        out.layers.push(pckFrame(pck, 4u), x, y);
-        out.layers.push(pckFrame(pck, 5u), x, y);
+        out.layers.pushIdx(pck, 4u, x, y);
+        out.layers.pushIdx(pck, 5u, x, y);
         if (out.layers.count > 0u) {
             out.dedicated = true;
         } else {
-            out.layers.push(pckFrame(pck, 0u), x, y);
-            out.layers.push(pckFrame(pck, 1u), x, y);
+            out.layers.pushIdx(pck, 0u, x, y);
+            out.layers.pushIdx(pck, 1u, x, y);
         }
         break;
     case 66u:
-        out.layers.push(pckFrame(pck, 32u), x, y);
+        out.layers.pushIdx(pck, 32u, x, y);
         if (out.layers.count > 0u) {
             out.dedicated = true;
         } else {
-            out.layers.push(pckFrame(pck, hull), x, y);
+            out.layers.pushIdx(pck, hull, x, y);
         }
         break;
     case 128u:
         if (frameTag(pckFrame(pck, 32u + hull)) == 0xa3u) {
-            out.layers.push(pckFrame(pck, 64u + hull), x, y);
+            out.layers.pushIdx(pck, 64u + hull, x, y);
         } else {
-            out.layers.push(pckFrame(pck, 32u + hull), x, y);
+            out.layers.pushIdx(pck, 32u + hull, x, y);
         }
         if (out.layers.count > 0u) {
             out.dedicated = true;
         } else {
-            out.layers.push(pckFrame(pck, hull), x, y);
+            out.layers.pushIdx(pck, hull, x, y);
         }
         break;
     case 160u:
-        out.layers.push(pckFrame(pck, 64u + hull), x, y);
+        out.layers.pushIdx(pck, 64u + hull, x, y);
         if (out.layers.count > 0u) {
             out.dedicated = true;
         } else {
-            out.layers.push(pckFrame(pck, hull), x, y);
+            out.layers.pushIdx(pck, hull, x, y);
         }
         break;
     case 192u:
-        out.layers.push(pckFrame(pck, 96u + hull), x, y);
-        out.layers.push(pckFrame(pck, 128u + hull), x, y);
+        out.layers.pushIdx(pck, 96u + hull, x, y);
+        out.layers.pushIdx(pck, 128u + hull, x, y);
         if (out.layers.count > 0u) {
             out.dedicated = true;
         } else {
-            out.layers.push(pckFrame(pck, hull), x, y);
-            out.layers.push(pckFrame(pck, 32u + hull), x, y);
+            out.layers.pushIdx(pck, hull, x, y);
+            out.layers.pushIdx(pck, 32u + hull, x, y);
         }
         break;
     case 256u:
         if (frameTag(pckFrame(pck, 160u + hull)) == 0xa2u) {
-            out.layers.push(pckFrame(pck, 160u + hull), x, y);
-            out.layers.push(pckFrame(pck, 128u + hull), x, y);
+            out.layers.pushIdx(pck, 160u + hull, x, y);
+            out.layers.pushIdx(pck, 128u + hull, x, y);
         } else {
-            out.layers.push(pckFrame(pck, 128u + hull), x, y);
+            out.layers.pushIdx(pck, 128u + hull, x, y);
         }
         if (out.layers.count > 0u) {
             out.dedicated = true;
         } else {
-            out.layers.push(pckFrame(pck, 32u + hull), x, y);
-            out.layers.push(pckFrame(pck, hull), x, y);
+            out.layers.pushIdx(pck, 32u + hull, x, y);
+            out.layers.pushIdx(pck, hull, x, y);
         }
         break;
     case 288u:
         if (frameTag(pckFrame(pck, 192u + turret)) == 0xa2u) {
-            out.layers.push(pckFrame(pck, 96u + hull), x, y);
-            out.layers.push(pckFrame(pck, 128u + hull), x, y);
+            out.layers.pushIdx(pck, 96u + hull, x, y);
+            out.layers.pushIdx(pck, 128u + hull, x, y);
             if (hot.size() >= 32u * 8u) {
                 const auto wt = pckFrame(pck, 224u + turret);
                 if (isRenderableFrame(wt)) {
                     const auto [hotDx, hotDy] = readHotOffset(hot, hull);
-                    out.layers.push(wt, x + hotDx, y + hotDy);
+                    out.layers.push(wt, x + hotDx, y + hotDy, 224u + turret, true);
                 }
             }
             if (out.layers.count > 0u) {
                 out.dedicated = true;
             } else {
-                out.layers.push(pckFrame(pck, hull), x, y);
-                out.layers.push(pckFrame(pck, 32u + hull), x, y);
+                out.layers.pushIdx(pck, hull, x, y);
+                out.layers.pushIdx(pck, 32u + hull, x, y);
             }
         } else {
-            out.layers.push(pckFrame(pck, 160u + hull), x, y);
-            out.layers.push(pckFrame(pck, 128u + hull), x, y);
+            out.layers.pushIdx(pck, 160u + hull, x, y);
+            out.layers.pushIdx(pck, 128u + hull, x, y);
             if (out.layers.count > 0u) {
                 out.dedicated = true;
             } else {
-                out.layers.push(pckFrame(pck, 32u + hull), x, y);
-                out.layers.push(pckFrame(pck, hull), x, y);
+                out.layers.pushIdx(pck, 32u + hull, x, y);
+                out.layers.pushIdx(pck, hull, x, y);
             }
         }
         break;
     case 352u:
-        out.layers.push(pckFrame(pck, 288u + hull), x, y);
+        out.layers.pushIdx(pck, 288u + hull, x, y);
         if (out.layers.count > 0u) {
             out.dedicated = true;
         } else {
@@ -379,7 +389,7 @@ WreckLayers collectWreckLayers(View pck, View hot, std::size_t frameCount,
         }
         break;
     case 448u:
-        out.layers.push(pckFrame(pck, 384u + hull), x, y);
+        out.layers.pushIdx(pck, 384u + hull, x, y);
         if (out.layers.count > 0u) {
             out.dedicated = true;
         } else {
@@ -387,19 +397,19 @@ WreckLayers collectWreckLayers(View pck, View hot, std::size_t frameCount,
         }
         break;
     case 512u:
-        out.layers.push(pckFrame(pck, 128u + hull), x, y);
+        out.layers.pushIdx(pck, 128u + hull, x, y);
         if (out.layers.count > 0u) {
             out.dedicated = true;
         } else {
-            out.layers.push(pckFrame(pck, hull), x, y);
+            out.layers.pushIdx(pck, hull, x, y);
         }
         break;
     default:
         if (32u + hull < frameCount && isRenderableFrame(pckFrame(pck, 32u + hull))) {
-            out.layers.push(pckFrame(pck, 32u + hull), x, y);
+            out.layers.pushIdx(pck, 32u + hull, x, y);
             out.dedicated = true;
         } else if (hull < frameCount) {
-            out.layers.push(pckFrame(pck, hull), x, y);
+            out.layers.pushIdx(pck, hull, x, y);
         }
         break;
     }
@@ -413,69 +423,69 @@ ShadowLayerList collectVehicleShadowLayers(View pck, View hot, std::size_t frame
     ShadowLayerList shadows;
     switch (frameCount) {
     case 7u:
-        shadows.push(pckFrame(pck, 6u), x, y);
+        shadows.pushIdx(pck, 6u, x, y);
         break;
     case 66u:
-        shadows.push(pckFrame(pck, alive ? 64u : 65u), x, y);
+        shadows.pushIdx(pck, alive ? 64u : 65u, x, y);
         break;
     case 128u:
         if (frameTag(pckFrame(pck, 32u + hull)) == 0xa3u) {
-            shadows.push(pckFrame(pck, (alive ? 32u : 96u) + hull), x, y);
+            shadows.pushIdx(pck, (alive ? 32u : 96u) + hull, x, y);
         } else {
-            shadows.push(pckFrame(pck, (alive ? 64u : 96u) + hull), x, y);
+            shadows.pushIdx(pck, (alive ? 64u : 96u) + hull, x, y);
         }
         break;
     case 160u:
-        shadows.push(pckFrame(pck, (alive ? 96u : 128u) + hull), x, y);
+        shadows.pushIdx(pck, (alive ? 96u : 128u) + hull, x, y);
         break;
     case 192u:
-        shadows.push(pckFrame(pck, 160u + hull), x, y);
+        shadows.pushIdx(pck, 160u + hull, x, y);
         break;
     case 256u:
         if (frameTag(pckFrame(pck, 160u + hull)) == 0xa3u) {
-            shadows.push(pckFrame(pck, (alive ? 160u : 224u) + hull), x, y);
+            shadows.pushIdx(pck, (alive ? 160u : 224u) + hull, x, y);
         } else {
-            shadows.push(pckFrame(pck, (alive ? 192u : 224u) + hull), x, y);
+            shadows.pushIdx(pck, (alive ? 192u : 224u) + hull, x, y);
         }
         break;
     case 288u: {
         const auto block6 = pckFrame(pck, 192u + turret);
         if (frameTag(block6) == 0xa2u) {
-            shadows.push(pckFrame(pck, 160u + hull), x, y);
+            shadows.pushIdx(pck, 160u + hull, x, y);
             const bool showTurretShadow = alive
                 ? isRenderableFrame(block6)
                 : isRenderableFrame(pckFrame(pck, 224u + turret));
             if (showTurretShadow && hot.size() >= 32u * 8u) {
                 const auto [hotDx, hotDy] = readHotOffset(hot, hull);
-                shadows.push(pckFrame(pck, 256u + turret), x + hotDx, y + hotDy);
+                shadows.pushIdx(pck, 256u + turret, x + hotDx, y + hotDy, true);
             }
         } else {
-            shadows.push(pckFrame(pck, (alive ? 192u : 256u) + hull), x, y);
+            shadows.pushIdx(pck, (alive ? 192u : 256u) + hull, x, y);
         }
         break;
     }
     case 352u:
         if (frameTag(pckFrame(pck, 64u + hull)) == 0xa2u) {
             if (alive) {
-                shadows.push(pckFrame(pck, 96u + hull), x, y);
-                shadows.push(pckFrame(pck, 224u + turret), x, y);
+                shadows.pushIdx(pck, 96u + hull, x, y);
+                shadows.pushIdx(pck, 224u + turret, x, y, true);
             } else {
-                shadows.push(pckFrame(pck, 320u + hull), x, y);
+                shadows.pushIdx(pck, 320u + hull, x, y);
             }
         } else {
-            shadows.push(pckFrame(pck, (alive ? 64u : 320u) + hull), x, y);
+            shadows.pushIdx(pck, (alive ? 64u : 320u) + hull, x, y);
         }
         break;
     case 448u:
         if (alive) {
-            shadows.push(pckFrame(pck, 64u + hull), x, y);
-            shadows.push(pckFrame(pck, 256u + turret), x, y);
+            shadows.pushIdx(pck, 64u + hull, x, y);
+            shadows.pushIdx(pck, 256u + turret, x, y, true);
         } else {
-            shadows.push(pckFrame(pck, 416u + hull), x, y);
+            shadows.pushIdx(pck, 416u + hull, x, y);
         }
         break;
     case 512u:
-        shadows.push(pckFrame(pck, (alive ? 192u : 224u) + hull), x, y);
+        shadows.pushIdx(pck, (alive ? 192u : 224u) + hull, x, y);
         break;
     default:
         break;
@@ -790,6 +800,7 @@ void VehicleScene::drawRegion(MapImage& patch, int patchX, int patchY, const Sce
     for (std::size_t i = 0; i < units_.size(); ++i) {
         if (unitAsset_[i] == static_cast<std::size_t>(-1)) continue;
         const auto& unit = units_[i];
+        if (gpuRenderedIds_ && gpuRenderedIds_->contains(unit.id)) continue;
         if (!unit.visible) continue;
         if (unit.width <= 0 || unit.height <= 0) continue;
         const std::int64_t uLeft = unit.left;
@@ -1196,9 +1207,314 @@ std::optional<MapImage> VehicleScene::renderUnitPortrait(const std::string& id, 
                 out.rgba[di + 1u] = static_cast<std::uint8_t>(std::min(255u, raw.rgba[si + 1u] + (out.rgba[di + 1u] * inv) / 255u));
                 out.rgba[di + 2u] = static_cast<std::uint8_t>(std::min(255u, raw.rgba[si + 2u] + (out.rgba[di + 2u] * inv) / 255u));
             }
-            out.rgba[di + 3u] = 255u;
+        out.rgba[di + 3u] = 255u;
         }
     }
     return out;
+}
+
+namespace {
+
+MapImage upscale2xEpx(const MapImage& src) {
+    if (!src.width || !src.height) return {};
+    const unsigned sw = src.width;
+    const unsigned sh = src.height;
+    const unsigned dw = sw * 2u;
+    const unsigned dh = sh * 2u;
+    MapImage dst{dw, dh, std::vector<std::uint8_t>(std::size_t(dw) * std::size_t(dh) * 4u, 0u)};
+    const auto px = [&](int x, int y) -> const std::uint8_t* {
+        const unsigned cx = static_cast<unsigned>(std::clamp(x, 0, static_cast<int>(sw) - 1));
+        const unsigned cy = static_cast<unsigned>(std::clamp(y, 0, static_cast<int>(sh) - 1));
+        return src.rgba.data() + (std::size_t(cy) * sw + cx) * 4u;
+    };
+    const auto eq = [](const std::uint8_t* a, const std::uint8_t* b) -> bool {
+        if (a[3] == 0u && b[3] == 0u) return true;
+        if (a[3] == 0u || b[3] == 0u) return false;
+        return std::abs(int(a[0]) - int(b[0])) <= 14 &&
+               std::abs(int(a[1]) - int(b[1])) <= 14 &&
+               std::abs(int(a[2]) - int(b[2])) <= 14 &&
+               std::abs(int(a[3]) - int(b[3])) <= 32;
+    };
+    const auto put = [&](unsigned dx, unsigned dy, const std::uint8_t* c) {
+        auto* out = dst.rgba.data() + (std::size_t(dy) * dw + dx) * 4u;
+        out[0] = c[0];
+        out[1] = c[1];
+        out[2] = c[2];
+        out[3] = c[3];
+    };
+    for (int y = 0; y < static_cast<int>(sh); ++y) {
+        for (int x = 0; x < static_cast<int>(sw); ++x) {
+            const auto* p = px(x, y);
+            const auto* a = (y > 0) ? px(x, y - 1) : p;
+            const auto* d = (y + 1 < static_cast<int>(sh)) ? px(x, y + 1) : p;
+            const auto* c = (x > 0) ? px(x - 1, y) : p;
+            const auto* b = (x + 1 < static_cast<int>(sw)) ? px(x + 1, y) : p;
+            const std::uint8_t* q0 = p;
+            const std::uint8_t* q1 = p;
+            const std::uint8_t* q2 = p;
+            const std::uint8_t* q3 = p;
+            if (!eq(c, b) && !eq(a, d)) {
+                if (eq(c, a)) q0 = c;
+                if (eq(a, b)) q1 = b;
+                if (eq(d, c)) q2 = c;
+                if (eq(b, d)) q3 = b;
+            }
+            const unsigned ux = static_cast<unsigned>(x) * 2u;
+            const unsigned uy = static_cast<unsigned>(y) * 2u;
+            put(ux, uy, q0);
+            put(ux + 1u, uy, q1);
+            put(ux, uy + 1u, q2);
+            put(ux + 1u, uy + 1u, q3);
+        }
+    }
+    return dst;
+}
+
+} // namespace
+
+std::optional<GpuVehicleAtlas> VehicleScene::buildGpuAtlas(const std::string& id, bool scale2xEpx) {
+    if (id.empty()) return std::nullopt;
+    const auto assetIndex = ensureAssetLoaded(id);
+    if (!assetIndex) return std::nullopt;
+    const auto& asset = assets_[*assetIndex];
+    if (asset.pck.size() < 8u || asset.col.size() < 512u) return std::nullopt;
+
+    GpuVehicleAtlas out;
+    out.scale = scale2xEpx ? 2u : 1u;
+    out.frameCount = asset.frameCount;
+    if (asset.hot.size() >= 32u * 8u) {
+        out.hasHot = true;
+        for (unsigned d = 0; d < 32u; ++d) {
+            const int hotDx = i32(asset.hot, std::size_t(d) * 8u);
+            const int hotDy = i32(asset.hot, std::size_t(d) * 8u + 4u);
+            if (hotDx >= -2048 && hotDx <= 2048 && hotDy >= -2048 && hotDy <= 2048) {
+                out.hotOffsets[d] = {static_cast<std::int16_t>(hotDx), static_cast<std::int16_t>(hotDy)};
+            }
+        }
+    }
+
+    struct PendingKey {
+        std::size_t idx{0};
+        bool useWreckPal{false};
+        bool isShadow{false};
+        bool operator<(const PendingKey& o) const {
+            return std::tie(idx, useWreckPal, isShadow) < std::tie(o.idx, o.useWreckPal, o.isShadow);
+        }
+    };
+    std::set<PendingKey> needed;
+    for (unsigned h = 0; h < 32u; ++h) {
+        for (unsigned ph = 0; ph < 2u; ++ph) {
+            const auto aliveL = collectVehicleLayers(asset.pck, asset.hot, asset.frameCount, 0, 0, h, h, ph);
+            for (std::size_t i = 0; i < aliveL.count; ++i) {
+                needed.insert({aliveL.items[i].frameIdx, false, false});
+            }
+        }
+        const auto turretL = collectVehicleLayers(asset.pck, asset.hot, asset.frameCount, 0, 0, 0u, h, 0u);
+        for (std::size_t i = 0; i < turretL.count; ++i) {
+            needed.insert({turretL.items[i].frameIdx, false, false});
+        }
+        const auto wreckL = collectWreckLayers(asset.pck, asset.hot, asset.frameCount, 0, 0, h, h);
+        for (std::size_t i = 0; i < wreckL.layers.count; ++i) {
+            needed.insert({wreckL.layers.items[i].frameIdx, !wreckL.dedicated, false});
+        }
+        const auto wreckTurret = collectWreckLayers(asset.pck, asset.hot, asset.frameCount, 0, 0, 0u, h);
+        for (std::size_t i = 0; i < wreckTurret.layers.count; ++i) {
+            needed.insert({wreckTurret.layers.items[i].frameIdx, !wreckTurret.dedicated, false});
+        }
+        for (bool alv : {true, false}) {
+            const auto sh = collectVehicleShadowLayers(asset.pck, asset.hot, asset.frameCount, 0, 0, h, h, alv);
+            for (std::size_t i = 0; i < sh.count; ++i) {
+                needed.insert({sh.items[i].frameIdx, false, true});
+            }
+            const auto shT = collectVehicleShadowLayers(asset.pck, asset.hot, asset.frameCount, 0, 0, 0u, h, alv);
+            for (std::size_t i = 0; i < shT.count; ++i) {
+                needed.insert({shT.items[i].frameIdx, false, true});
+            }
+        }
+    }
+    if (needed.empty()) return std::nullopt;
+
+    struct DecodedEntry {
+        PendingKey key;
+        MapImage img;
+        std::int16_t ox{0}, oy{0};
+    };
+    std::vector<DecodedEntry> entries;
+    entries.reserve(needed.size());
+    std::uint64_t totalArea = 0;
+    for (const auto& pk : needed) {
+        if (pk.idx >= asset.frameCount) continue;
+        const auto fr = pckFrame(asset.pck, pk.idx);
+        const int ox = i16(fr, 0);
+        const int oy = i16(fr, 2);
+        const unsigned w = u16(fr, 4);
+        const unsigned h = u16(fr, 6);
+        if (w < 1u || h < 1u || w > 512u || h > 512u) continue;
+        MapImage raw{w, h, std::vector<std::uint8_t>(std::size_t(w) * h * 4u, 0u)};
+        if (pk.isShadow) {
+            if (!isRenderableShadowFrame(fr)) continue;
+            const auto cov = readShadowCoverage(0, 0, fr);
+            for (std::size_t p = 0; p < cov.pixels.size(); ++p) {
+                if (cov.pixels[p]) {
+                    raw.rgba[p * 4u + 0u] = 255u;
+                    raw.rgba[p * 4u + 1u] = 255u;
+                    raw.rgba[p * 4u + 2u] = 255u;
+                    raw.rgba[p * 4u + 3u] = 255u;
+                }
+            }
+        } else {
+            if (!isRenderableFrame(fr)) continue;
+            const auto& pal = pk.useWreckPal ? asset.wreckCol : asset.col;
+            drawIndexedFrame(raw, -ox, -oy, fr, pal);
+        }
+        MapImage finalImg = (scale2xEpx && w <= 256u && h <= 256u) ? upscale2xEpx(raw) : std::move(raw);
+        if (!finalImg.width || !finalImg.height) continue;
+        totalArea += std::uint64_t(finalImg.width + 2u) * std::uint64_t(finalImg.height + 2u);
+        entries.push_back({pk, std::move(finalImg), static_cast<std::int16_t>(ox), static_cast<std::int16_t>(oy)});
+    }
+    if (entries.empty()) return std::nullopt;
+
+    unsigned atlasW = 512u;
+    if (totalArea > 320000ull) atlasW = 1024u;
+    if (totalArea > 1200000ull) atlasW = 2048u;
+    if (totalArea > 4800000ull) atlasW = 4096u;
+
+    constexpr unsigned kPad = 2u;
+    unsigned curX = kPad, curY = kPad, rowH = 0u;
+    struct Placed {
+        unsigned x{}, y{};
+    };
+    std::vector<Placed> placed(entries.size());
+    for (std::size_t i = 0; i < entries.size(); ++i) {
+        const unsigned ew = entries[i].img.width;
+        const unsigned eh = entries[i].img.height;
+        if (ew + kPad * 2u > atlasW) atlasW = std::min(4096u, ew + kPad * 2u);
+        if (curX + ew + kPad > atlasW) {
+            curX = kPad;
+            curY += rowH + kPad;
+            rowH = 0u;
+        }
+        placed[i] = {curX, curY};
+        curX += ew + kPad;
+        rowH = std::max(rowH, eh);
+    }
+    const unsigned atlasH = std::max(256u, curY + rowH + kPad);
+    if (atlasW > 4096u || atlasH > 4096u) {
+        if (scale2xEpx) return buildGpuAtlas(id, false);
+        return std::nullopt;
+    }
+
+    out.atlas = MapImage{atlasW, atlasH, std::vector<std::uint8_t>(std::size_t(atlasW) * atlasH * 4u, 0u)};
+    for (std::size_t i = 0; i < entries.size(); ++i) {
+        const auto& e = entries[i];
+        const unsigned px = placed[i].x;
+        const unsigned py = placed[i].y;
+        const unsigned ew = e.img.width;
+        const unsigned eh = e.img.height;
+        for (unsigned row = 0; row < eh; ++row) {
+            const auto* srcRow = e.img.rgba.data() + std::size_t(row) * ew * 4u;
+            auto* dstRow = out.atlas.rgba.data() + (std::size_t(py + row) * atlasW + px) * 4u;
+            std::copy_n(srcRow, std::size_t(ew) * 4u, dstRow);
+        }
+        GpuFrameRect rect{
+            static_cast<std::uint16_t>(px),
+            static_cast<std::uint16_t>(py),
+            static_cast<std::uint16_t>(ew),
+            static_cast<std::uint16_t>(eh),
+            e.ox,
+            e.oy,
+            true
+        };
+        if (e.key.useWreckPal) {
+            out.fallbackWreckFrames.emplace(e.key.idx, rect);
+        } else {
+            out.frames.emplace(e.key.idx, rect);
+        }
+    }
+    return out;
+}
+
+void VehicleScene::appendGpuSprites(std::size_t unitIndex, const GpuVehicleAtlas& gpu, int mapScale,
+                                    float recoilDx, float recoilDy,
+                                    std::vector<GpuVehicleSprite>& out) const {
+    if (unitIndex >= units_.size()) return;
+    const auto& unit = units_[unitIndex];
+    if (!unit.visible || unitAsset_[unitIndex] == static_cast<std::size_t>(-1)) return;
+    const auto& asset = assets_[unitAsset_[unitIndex]];
+    const bool alive = unit.alive && unit.hp > 0;
+    const float s = static_cast<float>(std::max(1, mapScale));
+    const float gs = static_cast<float>(std::max(1u, gpu.scale));
+
+    const auto shadows = collectVehicleShadowLayers(
+        asset.pck, asset.hot, asset.frameCount, unit.x, unit.y, unit.hullDir, unit.turretDir, alive);
+    for (std::size_t i = 0; i < shadows.count; ++i) {
+        const auto& sl = shadows.items[i];
+        const auto it = gpu.frames.find(sl.frameIdx);
+        if (it == gpu.frames.end() || !it->second.valid) continue;
+        const auto& fr = it->second;
+        out.push_back({
+            static_cast<float>(sl.ox + fr.ox) * s + (sl.isTurret ? recoilDx : 0.0f),
+            static_cast<float>(sl.oy + fr.oy) * s + (sl.isTurret ? recoilDy : 0.0f),
+            (static_cast<float>(fr.w) / gs) * s,
+            (static_cast<float>(fr.h) / gs) * s,
+            static_cast<float>(fr.u),
+            static_cast<float>(fr.v),
+            static_cast<float>(fr.u + fr.w),
+            static_cast<float>(fr.v + fr.h),
+            true,
+            sl.isTurret,
+            alive ? -3 : -9502
+        });
+    }
+
+    if (alive) {
+        const unsigned trackPhase = unitIndex < unitTrackPhase_.size() ? unitTrackPhase_[unitIndex] : 0u;
+        const auto layers = collectVehicleLayers(
+            asset.pck, asset.hot, asset.frameCount, unit.x, unit.y, unit.hullDir, unit.turretDir, trackPhase);
+        for (std::size_t i = 0; i < layers.count; ++i) {
+            const auto& ll = layers.items[i];
+            const auto it = gpu.frames.find(ll.frameIdx);
+            if (it == gpu.frames.end() || !it->second.valid) continue;
+            const auto& fr = it->second;
+            const bool applyRecoil = ll.isTurret || (!gpu.hasHot && (i + 1u == layers.count));
+            out.push_back({
+                static_cast<float>(ll.ox + fr.ox) * s + (applyRecoil ? recoilDx : 0.0f),
+                static_cast<float>(ll.oy + fr.oy) * s + (applyRecoil ? recoilDy : 0.0f),
+                (static_cast<float>(fr.w) / gs) * s,
+                (static_cast<float>(fr.h) / gs) * s,
+                static_cast<float>(fr.u),
+                static_cast<float>(fr.v),
+                static_cast<float>(fr.u + fr.w),
+                static_cast<float>(fr.v + fr.h),
+                false,
+                ll.isTurret,
+                ll.isTurret ? 1 : 0
+            });
+        }
+    } else {
+        const auto wreck = collectWreckLayers(
+            asset.pck, asset.hot, asset.frameCount, unit.x, unit.y, unit.hullDir, unit.turretDir);
+        const auto& fMap = wreck.dedicated ? gpu.frames : gpu.fallbackWreckFrames;
+        for (std::size_t i = 0; i < wreck.layers.count; ++i) {
+            const auto& wl = wreck.layers.items[i];
+            auto it = fMap.find(wl.frameIdx);
+            if (it == fMap.end()) it = gpu.frames.find(wl.frameIdx);
+            if (it == fMap.end() || !it->second.valid) continue;
+            const auto& fr = it->second;
+            out.push_back({
+                static_cast<float>(wl.ox + fr.ox) * s,
+                static_cast<float>(wl.oy + fr.oy) * s,
+                (static_cast<float>(fr.w) / gs) * s,
+                (static_cast<float>(fr.h) / gs) * s,
+                static_cast<float>(fr.u),
+                static_cast<float>(fr.v),
+                static_cast<float>(fr.u + fr.w),
+                static_cast<float>(fr.v + fr.h),
+                false,
+                false,
+                -9500
+            });
+        }
+    }
 }
 }
