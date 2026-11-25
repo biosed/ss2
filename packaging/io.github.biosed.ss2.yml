@@ -1,0 +1,40 @@
+app-id: io.github.biosed.ss2
+runtime: org.freedesktop.Platform
+runtime-version: '24.08'
+sdk: org.freedesktop.Sdk
+command: ss2
+finish-args:
+  - --share=ipc
+  - --share=network
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --socket=pulseaudio
+  - --device=dri
+  - --filesystem=xdg-data/ss2:create
+  - --filesystem=host:ro
+modules:
+  - name: sdl3
+    buildsystem: cmake-ninja
+    config-opts:
+      - -DCMAKE_BUILD_TYPE=Release
+      - -DSDL_SHARED=ON
+      - -DSDL_STATIC=OFF
+      - -DSDL_TESTS=OFF
+    sources:
+      - type: archive
+        url: https://github.com/libsdl-org/SDL/releases/download/release-3.2.10/SDL3-3.2.10.tar.gz
+        sha256: SKIP
+  - name: libvorbis
+    buildsystem: autotools
+    sources:
+      - type: archive
+        url: https://downloads.xiph.org/releases/vorbis/libvorbis-1.3.7.tar.xz
+        sha256: b33cc4934322bcbf6efcbacf49e3ca01aadbea4114ec9589d1b1e9d20f72954b
+  - name: ss2
+    buildsystem: cmake-ninja
+    config-opts:
+      - -DCMAKE_BUILD_TYPE=Release
+      - -DBUILD_TESTING=OFF
+    sources:
+      - type: dir
+        path: ..

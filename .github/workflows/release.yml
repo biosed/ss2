@@ -75,7 +75,7 @@ jobs:
           PKG="ss2-${RELEASE_TAG}-windows-x86_64"
           rm -rf stage dist && mkdir -p "stage/$PKG" dist
           cmake --install build --prefix "stage/$PKG"
-          cp /ucrt64/bin/libvorbisfile-3.dll "stage/$PKG/"
+          cp /ucrt64/bin/libvorbisfile-3.dll /ucrt64/bin/vulkan-1.dll "stage/$PKG/"
           for round in 1 2 3; do
             for bin in "stage/$PKG"/*.exe "stage/$PKG"/*.dll; do
               ldd "$bin" | awk '/\/ucrt64\/bin\// {print $3}' | while read -r dll; do
@@ -89,6 +89,7 @@ jobs:
         run: |
           $pkg = "ss2-$($env:RELEASE_TAG)-windows-x86_64"
           $env:PATH = "C:\Windows\System32;C:\Windows"
+          if (-not (Test-Path ".\stage\$pkg\vulkan-1.dll")) { throw "Missing vulkan-1.dll" }
           & ".\stage\$pkg\ss2.exe" --help
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Compress-Archive -Path ".\stage\$pkg" -DestinationPath ".\dist\$pkg.zip" -Force
@@ -111,10 +112,10 @@ jobs:
             arch: arm64
             icd: aarch64
     runs-on: ${{ matrix.runner }}
-    container: fedora:45
+    container: fedora:44
     timeout-minutes: 30
     steps:
-      - run: dnf install -y git gcc-c++ zlib-ng-compat-devel libjpeg-turbo-devel libpng-devel python3 clang compiler-rt cmake ninja-build ccache SDL3-devel pango-devel fontconfig google-noto-sans-fonts ffmpeg-free-devel vulkan-headers vulkan-loader-devel mesa-vulkan-drivers vulkan-validation-layers tar gzip
+      - run: dnf install -y git gcc-c++ zlib-ng-compat-devel libjpeg-turbo-devel libpng-devel python3 clang compiler-rt cmake ninja-build ccache SDL3-devel pango-devel fontconfig google-noto-sans-fonts ffmpeg-free-devel vulkan-headers vulkan-loader-devel mesa-vulkan-drivers vulkan-validation-layers tar gzip squashfs-tools curl
       - uses: actions/checkout@v4
       - name: Resolve release tag
         run: |
@@ -129,9 +130,9 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ~/.cache/ccache
-          key: ccache-${{ matrix.icd }}-g++-Release-${{ env.DATE_EPOCH }}
+          key: ccache-f44-${{ matrix.icd }}-g++-Release-${{ env.DATE_EPOCH }}
           restore-keys: |
-            ccache-${{ matrix.icd }}-g++-Release-
+            ccache-f44-${{ matrix.icd }}-g++-Release-
       - name: Configure & build Release
         run: >
           cmake -S . -B build -G Ninja
@@ -146,18 +147,21 @@ jobs:
           SDL_VIDEO_DRIVER: offscreen
           SDL_AUDIODRIVER: dummy
           VK_DRIVER_FILES: /usr/share/vulkan/icd.d/lvp_icd.${{ matrix.icd }}.json
-      - name: Package Linux tarball
+      - name: Package Linux tarball & AppImage
         run: |
           PKG="ss2-${RELEASE_TAG}-linux-${{ matrix.arch }}"
           rm -rf stage dist && mkdir -p "stage/$PKG" dist
           cmake --install build --prefix "stage/$PKG"
           cp README.md "stage/$PKG/"
           tar -C stage -czf "dist/$PKG.tar.gz" "$PKG"
-          ls -lh "dist/$PKG.tar.gz"
+          ./tools/package-appimage.sh build "dist/$PKG.AppImage"
+          ls -lh "dist/$PKG.tar.gz" "dist/$PKG.AppImage"
       - uses: actions/upload-artifact@v4
         with:
           name: release-linux-${{ matrix.arch }}
-          path: dist/*.tar.gz
+          path: |
+            dist/*.tar.gz
+            dist/*.AppImage
           retention-days: 14
 
   publish:
@@ -179,9 +183,7 @@ jobs:
           if [ -n "${{ inputs.tag }}" ]; then
             TAG="${{ inputs.tag }}"
           fi
-          (cd assets && sha256sum *.zip *.tar.gz > SHA256SUMS.txt)
           ls -lh assets
-          cat assets/SHA256SUMS.txt
           cat > release-notes.md <<'EOF'
           ## Sudden Strike II Native Engine
 
@@ -193,12 +195,16 @@ jobs:
           - **Full Retail Parity**: All 136 `.ssc`/`.ssm`/`.smm` missions (`0` unhandled CAOF opcodes), bit-identical visibility/combat/AI, progressive `dom.res` building & `MOST.RES` bridge destruction, Gold 2.2 front end, animated `I-BRF` briefings & voices, looping menu/in-game music, and persistent `SS2SAVE2` save/load.
           - **2–4 Player Lockstep Multiplayer**: Cross-architecture deterministic TCP Star Host-Relay (`x86_64`, `x86-64-v3`, `ARM64` GCC/Clang).
           - **Out-of-the-Box Mods**: `sudtest.ini` `[Data]`/`[Game]` VFS chains, unpacked/gzip folders (`mycommon\`), `Scheme1..N` (`Scheme3` `desc_scheme3.sue`/`lang_desc_scheme3.sue`), `addons/*.ssx`, `mods/`/`Run/` discovery, `--mod`/`--list-mods`, and live `Options -> Mod` switching.
+          - **Portable Linux & Optional HD Pack**: AppImage (`x86_64` & `ARM64`), Flatpak manifest (`packaging/io.github.biosed.ss2.yml`), and clean-room 17-class 4×/2× HD Infantry & HUD Portrait pack (`ss2-v0.1.0-hd-infantry-pack.zip`).
 
           ### Quick Start
-          - **Windows**: Extract `ss2-*-windows-x86_64.zip` and either copy its contents (`ss2.exe` + bundled DLLs) into your *Sudden Strike II* folder or run `ss2.exe --game-dir "C:\path\to\Sudden Strike 2"`.
-          - **Linux**: Extract `ss2-*-linux-*.tar.gz` (contains `bin/ss2`, `.desktop`, icon, and AppStream metadata; requires SDL3, PangoCairo, zlib, libjpeg-turbo, libpng, libvorbis, FFmpeg, and Vulkan loader) and run `./bin/ss2 --game-dir /path/to/game` (or place game files in `~/.local/share/ss2/game`).
+          - **Windows**: Extract `ss2-*-windows-x86_64.zip` (self-contained with bundled `vulkan-1.dll` + dependencies) and either copy its contents into your *Sudden Strike II* folder or run `ss2.exe --game-dir "C:\path\to\Sudden Strike 2"`.
+          - **Linux AppImage**: `chmod +x ss2-*-linux-*.AppImage && ./ss2-*-linux-*.AppImage --game-dir /path/to/game` (or extract `ss2-*-linux-*.tar.gz` and run `./bin/ss2`).
           EOF
           gh release create "$TAG" assets/* \
             --title "Sudden Strike II Native Engine $TAG" \
             --notes-file release-notes.md \
-            --verify-tag || gh release upload "$TAG" assets/* --clobber
+            --verify-tag || (gh release upload "$TAG" assets/* --clobber && gh release edit "$TAG" --notes-file release-notes.md)
+          gh release view "$TAG" --json assets --jq '.assets[] | select(.name != "SHA256SUMS.txt") | "\(.digest | sub("^sha256:"; ""))  \(.name)"' | LC_ALL=C sort -k2 > assets/SHA256SUMS.txt
+          cat assets/SHA256SUMS.txt
+          gh release upload "$TAG" assets/SHA256SUMS.txt --clobber

@@ -41,6 +41,8 @@ jobs:
             libvorbis:p
             vulkan-headers:p
             vulkan-loader:p
+            mesa:p
+            vulkan-validation-layers:p
       - name: Compute ccache cache epoch (UTC day)
         run: echo "DATE_EPOCH=$(date -u -d 'today 00:00' +%s)" >> "$GITHUB_ENV"
       - name: Restore ccache cache
@@ -59,7 +61,9 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER=gcc \
             -DCMAKE_CXX_COMPILER=g++ \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DSS2_TEST_WINDOW=ON \
+            -DSS2_TEST_VALIDATION=ON
       - name: Build
         env:
           CCACHE_DIR: /d/a/_temp/ss2-ccache
@@ -71,12 +75,17 @@ jobs:
           path: D:\a\_temp\ss2-ccache
           key: ccache-win64-ucrt64-${{ env.DATE_EPOCH }}
       - name: Test
-        run: ctest --test-dir build --output-on-failure --no-tests=error 2>&1 | tee ctest.log
+        run: |
+          export SDL_VIDEO_DRIVER=offscreen
+          export SDL_AUDIODRIVER=dummy
+          export VK_DRIVER_FILES="$(cygpath -w /ucrt64/share/vulkan/icd.d/lvp_icd.x86_64.json)"
+          export VK_ADD_LAYER_PATH="$(cygpath -w /ucrt64/share/vulkan/explicit_layer.d)"
+          ctest --test-dir build --output-on-failure --no-tests=error 2>&1 | tee ctest.log
       - name: Package portable Windows bundle
         run: |
           rm -rf dist/ss2-windows-x86_64
           cmake --install build --prefix dist/ss2-windows-x86_64
-          cp /ucrt64/bin/libvorbisfile-3.dll dist/ss2-windows-x86_64/
+          cp /ucrt64/bin/libvorbisfile-3.dll /ucrt64/bin/vulkan-1.dll dist/ss2-windows-x86_64/
           for round in 1 2 3; do
             for bin in dist/ss2-windows-x86_64/*.exe dist/ss2-windows-x86_64/*.dll; do
               ldd "$bin" | awk '/\/ucrt64\/bin\// {print $3}' | while read -r dll; do
@@ -89,7 +98,9 @@ jobs:
         shell: pwsh
         run: |
           $env:PATH = "C:\Windows\System32;C:\Windows"
+          if (-not (Test-Path ".\dist\ss2-windows-x86_64\vulkan-1.dll")) { throw "Missing vulkan-1.dll" }
           .\dist\ss2-windows-x86_64\ss2.exe --help
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Upload Windows build artifact
         uses: actions/upload-artifact@v4
         with:
