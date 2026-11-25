@@ -1,8 +1,8 @@
 name: Windows x86-64
 on:
   push:
-    tags-ignore:
-      - 'v*'
+    branches:
+      - '**'
   pull_request:
 
 permissions:

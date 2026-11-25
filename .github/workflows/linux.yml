@@ -1,8 +1,8 @@
 name: Linux Vulkan
 on:
   push:
-    tags-ignore:
-      - 'v*'
+    branches:
+      - '**'
   pull_request:
 
 permissions:
