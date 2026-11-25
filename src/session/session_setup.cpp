@@ -148,7 +148,6 @@ void GameSession::initializeMission() {
             }
         };
 
-        unitCatalog = ss2::assets::UnitCatalog::load(gameDir);
         const auto missionPath = mission.empty()
             ? ss2::assets::resolveCaseInsensitivePath(gameDir, "maps/single/--- TUTORIAL I ---.SSM")
             : mission;
@@ -156,13 +155,18 @@ void GameSession::initializeMission() {
         const bool isTutorial1 = mission.empty() ||
             ss2::assets::equalsIgnoreCaseAscii(missionPath.filename().string(), "--- TUTORIAL I ---.SSM");
         if (!isTutorial1) {
-            std::error_code normEc;
-            const auto normCur = std::filesystem::weakly_canonical(missionPath, normEc);
+            const auto normalizeMissionIdentityPath = [](const std::filesystem::path& p) {
+                std::error_code normEc;
+                auto norm = std::filesystem::weakly_canonical(p, normEc);
+                if (normEc || norm.empty()) norm = p.lexically_normal();
+                return norm;
+            };
+            const auto normCur = normalizeMissionIdentityPath(missionPath);
             for (const auto& c : ss2::assets::listCampaigns(gameDir)) {
                 for (std::size_t mi = 0; mi < c.missions.size(); ++mi) {
-                    const auto normM = std::filesystem::weakly_canonical(c.missions[mi].path, normEc);
+                    const auto normM = normalizeMissionIdentityPath(c.missions[mi].path);
                     const auto normE = !c.missions[mi].easyPath.empty()
-                        ? std::filesystem::weakly_canonical(c.missions[mi].easyPath, normEc)
+                        ? normalizeMissionIdentityPath(c.missions[mi].easyPath)
                         : std::filesystem::path{};
                     if (normM == normCur || (!normE.empty() && normE == normCur)) {
                         currentMissionTitle = c.missions[mi].title;
@@ -180,7 +184,7 @@ void GameSession::initializeMission() {
             }
             if (currentMissionTitle.empty()) {
                 for (const auto& m : ss2::assets::listSinglePlayerMissions(gameDir)) {
-                    const auto normM = std::filesystem::weakly_canonical(m.path, normEc);
+                    const auto normM = normalizeMissionIdentityPath(m.path);
                     if (normM == normCur) {
                         currentMissionTitle = m.name;
                         break;
@@ -203,6 +207,7 @@ void GameSession::initializeMission() {
         fogGridW = data.width;
         fogGridH = data.height;
         mapScheme = data.scheme;
+        unitCatalog = ss2::assets::UnitCatalog::load(gameDir, data.scheme);
         reportLoadProgress(0.10f);
         auto map = isTutorial1
             ? ss2::assets::loadTutorialTerrain(gameDir)
@@ -449,7 +454,7 @@ void GameSession::initializeMission() {
             renderer.setSpriteAtlas(airVfxSlot, hud->airVfxAtlas());
             hud->bindAirVfxAtlasSlot(airVfxSlot);
         }
-        (void)combatVfx.load(gameDir);
+        (void)combatVfx.loadFromArchives(ss2::assets::resolveGameArchives(gameDir));
         if (combatVfx.hasAtlas() && gpuNextSlot < planeAtlasBase) {
             const unsigned vfxSlot = gpuNextSlot++;
             renderer.setSpriteAtlas(vfxSlot, combatVfx.atlas());
@@ -558,7 +563,7 @@ void GameSession::initializeMission() {
                 audio->setHdAudioDir(hdPack / "audio-hd");
             const auto hdMusic = (!hdPack.empty() && std::filesystem::is_directory(hdPack / "audio-hd" / "music"))
                                      ? (hdPack / "audio-hd" / "music")
-                                     : ss2::assets::resolveCaseInsensitivePath(gameDir, "MUSIC");
+                                     : ss2::assets::resolveMusicDir(gameDir);
             audio->setSfxVolume(settings.sfxVolume);
             audio->startMusic(hdMusic, settings.musicVolume);
             if (settings.musicMuted) (void)audio->toggleMusicMute();

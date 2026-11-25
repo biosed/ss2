@@ -78,8 +78,8 @@ bool FogGrid::loadCirc64(std::span<const std::uint8_t> data) {
 }
 
 bool FogGrid::loadCirc64FromGame(const std::filesystem::path& gameDir) {
-    const auto archive = assets::resolveCaseInsensitivePath(gameDir, "game_common.sue");
-    const auto bytes = assets::readSueEntry(archive, "CIRC64.DAT");
+    const auto archives = assets::resolveGameArchives(gameDir);
+    const auto bytes = assets::readSueEntryChain(archives, "CIRC64.DAT");
     return loadCirc64(bytes);
 }
 

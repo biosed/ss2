@@ -404,112 +404,104 @@ bool Hud::loadRetailAssets(const std::filesystem::path& gameDir) {
     bool panelOk = false;
     bool pdropOk = false;
 
-    const auto lngSue = assets::resolveCaseInsensitivePath(gameDir, "lng.sue");
-    if (std::filesystem::exists(lngSue, ec)) {
+    const auto langArchives = assets::resolveLangArchives(gameDir, 0);
+    if (!langArchives.empty()) {
         try {
-            const auto panelBytes = assets::readSueEntry(lngSue, "panel.dat");
-            std::vector<std::span<const std::uint8_t>> recs;
-            if (parseOffsetRecords(panelBytes, 176u, 256u, recs)) {
-                retail_->panelRecordCount = recs.size();
-                const auto pal = recs[0];
-                retail_->panelLeftPlate = decodeIndexedSurface(recs[2], pal);
-                retail_->panelRightTray = decodeIndexedSurface(recs[4], pal);
-                retail_->menuBtnNormal = decodeIndexedSurface(recs[9], pal);
-                retail_->menuBtnPressed = decodeIndexedSurface(recs[10], pal);
-                retail_->speedDownBtnNormal = decodeIndexedSurface(recs[11], pal);
-                retail_->speedDownBtnPressed = decodeIndexedSurface(recs[12], pal);
-                retail_->pauseBtnNormal = decodeIndexedSurface(recs[13], pal);
-                retail_->pauseBtnPressed = decodeIndexedSurface(recs[14], pal);
-                retail_->speedUpBtnNormal = decodeIndexedSurface(recs[15], pal);
-                retail_->speedUpBtnPressed = decodeIndexedSurface(recs[16], pal);
-                retail_->medicIcon = decodeIndexedSurface(recs[111], pal);
-                retail_->medicIconPressed = decodeIndexedSurface(recs[112], pal);
-                retail_->specialIcon = decodeIndexedSurface(recs[67], pal);
-                retail_->specialIconPressed = decodeIndexedSurface(recs[68], pal);
+            if (const auto panelBytes = assets::tryReadSueEntryChain(langArchives, "panel.dat")) {
+                std::vector<std::span<const std::uint8_t>> recs;
+                if (parseOffsetRecords(*panelBytes, 176u, 256u, recs)) {
+                    retail_->panelRecordCount = recs.size();
+                    const auto pal = recs[0];
+                    retail_->panelLeftPlate = decodeIndexedSurface(recs[2], pal);
+                    retail_->panelRightTray = decodeIndexedSurface(recs[4], pal);
+                    retail_->menuBtnNormal = decodeIndexedSurface(recs[9], pal);
+                    retail_->menuBtnPressed = decodeIndexedSurface(recs[10], pal);
+                    retail_->speedDownBtnNormal = decodeIndexedSurface(recs[11], pal);
+                    retail_->speedDownBtnPressed = decodeIndexedSurface(recs[12], pal);
+                    retail_->pauseBtnNormal = decodeIndexedSurface(recs[13], pal);
+                    retail_->pauseBtnPressed = decodeIndexedSurface(recs[14], pal);
+                    retail_->speedUpBtnNormal = decodeIndexedSurface(recs[15], pal);
+                    retail_->speedUpBtnPressed = decodeIndexedSurface(recs[16], pal);
+                    retail_->medicIcon = decodeIndexedSurface(recs[111], pal);
+                    retail_->medicIconPressed = decodeIndexedSurface(recs[112], pal);
+                    retail_->specialIcon = decodeIndexedSurface(recs[67], pal);
+                    retail_->specialIconPressed = decodeIndexedSurface(recs[68], pal);
 
-                auto loadPair = [&](HudAction act, std::size_t nIdx, std::size_t pIdx) {
-                    if (nIdx < recs.size() && pIdx < recs.size()) {
-                        auto a = decodeIndexedSurface(recs[nIdx], pal);
-                        auto b = decodeIndexedSurface(recs[pIdx], pal);
-                        if (a && b) retail_->cmdButtons.insert_or_assign(act, std::pair{std::move(a), std::move(b)});
-                    }
-                };
-                // Exact Gold 2.2 panel.dat icons matching n2Game_Dll.dll command slots:
-                loadPair(HudAction::stop, 61u, 62u);          // ITXT_STOP
-                loadPair(HudAction::holdFire, 34u, 32u);      // ITXT_HOLDFIRE (clean reticle -> red X active)
-                loadPair(HudAction::crouch, 167u, 169u);      // ITXT_FOOTCRAWL (standing -> prone)
-                loadPair(HudAction::mission, 63u, 64u);       // ITXT_COVER / mission toggle
-                loadPair(HudAction::pause, 13u, 14u);         // ITXT_PAUSE (|| pause bars)
-                loadPair(HudAction::log, 17u, 18u);           // dispatch / route log card
-                loadPair(HudAction::recon, 85u, 86u);         // ITXT_BINOCULAR
-                loadPair(HudAction::attackMove, 55u, 56u);    // ITXT_AMOVE
-                loadPair(HudAction::patrol, 101u, 102u);      // ITXT_PLANE_PATROL
-                loadPair(HudAction::attackGround, 57u, 58u);  // ITXT_GAUBFIRE
-                loadPair(HudAction::unload, 59u, 60u);        // ITXT_UNLOAD
-                loadPair(HudAction::mine, 77u, 78u);          // ITXT_LAYMINE
-                loadPair(HudAction::scatter, 65u, 66u);       // ITXT_SCATTER
-
-                // Air mission icons matching AirMissionKind {Bomber=0, Recon=1, Paratrooper=2, Supply=3, Fighter=4}
-                retail_->airIcons[0] = {decodeIndexedSurface(recs[95], pal), decodeIndexedSurface(recs[96], pal)};
-                retail_->airIcons[1] = {decodeIndexedSurface(recs[99], pal), decodeIndexedSurface(recs[100], pal)};
-                retail_->airIcons[2] = {decodeIndexedSurface(recs[97], pal), decodeIndexedSurface(recs[98], pal)};
-                retail_->airIcons[3] = {decodeIndexedSurface(recs[25], pal), decodeIndexedSurface(recs[26], pal)};
-                retail_->airIcons[4] = {decodeIndexedSurface(recs[103], pal), decodeIndexedSurface(recs[104], pal)};
-
-                panelOk = retail_->panelLeftPlate != nullptr &&
-                          retail_->panelRightTray != nullptr &&
-                          !retail_->cmdButtons.empty();
-            }
-        } catch (...) {
-        }
-
-        try {
-            const auto pdropBytes = assets::readSueEntry(lngSue, "pdrop.dat");
-            std::vector<std::span<const std::uint8_t>> precs;
-            if (parseOffsetRecords(pdropBytes, 9u, 32u, precs)) {
-                retail_->pdropRecordCount = precs.size();
-                const auto ppal = precs[0];
-                retail_->pdropPlate = decodeIndexedSurface(precs[3], ppal);
-                retail_->pdropChuteIcon = decodeIndexedSurface(precs[4], ppal);
-                for (std::size_t k = 0; k < 4u; ++k) {
-                    retail_->pdropButtons[k] = decodeIndexedSurface(precs[5u + k], ppal);
-                }
-                if (retail_->pdropButtons[2] && retail_->pdropButtons[3]) {
-                    retail_->airIcons[2] = {
-                        decodeIndexedSurface(precs[7], ppal),
-                        decodeIndexedSurface(precs[8], ppal)
+                    auto loadPair = [&](HudAction act, std::size_t nIdx, std::size_t pIdx) {
+                        if (nIdx < recs.size() && pIdx < recs.size()) {
+                            auto a = decodeIndexedSurface(recs[nIdx], pal);
+                            auto b = decodeIndexedSurface(recs[pIdx], pal);
+                            if (a && b) retail_->cmdButtons.insert_or_assign(act, std::pair{std::move(a), std::move(b)});
+                        }
                     };
+                    // Exact Gold 2.2 panel.dat icons matching n2Game_Dll.dll command slots:
+                    loadPair(HudAction::stop, 61u, 62u);          // ITXT_STOP
+                    loadPair(HudAction::holdFire, 34u, 32u);      // ITXT_HOLDFIRE (clean reticle -> red X active)
+                    loadPair(HudAction::crouch, 167u, 169u);      // ITXT_FOOTCRAWL (standing -> prone)
+                    loadPair(HudAction::mission, 63u, 64u);       // ITXT_COVER / mission toggle
+                    loadPair(HudAction::pause, 13u, 14u);         // ITXT_PAUSE (|| pause bars)
+                    loadPair(HudAction::log, 17u, 18u);           // dispatch / route log card
+                    loadPair(HudAction::recon, 85u, 86u);         // ITXT_BINOCULAR
+                    loadPair(HudAction::attackMove, 55u, 56u);    // ITXT_AMOVE
+                    loadPair(HudAction::patrol, 101u, 102u);      // ITXT_PLANE_PATROL
+                    loadPair(HudAction::attackGround, 57u, 58u);  // ITXT_GAUBFIRE
+                    loadPair(HudAction::unload, 59u, 60u);        // ITXT_UNLOAD
+                    loadPair(HudAction::mine, 77u, 78u);          // ITXT_LAYMINE
+                    loadPair(HudAction::scatter, 65u, 66u);       // ITXT_SCATTER
+
+                    // Air mission icons matching AirMissionKind {Bomber=0, Recon=1, Paratrooper=2, Supply=3, Fighter=4}
+                    retail_->airIcons[0] = {decodeIndexedSurface(recs[95], pal), decodeIndexedSurface(recs[96], pal)};
+                    retail_->airIcons[1] = {decodeIndexedSurface(recs[99], pal), decodeIndexedSurface(recs[100], pal)};
+                    retail_->airIcons[2] = {decodeIndexedSurface(recs[97], pal), decodeIndexedSurface(recs[98], pal)};
+                    retail_->airIcons[3] = {decodeIndexedSurface(recs[25], pal), decodeIndexedSurface(recs[26], pal)};
+                    retail_->airIcons[4] = {decodeIndexedSurface(recs[103], pal), decodeIndexedSurface(recs[104], pal)};
+
+                    panelOk = retail_->panelLeftPlate != nullptr &&
+                              retail_->panelRightTray != nullptr &&
+                              !retail_->cmdButtons.empty();
                 }
-                pdropOk = retail_->pdropPlate != nullptr && retail_->pdropChuteIcon != nullptr;
             }
         } catch (...) {
         }
 
         try {
-            const auto glng = assets::readSueEntry(lngSue, "game.lng");
-            parseGameLng(std::string_view(reinterpret_cast<const char*>(glng.data()), glng.size()), retail_->texts);
+            if (const auto pdropBytes = assets::tryReadSueEntryChain(langArchives, "pdrop.dat")) {
+                std::vector<std::span<const std::uint8_t>> precs;
+                if (parseOffsetRecords(*pdropBytes, 9u, 32u, precs)) {
+                    retail_->pdropRecordCount = precs.size();
+                    const auto ppal = precs[0];
+                    retail_->pdropPlate = decodeIndexedSurface(precs[3], ppal);
+                    retail_->pdropChuteIcon = decodeIndexedSurface(precs[4], ppal);
+                    for (std::size_t k = 0; k < 4u; ++k) {
+                        retail_->pdropButtons[k] = decodeIndexedSurface(precs[5u + k], ppal);
+                    }
+                    if (retail_->pdropButtons[2] && retail_->pdropButtons[3]) {
+                        retail_->airIcons[2] = {
+                            decodeIndexedSurface(precs[7], ppal),
+                            decodeIndexedSurface(precs[8], ppal)
+                        };
+                    }
+                    pdropOk = retail_->pdropPlate != nullptr && retail_->pdropChuteIcon != nullptr;
+                }
+            }
+        } catch (...) {
+        }
+
+        try {
+            if (const auto glng = assets::tryReadSueEntryChain(langArchives, "game.lng")) {
+                parseGameLng(std::string_view(reinterpret_cast<const char*>(glng->data()), glng->size()), retail_->texts);
+            }
         } catch (...) {
         }
     }
 
-    if (retail_->texts.empty()) {
-        const auto langSue = assets::resolveCaseInsensitivePath(gameDir, "lang.sue");
-        if (std::filesystem::exists(langSue, ec)) {
-            try {
-                const auto glng = assets::readSueEntry(langSue, "game.lng");
-                parseGameLng(std::string_view(reinterpret_cast<const char*>(glng.data()), glng.size()), retail_->texts);
-            } catch (...) {
-            }
-        }
-    }
-
-    const auto commonSue = assets::resolveCaseInsensitivePath(gameDir, "game_common.sue");
-    if (std::filesystem::exists(commonSue, ec)) {
+    const auto gameArchives = assets::resolveGameArchives(gameDir);
+    if (!gameArchives.empty()) {
         try {
-            const auto fireAni = assets::readSueEntry(commonSue, "AIRFIRE.ANI");
-            const auto fireCol = assets::readSueEntry(commonSue, "AIRFIRE.COL");
-            const auto smokeAni = assets::readSueEntry(commonSue, "AIRSMOKE.ANI");
-            const auto smokeCol = assets::readSueEntry(commonSue, "AIRSMOKE.COL");
+            const auto fireAni = assets::readSueEntryChain(gameArchives, "AIRFIRE.ANI");
+            const auto fireCol = assets::readSueEntryChain(gameArchives, "AIRFIRE.COL");
+            const auto smokeAni = assets::readSueEntryChain(gameArchives, "AIRSMOKE.ANI");
+            const auto smokeCol = assets::readSueEntryChain(gameArchives, "AIRSMOKE.COL");
 
             const unsigned sheetW = RetailAssets::kAirSheetCols * RetailAssets::kAirCellSize;
             const unsigned sheetH = RetailAssets::kAirSheetRows * RetailAssets::kAirCellSize;

@@ -72,20 +72,10 @@ Bytes readBoundedFile(const std::filesystem::path& path, std::size_t limit) {
 }
 
 std::pair<Bytes, Bytes> readSchemeTerrainAssets(const std::filesystem::path& gameDir, unsigned scheme) {
-    const auto scheme1Archive = resolveCaseInsensitivePath(gameDir, "game_scheme1.sue");
-    if (scheme == 2) {
-        const std::vector<std::filesystem::path> beachArchives{
-            resolveCaseInsensitivePath(gameDir, "game_scheme3.sue"),
-            scheme1Archive,
-        };
-        return {
-            readSueEntryFallback(beachArchives, "rhombs.res"),
-            readSueEntryFallback(beachArchives, "rhombs.pl"),
-        };
-    }
+    const auto archives = resolveSchemeArchives(gameDir, scheme);
     return {
-        readSueEntry(scheme1Archive, "rhombs.res"),
-        readSueEntry(scheme1Archive, "rhombs.pl"),
+        readSueEntryChain(archives, "rhombs.res"),
+        readSueEntryChain(archives, "rhombs.pl"),
     };
 }
 

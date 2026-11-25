@@ -53,19 +53,14 @@ View pckFrame(View pck, std::size_t index) {
     return pck.subspan(start, end - start);
 }
 
-std::optional<Bytes> tryReadSue(const std::filesystem::path& archive, std::string_view entry) {
-    try {
-        return readSueEntry(archive, entry);
-    } catch (const std::runtime_error& err) {
-        if (std::string_view(err.what()) == "SUE entry not found") return std::nullopt;
-        throw;
-    }
+std::optional<Bytes> tryReadSue(std::span<const std::filesystem::path> archives, std::string_view entry) {
+    return tryReadSueEntryChain(archives, entry);
 }
 
-std::optional<std::string> resolveUnitStem(const std::filesystem::path& descArchive, bool hasDesc,
+std::optional<std::string> resolveUnitStem(std::span<const std::filesystem::path> descArchives, bool hasDesc,
                                            std::string_view unitId) {
     if (hasDesc) {
-        if (const auto bytes = tryReadSue(descArchive, "UNITS\\" + std::string(unitId))) {
+        if (const auto bytes = tryReadSue(descArchives, "UNITS\\" + std::string(unitId))) {
             std::string_view text(reinterpret_cast<const char*>(bytes->data()), bytes->size());
             while (!text.empty()) {
                 const auto eol = text.find_first_of("\r\n");
@@ -184,16 +179,16 @@ struct ShadowLayerList {
     }
 };
 
-std::optional<MissionVehicleAsset> tryLoadVehicleStemAsset(const std::filesystem::path& archive,
+std::optional<MissionVehicleAsset> tryLoadVehicleStemAsset(std::span<const std::filesystem::path> archives,
                                                            std::string_view stem) {
-    auto pck = tryReadSue(archive, std::string(stem) + ".PCK");
-    auto col = tryReadSue(archive, std::string(stem) + ".COL");
+    auto pck = tryReadSue(archives, std::string(stem) + ".PCK");
+    auto col = tryReadSue(archives, std::string(stem) + ".COL");
     if (!pck || !col || col->size() != 512u || pck->size() < 8u) return std::nullopt;
     const std::size_t first = u32(*pck, 0);
     if (first < 8u || (first % 4u) != 0u || first > pck->size()) return std::nullopt;
     const std::size_t frameCount = first / 4u - 1u;
     if (frameCount != 7u && frameCount < 32u) return std::nullopt;
-    auto hot = tryReadSue(archive, std::string(stem) + ".hot");
+    auto hot = tryReadSue(archives, std::string(stem) + ".hot");
     return MissionVehicleAsset{std::move(*pck), std::move(*col),
                                hot ? std::move(*hot) : Bytes{}, frameCount};
 }
@@ -656,11 +651,10 @@ void drawFrameWithDepth(MapImage& target, int patchX, int patchY, int ox, int oy
 }
 
 void VehicleScene::initArchives() {
-    archive_ = resolveCaseInsensitivePath(gameDir_, "game_common.sue");
-    descArchive_ = resolveCaseInsensitivePath(gameDir_, "desc_common.sue");
-    std::error_code ec;
-    hasArchive_ = std::filesystem::is_regular_file(archive_, ec);
-    hasDesc_ = std::filesystem::is_regular_file(descArchive_, ec);
+    gameArchives_ = resolveGameArchives(gameDir_);
+    descArchives_ = resolveDescArchives(gameDir_, 0);
+    hasArchive_ = !gameArchives_.empty();
+    hasDesc_ = !descArchives_.empty();
     archivesInitialized_ = true;
 }
 
@@ -677,11 +671,11 @@ std::optional<std::size_t> VehicleScene::ensureAssetLoaded(const std::string& id
     if (!hasArchive_) throw std::runtime_error("Cannot open SUE archive");
 
     std::optional<std::size_t> assetIndex;
-    if (const auto stem = resolveUnitStem(descArchive_, hasDesc_, id)) {
+    if (const auto stem = resolveUnitStem(descArchives_, hasDesc_, id)) {
         auto stemIt = assetByStem_.find(*stem);
         if (stemIt == assetByStem_.end()) {
             std::optional<std::size_t> loadedIndex;
-            if (auto loaded = tryLoadVehicleStemAsset(archive_, *stem)) {
+            if (auto loaded = tryLoadVehicleStemAsset(gameArchives_, *stem)) {
                 loadedIndex = assets_.size();
                 auto wreck = makeWreckPalette(loaded->col);
                 assets_.push_back(Asset{std::move(loaded->pck), std::move(loaded->col),
@@ -925,7 +919,8 @@ std::vector<Placement> drawTutorialVehicles(MapImage& map, const std::filesystem
         {"ds39",    {"MACHGUN.PCK", "MACHGUN.COL", nullptr, Kind::HeavyMg}},
     };
 
-    const auto archive = resolveCaseInsensitivePath(gameDir, "game_common.sue");
+    const auto archives = resolveGameArchives(gameDir);
+    if (archives.empty()) throw std::runtime_error("Cannot open SUE archive");
     std::map<std::string, LoadedAsset> loaded;
     std::vector<Vehicle> placements;
     std::vector<Placement> units;
@@ -940,12 +935,12 @@ std::vector<Placement> drawTutorialVehicles(MapImage& map, const std::filesystem
         auto [it, inserted] = loaded.try_emplace(id);
         if (inserted) {
             const auto& spec = specIt->second;
-            it->second.pck = readSueEntry(archive, spec.pck);
-            it->second.col = readSueEntry(archive, spec.col);
+            it->second.pck = readSueEntryChain(archives, spec.pck);
+            it->second.col = readSueEntryChain(archives, spec.col);
             if (it->second.col.size() != 512)
                 throw std::runtime_error("Invalid vehicle COL palette size");
             if (spec.hot) {
-                it->second.hot = readSueEntry(archive, spec.hot);
+                it->second.hot = readSueEntryChain(archives, spec.hot);
                 if (it->second.hot.size() < 32u * 8u)
                     throw std::runtime_error("Invalid vehicle HOT table size");
             }
@@ -1018,12 +1013,11 @@ std::size_t drawMissionVehicles(MapImage& map, const std::filesystem::path& game
     const auto source = readMissionPlacements(missionPath);
     if (source.empty()) return 0;
 
-    const auto archive = resolveCaseInsensitivePath(gameDir, "game_common.sue");
-    std::error_code ec;
-    if (!std::filesystem::is_regular_file(archive, ec))
+    const auto archives = resolveGameArchives(gameDir);
+    if (archives.empty())
         throw std::runtime_error("Cannot open SUE archive");
-    const auto descArchive = resolveCaseInsensitivePath(gameDir, "desc_common.sue");
-    const bool hasDesc = std::filesystem::is_regular_file(descArchive, ec);
+    const auto descArchives = resolveDescArchives(gameDir, 0);
+    const bool hasDesc = !descArchives.empty();
 
     std::map<std::string, std::optional<MissionVehicleAsset>> cache;
     std::vector<MissionVehicle> placements;
@@ -1034,8 +1028,8 @@ std::size_t drawMissionVehicles(MapImage& map, const std::filesystem::path& game
         auto it = cache.find(unit.id);
         if (it == cache.end()) {
             std::optional<MissionVehicleAsset> loaded;
-            if (const auto stem = resolveUnitStem(descArchive, hasDesc, unit.id)) {
-                loaded = tryLoadVehicleStemAsset(archive, *stem);
+            if (const auto stem = resolveUnitStem(descArchives, hasDesc, unit.id)) {
+                loaded = tryLoadVehicleStemAsset(archives, *stem);
             }
             it = cache.emplace(unit.id, std::move(loaded)).first;
         }
@@ -1077,15 +1071,14 @@ std::optional<MapImage> loadAircraftSprite(const std::filesystem::path& gameDir,
                                            std::string_view unitId,
                                            unsigned dir32) {
     if (gameDir.empty() || unitId.empty()) return std::nullopt;
-    std::error_code ec;
-    const auto archive = resolveCaseInsensitivePath(gameDir, "game_common.sue");
-    if (!std::filesystem::is_regular_file(archive, ec)) return std::nullopt;
-    const auto descArchive = resolveCaseInsensitivePath(gameDir, "desc_common.sue");
-    const bool hasDesc = std::filesystem::is_regular_file(descArchive, ec);
+    const auto archives = resolveGameArchives(gameDir);
+    if (archives.empty()) return std::nullopt;
+    const auto descArchives = resolveDescArchives(gameDir, 0);
+    const bool hasDesc = !descArchives.empty();
 
-    const auto stem = resolveUnitStem(descArchive, hasDesc, unitId);
+    const auto stem = resolveUnitStem(descArchives, hasDesc, unitId);
     if (!stem) return std::nullopt;
-    const auto asset = tryLoadVehicleStemAsset(archive, *stem);
+    const auto asset = tryLoadVehicleStemAsset(archives, *stem);
     if (!asset || asset->frameCount < 32u) return std::nullopt;
 
     const auto frame = pckFrame(asset->pck, dir32 & 31u);

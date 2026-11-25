@@ -25,13 +25,8 @@ std::uint32_t u32(View data, size_t pos) {
     return unsigned(u16(data, pos)) | (unsigned(u16(data, pos + 2)) << 16);
 }
 
-std::optional<Bytes> tryReadSue(const std::filesystem::path& archive, std::string_view entry) {
-    try {
-        return readSueEntry(archive, entry);
-    } catch (const std::runtime_error& err) {
-        if (std::string_view(err.what()) == "SUE entry not found") return std::nullopt;
-        throw;
-    }
+std::optional<Bytes> tryReadSue(std::span<const std::filesystem::path> archives, std::string_view entry) {
+    return tryReadSueEntryChain(archives, entry);
 }
 
 std::string_view nextToken(std::string_view& line) {
@@ -63,11 +58,11 @@ int parseCamouflageSlot(std::string_view tok) {
     return -1;
 }
 
-std::array<std::array<int, 3>, 16> loadSoldClrTable(const std::filesystem::path& descArchive, bool hasDesc) {
+std::array<std::array<int, 3>, 16> loadSoldClrTable(std::span<const std::filesystem::path> descArchives, bool hasDesc) {
     std::array<std::array<int, 3>, 16> table{};
     for (auto& entry : table) entry = {-1, -1, -1};
     if (!hasDesc) return table;
-    const auto bytes = tryReadSue(descArchive, "MISC\\MISC");
+    const auto bytes = tryReadSue(descArchives, "MISC\\MISC");
     if (!bytes) return table;
     std::string_view text(reinterpret_cast<const char*>(bytes->data()), bytes->size());
     while (!text.empty()) {
@@ -96,11 +91,11 @@ struct UnitVisualMeta {
     int camoSlot{-1};
 };
 
-std::optional<UnitVisualMeta> resolveUnitVisualMeta(const std::filesystem::path& descArchive, bool hasDesc,
+std::optional<UnitVisualMeta> resolveUnitVisualMeta(std::span<const std::filesystem::path> descArchives, bool hasDesc,
                                                     std::string_view unitId) {
     UnitVisualMeta meta{std::string(unitId), -1};
     if (hasDesc) {
-        if (const auto bytes = tryReadSue(descArchive, "UNITS\\" + std::string(unitId))) {
+        if (const auto bytes = tryReadSue(descArchives, "UNITS\\" + std::string(unitId))) {
             std::string_view text(reinterpret_cast<const char*>(bytes->data()), bytes->size());
             while (!text.empty()) {
                 const auto eol = text.find_first_of("\r\n");
@@ -125,12 +120,12 @@ struct LoadedInfantryRs2 {
     int camoSlot{-1};
 };
 
-std::optional<LoadedInfantryRs2> tryLoadInfantryRs2(const std::filesystem::path& descArchive, bool hasDesc,
-                                                    const std::filesystem::path& gameArchive,
+std::optional<LoadedInfantryRs2> tryLoadInfantryRs2(std::span<const std::filesystem::path> descArchives, bool hasDesc,
+                                                    std::span<const std::filesystem::path> gameArchives,
                                                     std::string_view unitId) {
-    const auto meta = resolveUnitVisualMeta(descArchive, hasDesc, unitId);
+    const auto meta = resolveUnitVisualMeta(descArchives, hasDesc, unitId);
     if (!meta) return std::nullopt;
-    auto rs2 = tryReadSue(gameArchive, meta->stem + ".RS2");
+    auto rs2 = tryReadSue(gameArchives, meta->stem + ".RS2");
     if (!rs2) return std::nullopt;
     return LoadedInfantryRs2{std::move(*rs2), meta->camoSlot};
 }
@@ -243,11 +238,10 @@ InfantryScene::InfantryScene(MapImage background, const std::filesystem::path& g
     if (!atlases_.empty() && (resolution_ != 2 || !cleanGround))
         throw std::runtime_error("Painted infantry require a clean 2x ground layer");
     if (!gameDir_.empty()) {
-        archive_ = resolveCaseInsensitivePath(gameDir_, "game_common.sue");
-        descArchive_ = resolveCaseInsensitivePath(gameDir_, "desc_common.sue");
-        std::error_code ec;
-        hasArchive_ = std::filesystem::is_regular_file(archive_, ec);
-        hasDesc_ = std::filesystem::is_regular_file(descArchive_, ec);
+        gameArchives_ = resolveGameArchives(gameDir_);
+        descArchives_ = resolveDescArchives(gameDir_, 0);
+        hasArchive_ = !gameArchives_.empty();
+        hasDesc_ = !descArchives_.empty();
     }
     std::map<std::string, std::array<int,4>> bakedBounds;
     // mapunits is the opening live-list order. Simulation, formation dispatch
@@ -289,14 +283,14 @@ bool InfantryScene::ensureClassLoaded(const std::string& id, std::array<int, 4>*
                 }
                 throw std::runtime_error("Cannot open SUE archive");
             }
-            const auto loaded = tryLoadInfantryRs2(descArchive_, hasDesc_, archive_, id);
+            const auto loaded = tryLoadInfantryRs2(descArchives_, hasDesc_, gameArchives_, id);
             if (!loaded) {
                 skippedTypes_.insert(id);
                 return false;
             }
-            if (palette_.empty()) palette_ = readSueEntry(archive_, "SOLD.PL");
+            if (palette_.empty()) palette_ = readSueEntryChain(gameArchives_, "SOLD.PL");
             if (!soldClrLoaded_) {
-                soldClr_ = loadSoldClrTable(descArchive_, hasDesc_);
+                soldClr_ = loadSoldClrTable(descArchives_, hasDesc_);
                 soldClrLoaded_ = true;
             }
             View activePalette(palette_);
@@ -629,15 +623,14 @@ std::vector<Infantry> loadMissionInfantry(const std::filesystem::path& gameDir,
                                           const std::filesystem::path& missionPath) {
     const auto placements = readMissionPlacements(missionPath);
     if (placements.empty()) return {};
-    const auto archive = resolveCaseInsensitivePath(gameDir, "game_common.sue");
-    std::error_code ec;
-    if (!std::filesystem::is_regular_file(archive, ec))
+    const auto gameArchives = resolveGameArchives(gameDir);
+    if (gameArchives.empty())
         throw std::runtime_error("Cannot open SUE archive");
-    const auto descArchive = resolveCaseInsensitivePath(gameDir, "desc_common.sue");
-    const bool hasDesc = std::filesystem::is_regular_file(descArchive, ec);
+    const auto descArchives = resolveDescArchives(gameDir, 0);
+    const bool hasDesc = !descArchives.empty();
 
     std::vector<std::uint8_t> palette;
-    const auto soldClr = loadSoldClrTable(descArchive, hasDesc);
+    const auto soldClr = loadSoldClrTable(descArchives, hasDesc);
     std::array<std::vector<std::uint8_t>, 16> camoPalettes{};
     std::map<std::string, std::optional<InfantryPoses>> cache;
     std::vector<Infantry> units;
@@ -645,8 +638,8 @@ std::vector<Infantry> loadMissionInfantry(const std::filesystem::path& gameDir,
         auto it = cache.find(unit.id);
         if (it == cache.end()) {
             std::optional<InfantryPoses> decoded;
-            if (const auto loaded = tryLoadInfantryRs2(descArchive, hasDesc, archive, unit.id)) {
-                if (palette.empty()) palette = readSueEntry(archive, "SOLD.PL");
+            if (const auto loaded = tryLoadInfantryRs2(descArchives, hasDesc, gameArchives, unit.id)) {
+                if (palette.empty()) palette = readSueEntryChain(gameArchives, "SOLD.PL");
                 View activePalette(palette);
                 if (loaded->camoSlot >= 0 && loaded->camoSlot < 16) {
                     auto& cached = camoPalettes[static_cast<std::size_t>(loaded->camoSlot)];

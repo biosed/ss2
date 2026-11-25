@@ -735,6 +735,48 @@ void testSyntheticMenuSueWidgets() {
     check(fe.state().screen() == ss2::FrontEnd::Screen::Launch && fe.activeMusicTrack().empty(),
           "Launching mission stops menu music");
 
+    // Mod Switcher in Options (opt_mod at row idx 9) + UserSettings active_mod persistence.
+    {
+        struct ActiveModReset {
+            ~ActiveModReset() { ss2::assets::setActiveMod(""); }
+        } resetMod;
+
+        const auto modMenuDir = synDir / "mods" / "WinterFront" / "menu_common";
+        std::filesystem::create_directories(modMenuDir);
+        {
+            std::ofstream creditsOut(modMenuDir / "credits.seq", std::ios::binary | std::ios::trunc);
+            creditsOut << "WINTER FRONT MOD TEAM\nLead Modder\n";
+            std::ofstream backOut(modMenuDir / "backwav", std::ios::binary | std::ios::trunc);
+            const std::vector<char> modWav(1280u, 0x22);
+            backOut.write(modWav.data(), static_cast<std::streamsize>(modWav.size()));
+        }
+
+        ss2::GoldFrontEnd mfe(nullptr, synDir, 0);
+        check(mfe.installedModCount() == 1u, "GoldFrontEnd discovers mods/WinterFront");
+        const std::size_t baseCredits = mfe.creditsLineCount();
+
+        // Cycle opt_mod (row idx 9: y=94+9*42+4=476..504) -> Escape reverts.
+        mfe.handleKey(SDLK_O);
+        mfe.handleMouseDown(674.0, 490.0, 1);
+        mfe.handleKey(SDLK_ESCAPE);
+        check(mfe.settings().activeMod.empty(), "Options Cancel discards activeMod preview");
+
+        // Re-open Options, select WinterFront, click OK (kOptionsOkRect y=524..559).
+        mfe.handleKey(SDLK_O);
+        mfe.handleMouseDown(674.0, 490.0, 1);
+        mfe.handleMouseDown(188.0, 535.0, 1);
+        check(mfe.takeSettingsSaved() && mfe.settings().activeMod == "WinterFront",
+              "Options OK commits activeMod=WinterFront");
+        check(mfe.creditsLineCount() != baseCredits,
+              "Options OK live-reloads modded menu credits.seq");
+        check(ss2::assets::sueChainEntrySize(ss2::assets::resolveMenuArchives(synDir), "backwav") == 1280u,
+              "activeMod WinterFront overrides menu backwav size");
+
+        const auto serialized = ss2::serializeUserSettings(mfe.settings());
+        const auto parsed = ss2::parseUserSettings(serialized);
+        check(parsed.activeMod == "WinterFront", "UserSettings round-trips active_mod");
+    }
+
     std::filesystem::remove_all(synDir);
 }
 

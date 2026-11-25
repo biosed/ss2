@@ -59,8 +59,8 @@ private:
     std::optional<std::size_t> ensureAssetLoaded(const std::string& id);
 
     std::filesystem::path gameDir_;
-    std::filesystem::path archive_;
-    std::filesystem::path descArchive_;
+    std::vector<std::filesystem::path> gameArchives_;
+    std::vector<std::filesystem::path> descArchives_;
     bool archivesInitialized_{false};
     bool hasArchive_{false};
     bool hasDesc_{false};

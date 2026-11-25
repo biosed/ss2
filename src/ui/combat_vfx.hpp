@@ -148,21 +148,17 @@ struct HuffTable {
     }
 };
 
-inline bool inflateZlibExact(ByteView src, std::size_t expectedSize,
-                             std::vector<std::uint8_t>& out) {
+inline bool inflateDeflateBlocks(ByteView src, std::size_t startPos, std::size_t payloadEnd,
+                                 std::size_t maxOut, bool exactSize,
+                                 std::vector<std::uint8_t>& out) {
     out.clear();
-    if (expectedSize == 0u) return true;
-    if (src.size() < 6u) return false;
-    const unsigned cmf = src[0];
-    const unsigned flg = src[1];
-    if ((cmf & 0x0Fu) != 8u || ((cmf >> 4u) > 7u) || (((cmf << 8u) | flg) % 31u) != 0u ||
-        (flg & 0x20u) != 0u) {
-        return false;
+    if (startPos > payloadEnd || payloadEnd > src.size()) return false;
+    if (exactSize) {
+        if (maxOut == 0u) return true;
+        out.reserve(maxOut);
     }
-    out.reserve(expectedSize);
 
-    std::size_t bytePos = 2u;
-    const std::size_t payloadEnd = src.size() - 4u; // exclude trailing 4-byte Adler32
+    std::size_t bytePos = startPos;
     std::uint64_t bitBuf = 0u;
     unsigned bitCount = 0u;
 
@@ -236,7 +232,7 @@ inline bool inflateZlibExact(ByteView src, std::size_t expectedSize,
             unsigned nlen = 0u;
             if (!readBits(16u, len) || !readBits(16u, nlen)) return false;
             if ((len ^ 0xFFFFu) != nlen) return false;
-            if (out.size() + len > expectedSize) return false;
+            if (out.size() + len > maxOut) return false;
             for (unsigned i = 0u; i < len; ++i) {
                 unsigned b = 0u;
                 if (!readBits(8u, b)) return false;
@@ -306,7 +302,7 @@ inline bool inflateZlibExact(ByteView src, std::size_t expectedSize,
             unsigned sym = 0u;
             if (!decodeSymbol(litTable, sym)) return false;
             if (sym < 256u) {
-                if (out.size() >= expectedSize) return false;
+                if (out.size() >= maxOut) return false;
                 out.push_back(static_cast<std::uint8_t>(sym));
             } else if (sym == 256u) {
                 break;
@@ -322,7 +318,7 @@ inline bool inflateZlibExact(ByteView src, std::size_t expectedSize,
                 unsigned extraD = 0u;
                 if (!readBits(kDistExtra[dsym], extraD)) return false;
                 const std::size_t dist = kDistBase[dsym] + extraD;
-                if (dist == 0u || dist > out.size() || out.size() + matchLen > expectedSize) {
+                if (dist == 0u || dist > out.size() || out.size() + matchLen > maxOut) {
                     return false;
                 }
                 for (unsigned k = 0u; k < matchLen; ++k) {
@@ -331,12 +327,62 @@ inline bool inflateZlibExact(ByteView src, std::size_t expectedSize,
             }
         }
     }
-    return out.size() == expectedSize;
+    return exactSize ? (out.size() == maxOut) : true;
+}
+
+inline bool inflateZlibExact(ByteView src, std::size_t expectedSize,
+                             std::vector<std::uint8_t>& out) {
+    out.clear();
+    if (expectedSize == 0u) return true;
+    if (src.size() < 6u) return false;
+    const unsigned cmf = src[0];
+    const unsigned flg = src[1];
+    if ((cmf & 0x0Fu) != 8u || ((cmf >> 4u) > 7u) || (((cmf << 8u) | flg) % 31u) != 0u ||
+        (flg & 0x20u) != 0u) {
+        return false;
+    }
+    return inflateDeflateBlocks(src, 2u, src.size() - 4u, expectedSize, true, out);
+}
+
+inline bool inflateGzipStream(ByteView src, std::vector<std::uint8_t>& out) {
+    out.clear();
+    if (src.size() < 18u || src[0] != 0x1Fu || src[1] != 0x8Bu || src[2] != 8u) return false;
+    const unsigned flg = src[3];
+    if ((flg & 0xE0u) != 0u) return false;
+    std::size_t pos = 10u;
+    const std::size_t payloadEnd = src.size() - 8u;
+    if (flg & 0x04u) { // FEXTRA
+        if (pos + 2u > payloadEnd) return false;
+        const std::size_t xlen = std::size_t(src[pos]) | (std::size_t(src[pos + 1u]) << 8u);
+        pos += 2u + xlen;
+        if (pos > payloadEnd) return false;
+    }
+    auto skipCStr = [&]() -> bool {
+        while (pos < payloadEnd && src[pos] != 0u) ++pos;
+        if (pos >= payloadEnd) return false;
+        ++pos;
+        return true;
+    };
+    if ((flg & 0x08u) && !skipCStr()) return false; // FNAME
+    if ((flg & 0x10u) && !skipCStr()) return false; // FCOMMENT
+    if (flg & 0x02u) { // FHCRC
+        if (pos + 2u > payloadEnd) return false;
+        pos += 2u;
+    }
+    constexpr std::size_t kMaxAsset = 32u << 20u;
+    return inflateDeflateBlocks(src, pos, payloadEnd, kMaxAsset, false, out);
 }
 
 class SueArchiveReader {
 public:
     bool open(const std::filesystem::path& archivePath) {
+        std::error_code ec;
+        if (std::filesystem::is_directory(archivePath, ec) && !ec) {
+            dirRoot_ = archivePath;
+            isDir_ = true;
+            valid_ = true;
+            return true;
+        }
         file_.open(archivePath, std::ios::binary);
         if (!file_) return false;
         std::array<std::uint8_t, 8> hdr{};
@@ -369,6 +415,9 @@ public:
 
     std::optional<std::vector<std::uint8_t>> readEntry(std::string_view entry) {
         if (!valid_) return std::nullopt;
+        if (isDir_) {
+            return readDirEntry(entry);
+        }
         std::string key(entry);
         for (char& ch : key) ch = static_cast<char>(toLowerAscii(static_cast<unsigned char>(ch)));
         const auto it = lowerPos_.find(key);
@@ -434,6 +483,44 @@ private:
         return inflateZlibExact(comp, static_cast<std::size_t>(total), out);
     }
 
+    std::optional<std::vector<std::uint8_t>> readDirEntry(std::string_view entry) const {
+        std::filesystem::path cur = dirRoot_;
+        std::size_t pos = 0u;
+        bool hasSeg = false;
+        while (pos <= entry.size()) {
+            const std::size_t sep = entry.find_first_of("\\/", pos);
+            const std::string_view seg = (sep == std::string_view::npos)
+                ? entry.substr(pos) : entry.substr(pos, sep - pos);
+            if (seg == "..") return std::nullopt;
+            if (!seg.empty() && seg != ".") {
+                cur = resolveCaseInsensitive(cur, seg);
+                hasSeg = true;
+            }
+            if (sep == std::string_view::npos) break;
+            pos = sep + 1u;
+        }
+        if (!hasSeg) return std::nullopt;
+        std::error_code ec;
+        if (!std::filesystem::is_regular_file(cur, ec) || ec) return std::nullopt;
+        constexpr std::size_t kMaxAsset = 32u << 20u;
+        const auto sz = std::filesystem::file_size(cur, ec);
+        if (ec || sz > kMaxAsset) return std::nullopt;
+        std::ifstream in(cur, std::ios::binary);
+        if (!in) return std::nullopt;
+        std::vector<std::uint8_t> raw(static_cast<std::size_t>(sz));
+        if (!raw.empty() && !in.read(reinterpret_cast<char*>(raw.data()), static_cast<std::streamsize>(raw.size()))) {
+            return std::nullopt;
+        }
+        if (raw.size() >= 2u && raw[0] == 0x1Fu && raw[1] == 0x8Bu) {
+            std::vector<std::uint8_t> out;
+            if (!inflateGzipStream(raw, out)) return std::nullopt;
+            return out;
+        }
+        return raw;
+    }
+
+    std::filesystem::path dirRoot_;
+    bool isDir_{false};
     std::ifstream file_;
     std::size_t indexStart_{0u};
     bool valid_{false};
@@ -441,6 +528,96 @@ private:
     std::vector<std::uint8_t> offsets_;
     std::unordered_map<std::string, std::size_t> lowerPos_;
 };
+
+class ArchiveChainReader {
+public:
+    bool openArchives(std::span<const std::filesystem::path> archives) {
+        readers_.clear();
+        for (const auto& path : archives) {
+            if (path.empty()) continue;
+            auto reader = std::make_unique<SueArchiveReader>();
+            if (reader->open(path)) {
+                readers_.push_back(std::move(reader));
+            }
+        }
+        return !readers_.empty();
+    }
+
+    std::optional<std::vector<std::uint8_t>> readEntry(std::string_view entry) {
+        for (auto& r : readers_) {
+            if (auto data = r->readEntry(entry)) return data;
+        }
+        return std::nullopt;
+    }
+
+private:
+    std::vector<std::unique_ptr<SueArchiveReader>> readers_;
+};
+
+inline std::vector<std::filesystem::path> parseIniGameArchiveChain(const std::filesystem::path& gameDir) {
+    std::vector<std::filesystem::path> out;
+    if (gameDir.empty()) return out;
+    const auto iniPath = resolveCaseInsensitive(gameDir, "sudtest.ini");
+    std::error_code ec;
+    if (std::filesystem::is_regular_file(iniPath, ec)) {
+        std::ifstream in(iniPath, std::ios::binary);
+        bool inData = false;
+        for (std::string line; std::getline(in, line);) {
+            while (!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '\t'))
+                line.pop_back();
+            std::size_t first = 0u;
+            while (first < line.size() && (line[first] == ' ' || line[first] == '\t')) ++first;
+            const std::string_view sv(line.data() + first, line.size() - first);
+            if (sv.empty() || sv.front() == ';' || sv.front() == '#') continue;
+            if (sv.front() == '[') {
+                const auto rb = sv.find(']');
+                if (rb != std::string_view::npos) {
+                    inData = iequalsAscii(sv.substr(1u, rb - 1u), "Data");
+                }
+                continue;
+            }
+            if (!inData) continue;
+            const auto eq = sv.find('=');
+            if (eq == std::string_view::npos) continue;
+            auto key = sv.substr(0u, eq);
+            while (!key.empty() && (key.back() == ' ' || key.back() == '\t')) key.remove_suffix(1u);
+            if (!iequalsAscii(key, "Game")) continue;
+            std::string_view val = sv.substr(eq + 1u);
+            std::size_t pos = 0u;
+            while (pos <= val.size()) {
+                const auto semi = val.find(';', pos);
+                auto tok = (semi == std::string_view::npos) ? val.substr(pos) : val.substr(pos, semi - pos);
+                while (!tok.empty() && (tok.front() == ' ' || tok.front() == '\t')) tok.remove_prefix(1u);
+                while (!tok.empty() && (tok.back() == ' ' || tok.back() == '\t')) tok.remove_suffix(1u);
+                if (!tok.empty()) {
+                    std::filesystem::path cur = gameDir;
+                    std::string seg;
+                    for (char ch : tok) {
+                        if (ch == '\\' || ch == '/') {
+                            if (!seg.empty()) {
+                                cur = resolveCaseInsensitive(cur, seg);
+                                seg.clear();
+                            }
+                        } else {
+                            seg.push_back(ch);
+                        }
+                    }
+                    if (!seg.empty()) cur = resolveCaseInsensitive(cur, seg);
+                    if (std::filesystem::exists(cur, ec)) out.push_back(std::move(cur));
+                }
+                if (semi == std::string_view::npos) break;
+                pos = semi + 1u;
+            }
+            break;
+        }
+    }
+    const auto fallback = resolveCaseInsensitive(gameDir, "game_common.sue");
+    if (std::filesystem::exists(fallback, ec) &&
+        std::ranges::find(out, fallback) == out.end()) {
+        out.push_back(fallback);
+    }
+    return out;
+}
 
 struct DecodedTrimmedSprite {
     int offsetX{0};
@@ -619,17 +796,16 @@ public:
     }
 
     bool loadFromGameDir(const std::filesystem::path& gameDir) {
+        const auto archives = combat_vfx_detail::parseIniGameArchiveChain(gameDir);
+        return loadFromArchives(archives);
+    }
+
+    bool loadFromArchives(std::span<const std::filesystem::path> archives) {
         clearUnpacked();
         retailLoaded_ = false;
-        if (!gameDir.empty()) {
-            const auto gameArchive = combat_vfx_detail::resolveCaseInsensitive(gameDir, "game_common.sue");
-            std::error_code ec;
-            if (std::filesystem::is_regular_file(gameArchive, ec)) {
-                combat_vfx_detail::SueArchiveReader sue;
-                if (sue.open(gameArchive)) {
-                    loadRetailClips(sue);
-                }
-            }
+        combat_vfx_detail::ArchiveChainReader chain;
+        if (!archives.empty() && chain.openArchives(archives)) {
+            loadRetailClips(chain);
         }
         fillMissingClipsWithProcedural();
         return finalizeAtlas() && retailLoaded_;
@@ -757,7 +933,8 @@ private:
         return anyFrames > 0u;
     }
 
-    void loadRetailClips(combat_vfx_detail::SueArchiveReader& sue) {
+    template <class Reader>
+    void loadRetailClips(Reader& sue) {
         using namespace combat_vfx_detail;
         struct AniEntrySpec {
             CombatVfxClip clip;
@@ -1189,6 +1366,11 @@ public:
     bool load(const std::filesystem::path& gameDir) {
         clearActive();
         return bank_.loadFromGameDir(gameDir);
+    }
+
+    bool loadFromArchives(std::span<const std::filesystem::path> archives) {
+        clearActive();
+        return bank_.loadFromArchives(archives);
     }
 
     void buildProceduralFallback() {

@@ -723,6 +723,63 @@ int main(int argc, char** argv) {
                     std::filesystem::remove_all(tmpDir);
                     throw std::runtime_error("Synthetic game_common.sue CombatVfxSystem load failed");
                 }
+
+                // Extend with sudtest.ini [Data] Game=myvfx\;game_common.sue unpacked folder + RFC-1952 gzip loose .ani.
+                {
+                    const auto myVfxDir = tmpDir / "myvfx";
+                    std::filesystem::create_directories(myVfxDir);
+                    std::ofstream outCol(myVfxDir / "a_sledkater.col", std::ios::binary | std::ios::trunc);
+                    outCol.write(reinterpret_cast<const char*>(synCol.data()),
+                                 static_cast<std::streamsize>(synCol.size()));
+                    outCol.close();
+
+                    const auto makeStoredGzip = [](const std::vector<std::uint8_t>& raw) {
+                        std::vector<std::uint8_t> gz{0x1Fu, 0x8Bu, 0x08u, 0x00u, 0u, 0u, 0u, 0u, 0x00u, 0x03u};
+                        gz.push_back(0x01u);
+                        const auto len = static_cast<std::uint16_t>(raw.size());
+                        const auto nlen = static_cast<std::uint16_t>(len ^ 0xFFFFu);
+                        gz.push_back(static_cast<std::uint8_t>(len & 0xFFu));
+                        gz.push_back(static_cast<std::uint8_t>((len >> 8u) & 0xFFu));
+                        gz.push_back(static_cast<std::uint8_t>(nlen & 0xFFu));
+                        gz.push_back(static_cast<std::uint8_t>((nlen >> 8u) & 0xFFu));
+                        gz.insert(gz.end(), raw.begin(), raw.end());
+                        std::uint32_t crc = 0xFFFFFFFFu;
+                        for (std::uint8_t b : raw) {
+                            crc ^= b;
+                            for (int bit = 0; bit < 8; ++bit) {
+                                crc = (crc & 1u) ? ((crc >> 1u) ^ 0xEDB88320u) : (crc >> 1u);
+                            }
+                        }
+                        crc ^= 0xFFFFFFFFu;
+                        const auto push32Le = [&](std::uint32_t v) {
+                            gz.push_back(static_cast<std::uint8_t>(v & 0xFFu));
+                            gz.push_back(static_cast<std::uint8_t>((v >> 8u) & 0xFFu));
+                            gz.push_back(static_cast<std::uint8_t>((v >> 16u) & 0xFFu));
+                            gz.push_back(static_cast<std::uint8_t>((v >> 24u) & 0xFFu));
+                        };
+                        push32Le(crc);
+                        push32Le(static_cast<std::uint32_t>(raw.size()));
+                        return gz;
+                    };
+
+                    const auto gzAni = makeStoredGzip(synAni);
+                    std::ofstream outAni(myVfxDir / "a_sledkater.ani", std::ios::binary | std::ios::trunc);
+                    outAni.write(reinterpret_cast<const char*>(gzAni.data()),
+                                 static_cast<std::streamsize>(gzAni.size()));
+                    outAni.close();
+
+                    std::ofstream outIni(tmpDir / "sudtest.ini", std::ios::binary | std::ios::trunc);
+                    outIni << "[Data]\nGame=myvfx\\;game_common.sue\n";
+                    outIni.close();
+
+                    ss2::CombatVfxSystem chainVfx;
+                    if (!chainVfx.load(tmpDir) || !chainVfx.hasRetailAssets() ||
+                        chainVfx.bank().clipFrameCount(ss2::CombatVfxClip::ExplosionHuge) != 1u ||
+                        chainVfx.bank().clipFrameCount(ss2::CombatVfxClip::WakeBoat) != 1u) {
+                        std::filesystem::remove_all(tmpDir);
+                        throw std::runtime_error("sudtest.ini Game=myvfx\\;game_common.sue unpacked+gzip CombatVfxSystem load failed");
+                    }
+                }
                 std::filesystem::remove_all(tmpDir);
             }
 

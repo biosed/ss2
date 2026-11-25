@@ -73,9 +73,10 @@ inline constexpr double kCreditsClipY = 74.0;
 inline constexpr double kCreditsClipW = 576.0;
 inline constexpr double kCreditsClipH = 410.0;
 
-inline constexpr std::array<const char*, 9> kOptionRowIds{{
+inline constexpr std::array<const char*, 10> kOptionRowIds{{
     "opt_difficulty", "opt_language", "opt_sfx", "opt_music_vol",
-    "opt_music_mute", "opt_speed", "opt_smooth", "opt_effects", "opt_skip_intro"
+    "opt_music_mute", "opt_speed", "opt_smooth", "opt_effects",
+    "opt_skip_intro", "opt_mod"
 }};
 
 struct RectD {
@@ -177,7 +178,9 @@ struct GoldFrontEnd::Assets {
 
     gold_ui::Surface mainBg = gold_ui::makeNullSurface();
     gold_ui::Surface briefingBg = gold_ui::makeNullSurface();
+    std::vector<std::filesystem::path> menuArchives;
     std::filesystem::path menuSuePath;
+    std::string backwavEntry{"backwav"};
     gold_ui::PckSurface creditsBg;
     gold_ui::PckSurface ratingsDropdownBtn;
     gold_ui::PckSurface nbramkaFrame;

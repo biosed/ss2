@@ -1,5 +1,6 @@
 #pragma once
 
+#include "assets/sprite.hpp"
 #include "ui/frontend.hpp"
 #include "ui/settings.hpp"
 
@@ -116,6 +117,8 @@ public:
     bool hasRetailWidgets() const;
     bool hasMenuMusic() const;
     std::string_view activeMusicTrack() const;
+    std::size_t installedModCount() const { return availableMods_.size(); }
+    void reloadModAssets();
     std::size_t creditsLineCount() const;
     bool hasBriefingMedia() const;
     std::size_t briefingPartCount() const;
@@ -235,6 +238,7 @@ private:
 
     std::string hoveredId_;
     std::string focusedId_{"single"};
+    std::vector<assets::ModInfo> availableMods_;
     int scrollOffset_{0};
     int ratingsScroll_{0};
     double briefScroll_{0.0};

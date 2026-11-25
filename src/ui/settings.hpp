@@ -41,6 +41,7 @@ struct UserSettings {
     std::map<std::string, int> missionHighScores;
     std::string activeProfile{"YourID"};
     std::vector<PlayerProfile> profiles;
+    std::string activeMod;
     bool operator==(const UserSettings&) const = default;
 };
 
@@ -116,6 +117,16 @@ inline std::filesystem::path defaultCampaignPoolsDir() {
     }
     if (const char* home = std::getenv("HOME"); home && *home) {
         return std::filesystem::path(home) / ".local" / "share" / "ss2" / "campaigns";
+    }
+    return {};
+}
+
+inline std::filesystem::path defaultModsDir() {
+    if (const char* xdg = std::getenv("XDG_DATA_HOME"); xdg && *xdg) {
+        return std::filesystem::path(xdg) / "ss2" / "mods";
+    }
+    if (const char* home = std::getenv("HOME"); home && *home) {
+        return std::filesystem::path(home) / ".local" / "share" / "ss2" / "mods";
     }
     return {};
 }
@@ -329,6 +340,9 @@ inline std::string serializeUserSettings(const UserSettings& input) {
     writeCompleted("completed_missions", s.completedMissions);
     writeScores("high_scores", s.missionHighScores);
     out << "active_profile=" << s.activeProfile << '\n';
+    if (!s.activeMod.empty()) {
+        out << "active_mod=" << s.activeMod << '\n';
+    }
     out << "profiles=";
     for (std::size_t i = 0; i < s.profiles.size(); ++i) {
         if (i > 0u) out << ',';
@@ -448,6 +462,11 @@ inline UserSettings parseUserSettings(std::string_view text) {
         } else if (key == "active_profile") {
             const std::string clean = sanitizeProfileName(val);
             if (!clean.empty()) s.activeProfile = clean;
+        } else if (key == "active_mod") {
+            std::string modStr(trimAscii(val));
+            if (!modStr.empty() && modStr != "none" && modStr != "vanilla" && modStr != "original") {
+                s.activeMod = std::move(modStr);
+            }
         } else if (key == "profiles") {
             std::size_t itemPos = 0;
             while (itemPos <= val.size()) {

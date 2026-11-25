@@ -7,6 +7,7 @@
 #include <charconv>
 #include <cmath>
 #include <cstdlib>
+#include <map>
 #include <system_error>
 
 namespace ss2::assets {
@@ -500,253 +501,278 @@ UnitSpec UnitCatalog::parseUnitText(std::string_view unitId, std::string_view de
     return spec;
 }
 
-std::shared_ptr<const UnitCatalog> UnitCatalog::load(const std::filesystem::path& gameDir) {
+std::shared_ptr<const UnitCatalog> UnitCatalog::load(const std::filesystem::path& gameDir,
+                                                   unsigned scheme) {
     auto catalog = std::make_shared<UnitCatalog>();
     if (gameDir.empty()) return catalog;
 
-    std::error_code ec;
-    const auto descPath = resolveCaseInsensitivePath(gameDir, "desc_common.sue");
-    if (std::filesystem::is_regular_file(descPath, ec)) {
-        catalog->descArchive_ = descPath;
-        catalog->hasDesc_ = true;
-        try {
-            const auto defBytes = readSueEntry(descPath, "LAND\\DEFDOM");
-            const std::string_view defText(reinterpret_cast<const char*>(defBytes.data()), defBytes.size());
-            bool parsedAnyDef = false;
-            bool sawTranspierceArmor = false;
-            bool sawTranspierceProt = false;
-            std::size_t pos = 0;
-            while (pos < defText.size()) {
-                std::size_t eol = defText.find('\n', pos);
-                if (eol == std::string_view::npos) eol = defText.size();
-                const auto toks = splitTokens(defText.substr(pos, eol - pos));
-                pos = eol + 1;
-                if (toks.size() < 4) continue;
-                const std::string k = asciiLower(toks[0]);
-                if ((k == "armor" || k == "protection") && asciiLower(toks[1]) == "default") {
-                    const HitType ht = parseHitTypeName(toks[2]);
-                    int val = 0;
-                    if (ht != HitType::None && parseInt(toks[3], val)) {
-                        if (k == "armor") {
-                            catalog->buildingDefense_.armor[static_cast<std::size_t>(ht)] = val;
-                            if (ht == HitType::Transpierce) sawTranspierceArmor = true;
-                        } else {
-                            catalog->buildingDefense_.protection[static_cast<std::size_t>(ht)] = val;
-                            if (ht == HitType::Transpierce) sawTranspierceProt = true;
+    catalog->descArchives_ = resolveDescArchives(gameDir, scheme);
+    catalog->langArchives_ = resolveLangArchives(gameDir, scheme);
+    catalog->hasDesc_ = !catalog->descArchives_.empty();
+    catalog->hasLang_ = !catalog->langArchives_.empty();
+
+    if (catalog->hasDesc_) {
+        bool parsedAnyDef = false;
+        bool sawTranspierceArmor = false;
+        bool sawTranspierceProt = false;
+        std::map<int, int> parsedStarsByLevel;
+        bool parsedPara = false;
+        bool parsedMine = false;
+
+        for (std::size_t idx = catalog->descArchives_.size(); idx-- > 0;) {
+            const auto& descPath = catalog->descArchives_[idx];
+            if (const auto defBytes = tryReadSueEntry(descPath, "LAND\\DEFDOM")) {
+                const std::string_view defText(reinterpret_cast<const char*>(defBytes->data()), defBytes->size());
+                std::size_t pos = 0;
+                while (pos < defText.size()) {
+                    std::size_t eol = defText.find('\n', pos);
+                    if (eol == std::string_view::npos) eol = defText.size();
+                    const auto toks = splitTokens(defText.substr(pos, eol - pos));
+                    pos = eol + 1;
+                    if (toks.size() < 4) continue;
+                    const std::string k = asciiLower(toks[0]);
+                    if ((k == "armor" || k == "protection") && asciiLower(toks[1]) == "default") {
+                        const HitType ht = parseHitTypeName(toks[2]);
+                        int val = 0;
+                        if (ht != HitType::None && parseInt(toks[3], val)) {
+                            if (k == "armor") {
+                                catalog->buildingDefense_.armor[static_cast<std::size_t>(ht)] = val;
+                                if (ht == HitType::Transpierce) sawTranspierceArmor = true;
+                            } else {
+                                catalog->buildingDefense_.protection[static_cast<std::size_t>(ht)] = val;
+                                if (ht == HitType::Transpierce) sawTranspierceProt = true;
+                            }
+                            parsedAnyDef = true;
                         }
-                        parsedAnyDef = true;
                     }
                 }
             }
-            if (parsedAnyDef) {
-                if (!sawTranspierceArmor) {
-                    catalog->buildingDefense_.armor[static_cast<std::size_t>(HitType::Transpierce)] =
-                        catalog->buildingDefense_.armorFor(HitType::Pierce);
-                }
-                if (!sawTranspierceProt) {
-                    catalog->buildingDefense_.protection[static_cast<std::size_t>(HitType::Transpierce)] =
-                        catalog->buildingDefense_.protectionFor(HitType::Pierce);
-                }
-                catalog->buildingDefense_.loaded = true;
-            }
-        } catch (const std::exception&) {}
-        try {
-            const auto domBytes = readSueEntry(descPath, "LAND\\DOM");
-            const std::string_view domText(reinterpret_cast<const char*>(domBytes.data()), domBytes.size());
-            std::size_t pos = 0;
-            while (pos < domText.size()) {
-                std::size_t eol = domText.find('\n', pos);
-                if (eol == std::string_view::npos) eol = domText.size();
-                const auto toks = splitTokens(domText.substr(pos, eol - pos));
-                pos = eol + 1;
-                if (toks.size() < 3) continue;
-                const std::string k = asciiLower(toks[0]);
-                if (asciiLower(toks[1]) != "default") continue;
-                int val = 0;
-                if (k == "unloadhp" && parseInt(toks[2], val) && val > 0) {
-                    catalog->buildingDefense_.unloadHp = val;
-                } else if (k == "bonus_shotrange" && parseInt(toks[2], val) && val > 0) {
-                    catalog->buildingDefense_.bonusShotRange = val;
-                } else if (k == "bonus_shotdeadzone" && parseInt(toks[2], val) && val > 0) {
-                    catalog->buildingDefense_.bonusShotDeadZone = val;
-                }
-            }
-        } catch (const std::exception&) {}
-        try {
-            const auto miscBytes = readSueEntry(descPath, "MISC\\MISC");
-            const std::string_view miscText(reinterpret_cast<const char*>(miscBytes.data()), miscBytes.size());
-            std::vector<std::pair<int, int>> parsedStars;
-            std::size_t pos = 0;
-            while (pos < miscText.size()) {
-                std::size_t eol = miscText.find('\n', pos);
-                if (eol == std::string_view::npos) eol = miscText.size();
-                const auto toks = splitTokens(miscText.substr(pos, eol - pos));
-                pos = eol + 1;
-                if (toks.size() >= 3 && asciiLower(toks[0]) == "starscore") {
-                    int star = 0;
-                    int thresh = 0;
-                    if (parseInt(toks[1], star) && parseInt(toks[2], thresh) && star > 0) {
-                        parsedStars.emplace_back(star, thresh);
-                    }
-                } else if (toks.size() >= 3 && asciiLower(toks[0]) == "tanksonarmorprotection") {
-                    const HitType ht = parseHitTypeName(toks[1]);
-                    int prot = 0;
-                    if (parseInt(toks[2], prot) && prot >= 0) {
-                        if (ht == HitType::Pierce) catalog->tankArmorProtectionPierce_ = prot;
-                        else if (ht == HitType::Explosive) catalog->tankArmorProtectionExplosive_ = prot;
-                    }
-                }
-            }
-            if (!parsedStars.empty()) {
-                std::sort(parsedStars.begin(), parsedStars.end(),
-                          [](const auto& a, const auto& b) { return a.second < b.second; });
-                catalog->starScores_ = std::move(parsedStars);
-            }
-        } catch (const std::exception&) {}
-        try {
-            const auto paraBytes = readSueEntry(descPath, "UNITS\\para");
-            const std::string_view paraText(reinterpret_cast<const char*>(paraBytes.data()), paraBytes.size());
-            bool parsedPara = false;
-            std::size_t pos = 0;
-            while (pos < paraText.size()) {
-                std::size_t eol = paraText.find('\n', pos);
-                if (eol == std::string_view::npos) eol = paraText.size();
-                const auto toks = splitTokens(paraText.substr(pos, eol - pos));
-                pos = eol + 1;
-                if (toks.size() < 2) continue;
-                const std::string k = asciiLower(toks[0]);
-                int iv = 0;
-                double dv = 0.0;
-                if (k == "fallspeed" && parseDouble(toks[1], dv) && dv > 0.0) {
-                    catalog->paraSpec_.fallSpeed = dv;
-                    parsedPara = true;
-                } else if (k == "paraanicenter" && parseInt(toks[1], iv) && iv >= 0) {
-                    catalog->paraSpec_.paraAniCenter = iv;
-                    parsedPara = true;
-                } else if (k == "paraframedelay" && parseInt(toks[1], iv) && iv > 0) {
-                    catalog->paraSpec_.paraFrameDelay = iv;
-                    parsedPara = true;
-                } else if (k == "sight" && parseInt(toks[1], iv) && iv > 0) {
-                    catalog->paraSpec_.sight = iv;
-                    parsedPara = true;
-                }
-            }
-            if (parsedPara) catalog->paraSpec_.loaded = true;
-        } catch (const std::exception&) {}
-        try {
-            const auto mineBytes = readSueEntry(descPath, "MISC\\MINES");
-            const std::string_view mineText(reinterpret_cast<const char*>(mineBytes.data()), mineBytes.size());
-            bool parsedMine = false;
-            std::size_t pos = 0;
-            while (pos < mineText.size()) {
-                std::size_t eol = mineText.find('\n', pos);
-                if (eol == std::string_view::npos) eol = mineText.size();
-                const auto toks = splitTokens(mineText.substr(pos, eol - pos));
-                pos = eol + 1;
-                if (toks.size() < 2) continue;
-                const std::string k = asciiLower(toks[0]);
-                int val = 0;
-                if (k == "damage" && parseInt(toks[1], val) && val > 0) {
-                    catalog->mineSpec_.damage = val;
-                    parsedMine = true;
-                } else if (k == "radius" && parseInt(toks[1], val) && val > 0) {
-                    catalog->mineSpec_.radius = val;
-                    parsedMine = true;
-                } else if (k == "expldelay" && parseInt(toks[1], val) && val > 0) {
-                    catalog->mineSpec_.explDelayTicks = val;
-                    parsedMine = true;
-                } else if (k == "shot") {
-                    const std::string s = asciiLower(toks[1]);
-                    if (!s.empty() && s != "none") {
-                        catalog->mineSpec_.atShot = s;
-                        parsedMine = true;
-                    }
-                } else if (k == "shotsold") {
-                    const std::string s = asciiLower(toks[1]);
-                    if (!s.empty() && s != "none") {
-                        catalog->mineSpec_.apShot = s;
-                        parsedMine = true;
-                    }
-                }
-            }
-            if (parsedMine) {
-                const auto atInfo = catalog->resolveShotInfoLocked(catalog->mineSpec_.atShot);
-                if (!atInfo.impactSound.empty()) catalog->mineSpec_.atSound = atInfo.impactSound;
-                const auto apInfo = catalog->resolveShotInfoLocked(catalog->mineSpec_.apShot);
-                if (!apInfo.impactSound.empty()) catalog->mineSpec_.apSound = apInfo.impactSound;
-                catalog->mineSpec_.loaded = true;
-            }
-        } catch (const std::exception&) {}
-        try {
-            const auto ifaceBytes = readSueEntry(descPath, "MISC\\INTERFACE");
-            const std::string_view ifaceText(reinterpret_cast<const char*>(ifaceBytes.data()), ifaceBytes.size());
-            std::size_t pos = 0;
-            while (pos < ifaceText.size()) {
-                std::size_t eol = ifaceText.find('\n', pos);
-                if (eol == std::string_view::npos) eol = ifaceText.size();
-                const auto toks = splitTokens(ifaceText.substr(pos, eol - pos));
-                pos = eol + 1;
-                if (toks.size() >= 2 && asciiLower(toks[0]) == "underattackinterval") {
+            if (const auto domBytes = tryReadSueEntry(descPath, "LAND\\DOM")) {
+                const std::string_view domText(reinterpret_cast<const char*>(domBytes->data()), domBytes->size());
+                std::size_t pos = 0;
+                while (pos < domText.size()) {
+                    std::size_t eol = domText.find('\n', pos);
+                    if (eol == std::string_view::npos) eol = domText.size();
+                    const auto toks = splitTokens(domText.substr(pos, eol - pos));
+                    pos = eol + 1;
+                    if (toks.size() < 3) continue;
+                    const std::string k = asciiLower(toks[0]);
+                    if (asciiLower(toks[1]) != "default") continue;
                     int val = 0;
-                    if (parseInt(toks[1], val) && val > 0) {
-                        catalog->underAttackIntervalSec_ = std::clamp(val, 1, 120);
+                    if (k == "unloadhp" && parseInt(toks[2], val) && val > 0) {
+                        catalog->buildingDefense_.unloadHp = val;
+                    } else if (k == "bonus_shotrange" && parseInt(toks[2], val) && val > 0) {
+                        catalog->buildingDefense_.bonusShotRange = val;
+                    } else if (k == "bonus_shotdeadzone" && parseInt(toks[2], val) && val > 0) {
+                        catalog->buildingDefense_.bonusShotDeadZone = val;
                     }
                 }
             }
-        } catch (const std::exception&) {}
-        try {
-            const auto weatherBytes = readSueEntry(descPath, "MISC\\WEATHER");
-            const std::string_view weatherText(reinterpret_cast<const char*>(weatherBytes.data()),
-                                                 weatherBytes.size());
-            std::size_t pos = 0;
-            while (pos < weatherText.size()) {
-                std::size_t eol = weatherText.find('\n', pos);
-                if (eol == std::string_view::npos) eol = weatherText.size();
-                const auto toks = splitTokens(weatherText.substr(pos, eol - pos));
-                pos = eol + 1;
-                if (toks.size() < 2) continue;
-                const std::string k = asciiLower(toks[0]);
-                const auto parseTint = [&](WeatherTint& dst) {
-                    if (toks.size() < 5) return;
-                    int r = 0, g = 0, b = 0;
-                    double a = 0.0;
-                    if (parseInt(toks[1], r) && parseInt(toks[2], g) && parseInt(toks[3], b) && parseDouble(toks[4], a)) {
-                        dst.r = static_cast<std::uint8_t>(std::clamp(r, 0, 255));
-                        dst.g = static_cast<std::uint8_t>(std::clamp(g, 0, 255));
-                        dst.b = static_cast<std::uint8_t>(std::clamp(b, 0, 255));
-                        dst.alpha = static_cast<float>(std::clamp(a, 0.0, 1.0));
+            if (const auto miscBytes = tryReadSueEntry(descPath, "MISC\\MISC")) {
+                const std::string_view miscText(reinterpret_cast<const char*>(miscBytes->data()), miscBytes->size());
+                std::size_t pos = 0;
+                while (pos < miscText.size()) {
+                    std::size_t eol = miscText.find('\n', pos);
+                    if (eol == std::string_view::npos) eol = miscText.size();
+                    const auto toks = splitTokens(miscText.substr(pos, eol - pos));
+                    pos = eol + 1;
+                    if (toks.size() >= 3 && asciiLower(toks[0]) == "starscore") {
+                        int star = 0;
+                        int thresh = 0;
+                        if (parseInt(toks[1], star) && parseInt(toks[2], thresh) && star > 0) {
+                            parsedStarsByLevel[star] = thresh;
+                        }
+                    } else if (toks.size() >= 3 && asciiLower(toks[0]) == "tanksonarmorprotection") {
+                        const HitType ht = parseHitTypeName(toks[1]);
+                        int prot = 0;
+                        if (parseInt(toks[2], prot) && prot >= 0) {
+                            if (ht == HitType::Pierce) catalog->tankArmorProtectionPierce_ = prot;
+                            else if (ht == HitType::Explosive) catalog->tankArmorProtectionExplosive_ = prot;
+                        }
+                    }
+                }
+            }
+            if (const auto paraBytes = tryReadSueEntry(descPath, "UNITS\\para")) {
+                const std::string_view paraText(reinterpret_cast<const char*>(paraBytes->data()), paraBytes->size());
+                std::size_t pos = 0;
+                while (pos < paraText.size()) {
+                    std::size_t eol = paraText.find('\n', pos);
+                    if (eol == std::string_view::npos) eol = paraText.size();
+                    const auto toks = splitTokens(paraText.substr(pos, eol - pos));
+                    pos = eol + 1;
+                    if (toks.size() < 2) continue;
+                    const std::string k = asciiLower(toks[0]);
+                    int iv = 0;
+                    double dv = 0.0;
+                    if (k == "fallspeed" && parseDouble(toks[1], dv) && dv > 0.0) {
+                        catalog->paraSpec_.fallSpeed = dv;
+                        parsedPara = true;
+                    } else if (k == "paraanicenter" && parseInt(toks[1], iv) && iv >= 0) {
+                        catalog->paraSpec_.paraAniCenter = iv;
+                        parsedPara = true;
+                    } else if (k == "paraframedelay" && parseInt(toks[1], iv) && iv > 0) {
+                        catalog->paraSpec_.paraFrameDelay = iv;
+                        parsedPara = true;
+                    } else if (k == "sight" && parseInt(toks[1], iv) && iv > 0) {
+                        catalog->paraSpec_.sight = iv;
+                        parsedPara = true;
+                    }
+                }
+            }
+            if (const auto mineBytes = tryReadSueEntry(descPath, "MISC\\MINES")) {
+                const std::string_view mineText(reinterpret_cast<const char*>(mineBytes->data()), mineBytes->size());
+                std::size_t pos = 0;
+                while (pos < mineText.size()) {
+                    std::size_t eol = mineText.find('\n', pos);
+                    if (eol == std::string_view::npos) eol = mineText.size();
+                    const auto toks = splitTokens(mineText.substr(pos, eol - pos));
+                    pos = eol + 1;
+                    if (toks.size() < 2) continue;
+                    const std::string k = asciiLower(toks[0]);
+                    int val = 0;
+                    if (k == "damage" && parseInt(toks[1], val) && val > 0) {
+                        catalog->mineSpec_.damage = val;
+                        parsedMine = true;
+                    } else if (k == "radius" && parseInt(toks[1], val) && val > 0) {
+                        catalog->mineSpec_.radius = val;
+                        parsedMine = true;
+                    } else if (k == "expldelay" && parseInt(toks[1], val) && val > 0) {
+                        catalog->mineSpec_.explDelayTicks = val;
+                        parsedMine = true;
+                    } else if (k == "shot") {
+                        const std::string s = asciiLower(toks[1]);
+                        if (!s.empty() && s != "none") {
+                            catalog->mineSpec_.atShot = s;
+                            parsedMine = true;
+                        }
+                    } else if (k == "shotsold") {
+                        const std::string s = asciiLower(toks[1]);
+                        if (!s.empty() && s != "none") {
+                            catalog->mineSpec_.apShot = s;
+                            parsedMine = true;
+                        }
+                    }
+                }
+            }
+            if (const auto ifaceBytes = tryReadSueEntry(descPath, "MISC\\INTERFACE")) {
+                const std::string_view ifaceText(reinterpret_cast<const char*>(ifaceBytes->data()), ifaceBytes->size());
+                std::size_t pos = 0;
+                while (pos < ifaceText.size()) {
+                    std::size_t eol = ifaceText.find('\n', pos);
+                    if (eol == std::string_view::npos) eol = ifaceText.size();
+                    const auto toks = splitTokens(ifaceText.substr(pos, eol - pos));
+                    pos = eol + 1;
+                    if (toks.size() >= 2 && asciiLower(toks[0]) == "underattackinterval") {
+                        int val = 0;
+                        if (parseInt(toks[1], val) && val > 0) {
+                            catalog->underAttackIntervalSec_ = std::clamp(val, 1, 120);
+                        }
+                    }
+                }
+            }
+            if (const auto weatherBytes = tryReadSueEntry(descPath, "MISC\\WEATHER")) {
+                const std::string_view weatherText(reinterpret_cast<const char*>(weatherBytes->data()),
+                                                     weatherBytes->size());
+                std::size_t pos = 0;
+                while (pos < weatherText.size()) {
+                    std::size_t eol = weatherText.find('\n', pos);
+                    if (eol == std::string_view::npos) eol = weatherText.size();
+                    const auto toks = splitTokens(weatherText.substr(pos, eol - pos));
+                    pos = eol + 1;
+                    if (toks.size() < 2) continue;
+                    const std::string k = asciiLower(toks[0]);
+                    const auto parseTint = [&](WeatherTint& dst) {
+                        if (toks.size() < 5) return;
+                        int r = 0, g = 0, b = 0;
+                        double a = 0.0;
+                        if (parseInt(toks[1], r) && parseInt(toks[2], g) && parseInt(toks[3], b) && parseDouble(toks[4], a)) {
+                            dst.r = static_cast<std::uint8_t>(std::clamp(r, 0, 255));
+                            dst.g = static_cast<std::uint8_t>(std::clamp(g, 0, 255));
+                            dst.b = static_cast<std::uint8_t>(std::clamp(b, 0, 255));
+                            dst.alpha = static_cast<float>(std::clamp(a, 0.0, 1.0));
+                            catalog->weather_.loaded = true;
+                        }
+                    };
+                    int val = 0;
+                    if (k == "rainvisibility" && parseInt(toks[1], val)) {
+                        catalog->weather_.rainVisibilityPct = std::clamp(val, 0, 100);
                         catalog->weather_.loaded = true;
+                    } else if (k == "fogvisibility" && parseInt(toks[1], val)) {
+                        catalog->weather_.fogVisibilityPct = std::clamp(val, 0, 100);
+                        catalog->weather_.loaded = true;
+                    } else if (k == "snowvisibility" && parseInt(toks[1], val)) {
+                        catalog->weather_.snowVisibilityPct = std::clamp(val, 0, 100);
+                        catalog->weather_.loaded = true;
+                    } else if (k == "showalways" && parseInt(toks[1], val)) {
+                        catalog->weather_.showAlways = (val != 0);
+                        catalog->weather_.loaded = true;
+                    } else if (k == "fogrgbc") {
+                        parseTint(catalog->weather_.fogTint);
+                    } else if (k == "rainrgbc") {
+                        parseTint(catalog->weather_.rainTint);
+                    } else if (k == "snowrgbc") {
+                        parseTint(catalog->weather_.snowTint);
                     }
-                };
-                int val = 0;
-                if (k == "rainvisibility" && parseInt(toks[1], val)) {
-                    catalog->weather_.rainVisibilityPct = std::clamp(val, 0, 100);
-                    catalog->weather_.loaded = true;
-                } else if (k == "fogvisibility" && parseInt(toks[1], val)) {
-                    catalog->weather_.fogVisibilityPct = std::clamp(val, 0, 100);
-                    catalog->weather_.loaded = true;
-                } else if (k == "snowvisibility" && parseInt(toks[1], val)) {
-                    catalog->weather_.snowVisibilityPct = std::clamp(val, 0, 100);
-                    catalog->weather_.loaded = true;
-                } else if (k == "showalways" && parseInt(toks[1], val)) {
-                    catalog->weather_.showAlways = (val != 0);
-                    catalog->weather_.loaded = true;
-                } else if (k == "fogrgbc") {
-                    parseTint(catalog->weather_.fogTint);
-                } else if (k == "rainrgbc") {
-                    parseTint(catalog->weather_.rainTint);
-                } else if (k == "snowrgbc") {
-                    parseTint(catalog->weather_.snowTint);
                 }
             }
-        } catch (const std::exception&) {}
+        }
+
+        if (parsedAnyDef) {
+            if (!sawTranspierceArmor) {
+                catalog->buildingDefense_.armor[static_cast<std::size_t>(HitType::Transpierce)] =
+                    catalog->buildingDefense_.armorFor(HitType::Pierce);
+            }
+            if (!sawTranspierceProt) {
+                catalog->buildingDefense_.protection[static_cast<std::size_t>(HitType::Transpierce)] =
+                    catalog->buildingDefense_.protectionFor(HitType::Pierce);
+            }
+            catalog->buildingDefense_.loaded = true;
+        }
+        if (!parsedStarsByLevel.empty()) {
+            std::vector<std::pair<int, int>> sortedStars;
+            sortedStars.reserve(parsedStarsByLevel.size());
+            for (const auto& [st, th] : parsedStarsByLevel) {
+                sortedStars.emplace_back(st, th);
+            }
+            std::sort(sortedStars.begin(), sortedStars.end(),
+                      [](const auto& a, const auto& b) { return a.second < b.second; });
+            catalog->starScores_ = std::move(sortedStars);
+        }
+        if (parsedPara) catalog->paraSpec_.loaded = true;
+        if (parsedMine) {
+            const auto atInfo = catalog->resolveShotInfoLocked(catalog->mineSpec_.atShot);
+            if (!atInfo.impactSound.empty()) catalog->mineSpec_.atSound = atInfo.impactSound;
+            const auto apInfo = catalog->resolveShotInfoLocked(catalog->mineSpec_.apShot);
+            if (!apInfo.impactSound.empty()) catalog->mineSpec_.apSound = apInfo.impactSound;
+            catalog->mineSpec_.loaded = true;
+        }
     }
-    ec.clear();
-    const auto langPath = resolveCaseInsensitivePath(gameDir, "lang.sue");
-    if (std::filesystem::is_regular_file(langPath, ec)) {
-        catalog->langArchive_ = langPath;
-        catalog->hasLang_ = true;
-    }
+
+    auto parseDescdomNames = [&](const std::vector<std::filesystem::path>& archives) {
+        for (std::size_t idx = archives.size(); idx-- > 0;) {
+            const auto bytes = tryReadSueEntry(archives[idx], "LAND\\DESCDOM");
+            if (!bytes) continue;
+            const std::string_view text(reinterpret_cast<const char*>(bytes->data()), bytes->size());
+            std::size_t pos = 0;
+            while (pos < text.size()) {
+                std::size_t eol = text.find('\n', pos);
+                if (eol == std::string_view::npos) eol = text.size();
+                const std::string_view line = trimView(text.substr(pos, eol - pos));
+                pos = eol + 1;
+                const auto toks = splitTokens(line);
+                if (toks.size() < 4 || asciiLower(toks[0]) != "name" || asciiLower(toks[1]) != "obj") continue;
+                int objIdx = -1;
+                if (!parseInt(toks[2], objIdx) || objIdx < 0) continue;
+                const auto afterObj = restAfterKey(line, toks[2]);
+                const std::string name = decodeMissionText(stripQuotes(afterObj));
+                if (!name.empty() && name.front() != '$') {
+                    catalog->buildingNames_[static_cast<unsigned>(objIdx)] = name;
+                }
+            }
+        }
+    };
+    parseDescdomNames(catalog->descArchives_);
+    parseDescdomNames(catalog->langArchives_);
     return catalog;
 }
 
@@ -853,27 +879,28 @@ UnitCatalog::ShotInfo UnitCatalog::resolveShotInfoLocked(std::string_view shotId
     std::string defaultExpl;
     std::string fallbackExpl;
     try {
-        const auto bytes = readSueEntry(descArchive_, "SHOTS\\" + key);
-        const std::string_view shotText(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-        std::size_t pos = 0;
-        while (pos < shotText.size()) {
-            std::size_t eol = shotText.find('\n', pos);
-            if (eol == std::string_view::npos) eol = shotText.size();
-            const auto toks = splitTokens(shotText.substr(pos, eol - pos));
-            pos = eol + 1;
-            if (toks.size() < 2) continue;
-            const std::string k = asciiLower(toks[0]);
-            if (k == "hitid") {
-                info.hitType = parseHitTypeName(toks[1]);
-            } else if (k == "useh") {
-                double val = 0.0;
-                if (parseDouble(toks[1], val) && val >= 2.0) info.indirectArc = true;
-            } else if (k == "explosion" && toks.size() >= 3) {
-                const std::string surf = asciiLower(toks[1]);
-                const std::string expl = asciiLower(toks[2]);
-                if (!expl.empty() && expl != "none") {
-                    if (surf == "default") defaultExpl = expl;
-                    else if (fallbackExpl.empty()) fallbackExpl = expl;
+        if (const auto bytes = tryReadSueEntryChain(descArchives_, "SHOTS\\" + key)) {
+            const std::string_view shotText(reinterpret_cast<const char*>(bytes->data()), bytes->size());
+            std::size_t pos = 0;
+            while (pos < shotText.size()) {
+                std::size_t eol = shotText.find('\n', pos);
+                if (eol == std::string_view::npos) eol = shotText.size();
+                const auto toks = splitTokens(shotText.substr(pos, eol - pos));
+                pos = eol + 1;
+                if (toks.size() < 2) continue;
+                const std::string k = asciiLower(toks[0]);
+                if (k == "hitid") {
+                    info.hitType = parseHitTypeName(toks[1]);
+                } else if (k == "useh") {
+                    double val = 0.0;
+                    if (parseDouble(toks[1], val) && val >= 2.0) info.indirectArc = true;
+                } else if (k == "explosion" && toks.size() >= 3) {
+                    const std::string surf = asciiLower(toks[1]);
+                    const std::string expl = asciiLower(toks[2]);
+                    if (!expl.empty() && expl != "none") {
+                        if (surf == "default") defaultExpl = expl;
+                        else if (fallbackExpl.empty()) fallbackExpl = expl;
+                    }
                 }
             }
         }
@@ -882,24 +909,25 @@ UnitCatalog::ShotInfo UnitCatalog::resolveShotInfoLocked(std::string_view shotId
     const std::string chosenExpl = !defaultExpl.empty() ? defaultExpl : fallbackExpl;
     if (!chosenExpl.empty() && chosenExpl != "none") {
         try {
-            const auto eBytes = readSueEntry(descArchive_, "EXPLOSIONS\\" + chosenExpl);
-            const std::string_view explText(reinterpret_cast<const char*>(eBytes.data()), eBytes.size());
-            std::size_t pos = 0;
-            while (pos < explText.size()) {
-                std::size_t eol = explText.find('\n', pos);
-                if (eol == std::string_view::npos) eol = explText.size();
-                const auto toks = splitTokens(explText.substr(pos, eol - pos));
-                pos = eol + 1;
-                if (toks.size() < 2) continue;
-                const std::string k = asciiLower(toks[0]);
-                if (k == "vor") {
-                    int v = 0;
-                    if (asciiLower(toks[1]) != "none" && parseInt(toks[1], v) && v > 0) {
-                        info.craterScale = v;
+            if (const auto eBytes = tryReadSueEntryChain(descArchives_, "EXPLOSIONS\\" + chosenExpl)) {
+                const std::string_view explText(reinterpret_cast<const char*>(eBytes->data()), eBytes->size());
+                std::size_t pos = 0;
+                while (pos < explText.size()) {
+                    std::size_t eol = explText.find('\n', pos);
+                    if (eol == std::string_view::npos) eol = explText.size();
+                    const auto toks = splitTokens(explText.substr(pos, eol - pos));
+                    pos = eol + 1;
+                    if (toks.size() < 2) continue;
+                    const std::string k = asciiLower(toks[0]);
+                    if (k == "vor") {
+                        int v = 0;
+                        if (asciiLower(toks[1]) != "none" && parseInt(toks[1], v) && v > 0) {
+                            info.craterScale = v;
+                        }
+                    } else if (k == "sound") {
+                        const std::string snd = asciiLower(toks[1]);
+                        if (!snd.empty() && snd != "none") info.impactSound = snd;
                     }
-                } else if (k == "sound") {
-                    const std::string snd = asciiLower(toks[1]);
-                    if (!snd.empty() && snd != "none") info.impactSound = snd;
                 }
             }
         } catch (const std::exception&) {}
@@ -925,18 +953,23 @@ const UnitSpec* UnitCatalog::find(std::string_view unitId) const {
         return nullptr;
     }
 
-    Bytes descBytes;
+    std::optional<Bytes> descOpt;
     try {
-        descBytes = readSueEntry(descArchive_, "UNITS\\" + key);
+        descOpt = tryReadSueEntryChain(descArchives_, "UNITS\\" + key);
     } catch (const std::exception&) {
+    }
+    if (!descOpt) {
         misses_.insert(key);
         return nullptr;
     }
+    Bytes descBytes = std::move(*descOpt);
 
     Bytes langBytes;
     if (hasLang_) {
         try {
-            langBytes = readSueEntry(langArchive_, "UNITS\\" + key);
+            if (auto lb = tryReadSueEntryChain(langArchives_, "UNITS\\" + key)) {
+                langBytes = std::move(*lb);
+            }
         } catch (const std::exception&) {}
     }
 
@@ -972,13 +1005,16 @@ const PlaneSpec* UnitCatalog::findPlane(std::string_view planeId) const {
         return nullptr;
     }
 
-    Bytes descBytes;
+    std::optional<Bytes> descOpt;
     try {
-        descBytes = readSueEntry(descArchive_, "AVIA\\" + key);
+        descOpt = tryReadSueEntryChain(descArchives_, "AVIA\\" + key);
     } catch (const std::exception&) {
+    }
+    if (!descOpt) {
         planeMisses_.insert(key);
         return nullptr;
     }
+    Bytes descBytes = std::move(*descOpt);
 
     const std::string_view descText(reinterpret_cast<const char*>(descBytes.data()), descBytes.size());
     auto spec = std::make_unique<PlaneSpec>(parsePlaneText(key, descText));
@@ -1000,6 +1036,13 @@ std::string UnitCatalog::displayName(std::string_view unitId) const {
 std::string UnitCatalog::shortName(std::string_view unitId) const {
     if (const auto* spec = find(unitId); spec && !spec->shortName.empty()) {
         return spec->shortName;
+    }
+    return {};
+}
+
+std::string UnitCatalog::buildingName(unsigned objIndex) const {
+    if (const auto it = buildingNames_.find(objIndex); it != buildingNames_.end()) {
+        return it->second;
     }
     return {};
 }

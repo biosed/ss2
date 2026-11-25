@@ -337,17 +337,18 @@ std::optional<FrontEndResult> runFrontEnd(SDL_Window* window, ss2::ValidationRep
     ss2::GoldFrontEnd goldFe(window, gameDir);
     goldFe.setSettings(settings);
 
-    const auto installedMissions = ss2::assets::listSinglePlayerMissions(gameDir);
-    const auto installedCampaigns = ss2::assets::listCampaigns(gameDir);
+    auto installedMissions = ss2::assets::listSinglePlayerMissions(gameDir);
+    auto installedCampaigns = ss2::assets::listCampaigns(gameDir);
     goldFe.setReplays(scanSavedReplays());
     goldFe.setSaves(scanSavedGames(gameDir, installedMissions, installedCampaigns));
 
-    const auto installedCustomCampaigns = ss2::assets::listCustomCampaigns(gameDir, ss2::defaultCustomCampaignsDir());
+    auto installedCustomCampaigns = ss2::assets::listCustomCampaigns(gameDir, ss2::defaultCustomCampaignsDir());
+    auto installedMp = ss2::assets::listMultiplayerMissions(gameDir);
     const auto refreshFrontEndProgress = [&] {
         std::vector<ss2::GoldMissionEntry> entries;
         for (const auto& m : installedMissions) {
             std::string tag = std::to_string(m.width) + "x" + std::to_string(m.height) +
-                              (m.scheme == 2 ? " Beach" : " Summer");
+                              ' ' + ss2::assets::schemeDisplayName(m.scheme);
             const std::string key = ss2::normalizeMissionKey(m.path.stem().string());
             const bool completed = settings.completedMissions.contains(key);
             int highScore = 0;
@@ -371,7 +372,7 @@ std::optional<FrontEndResult> runFrontEnd(SDL_Window* window, ss2::ValidationRep
                 ce.missions.reserve(c.missions.size());
                 for (const auto& m : c.missions) {
                     std::string tag = std::to_string(m.width) + "x" + std::to_string(m.height) +
-                                      (m.scheme == 2 ? " Beach" : " Summer");
+                                      ' ' + ss2::assets::schemeDisplayName(m.scheme);
                     const std::string codeKey = ss2::normalizeMissionKey(m.code);
                     const std::string stemKey = ss2::normalizeMissionKey(m.path.stem().string());
                     const bool completed = settings.completedMissions.contains(codeKey) ||
@@ -397,19 +398,18 @@ std::optional<FrontEndResult> runFrontEnd(SDL_Window* window, ss2::ValidationRep
         };
         goldFe.setCampaigns(buildCampaignEntries(installedCampaigns));
         goldFe.setCustomCampaigns(buildCampaignEntries(installedCustomCampaigns));
+
+        std::vector<ss2::GoldMissionEntry> mpEntries;
+        mpEntries.reserve(installedMp.size());
+        for (const auto& m : installedMp) {
+            std::string tag = std::to_string(m.width) + "x" + std::to_string(m.height) +
+                              ' ' + ss2::assets::schemeDisplayName(m.scheme);
+            mpEntries.push_back({m.name, m.path.string(), m.description, std::move(tag),
+                                 m.width, m.height, m.scheme, false, 0});
+        }
+        goldFe.setMultiplayerMissions(std::move(mpEntries));
     };
     refreshFrontEndProgress();
-
-    const auto installedMp = ss2::assets::listMultiplayerMissions(gameDir);
-    std::vector<ss2::GoldMissionEntry> mpEntries;
-    mpEntries.reserve(installedMp.size());
-    for (const auto& m : installedMp) {
-        std::string tag = std::to_string(m.width) + "x" + std::to_string(m.height) +
-                          (m.scheme == 2 ? " Beach" : " Summer");
-        mpEntries.push_back({m.name, m.path.string(), m.description, std::move(tag),
-                             m.width, m.height, m.scheme, false, 0});
-    }
-    goldFe.setMultiplayerMissions(std::move(mpEntries));
 
     const ss2::Snapshot empty{};
     std::uint64_t lastTick = SDL_GetTicksNS();
@@ -426,9 +426,17 @@ std::optional<FrontEndResult> runFrontEnd(SDL_Window* window, ss2::ValidationRep
         lastTick = now;
 
         if (goldFe.takeSettingsSaved()) {
+            const bool modChanged = (settings.activeMod != goldFe.settings().activeMod);
             settings = goldFe.settings();
             if (persistSettings) {
                 (void)ss2::saveUserSettings(ss2::defaultSettingsPath(), settings);
+            }
+            if (modChanged) {
+                installedMissions = ss2::assets::listSinglePlayerMissions(gameDir);
+                installedCampaigns = ss2::assets::listCampaigns(gameDir);
+                installedCustomCampaigns = ss2::assets::listCustomCampaigns(gameDir, ss2::defaultCustomCampaignsDir());
+                installedMp = ss2::assets::listMultiplayerMissions(gameDir);
+                goldFe.setSaves(scanSavedGames(gameDir, installedMissions, installedCampaigns));
             }
             refreshFrontEndProgress();
         }
@@ -583,6 +591,8 @@ int main(int argc, char** argv) try {
     bool listMissions = false;
     bool listCampaigns = false;
     bool listMultiplayer = false;
+    bool listMods = false;
+    std::optional<std::string> cliMod;
     bool overviewOnly = false;
     bool noMovies = false;
     bool watchReplay = false;
@@ -595,9 +605,11 @@ int main(int argc, char** argv) try {
     for (int i = 1; i < argc; ++i) {
         const std::string_view arg(argv[i]);
         if (arg == "--help") {
-            std::cout << "ss2 [--game-dir DIR] [--mission FILE.ssm|NAME|INDEX] [--campaign QUERY] [--overview] [--list-missions] [--list-campaigns] [--list-multiplayer] [--host PORT | --join HOST:PORT] [--mp-nation NATION] [--mp-players 2|3|4] [--mp-teams ffa|2v2|T0,T1,T2,T3] [--hd-pack DIR] [--original-infantry] [--no-auto-engage] [--difficulty easy|normal|hard] [--record FILE | --replay FILE | --watch-replay FILE | --load-save FILE] [--4k] [--fullscreen | --windowed] [--lang en|fr|es] [--frames N] [--no-movies] [--validate] [--timing]\n"
+            std::cout << "ss2 [--game-dir DIR] [--mod NAME|DIR|INI] [--mission FILE.ssm|NAME|INDEX] [--campaign QUERY] [--overview] [--list-missions] [--list-campaigns] [--list-multiplayer] [--list-mods] [--host PORT | --join HOST:PORT] [--mp-nation NATION] [--mp-players 2|3|4] [--mp-teams ffa|2v2|T0,T1,T2,T3] [--hd-pack DIR] [--original-infantry] [--no-auto-engage] [--difficulty easy|normal|hard] [--record FILE | --replay FILE | --watch-replay FILE | --load-save FILE] [--4k] [--fullscreen | --windowed] [--lang en|fr|es] [--frames N] [--no-movies] [--validate] [--timing]\n"
                          "--game-dir opens Tutorial I (or --mission) from an extracted Gold 2.2 game directory.\n"
-                         "--list-missions lists all installed single-player missions, their map sizes and descriptions.\n"
+                         "--mod NAME|DIR|INI activates a mod (under mods/, Run/, switcher/, ~/.local/share/ss2/mods/, a directory, or a sudtest*.ini file; use 'vanilla' for unmodded).\n"
+                         "--list-mods lists discovered mods in the game directory and user mods directory.\n"
+                         "--list-missions lists all installed single-player missions (including addons/*.ssx), their map sizes and descriptions.\n"
                          "--list-campaigns lists all installed campaigns and missions.\n"
                          "--list-multiplayer lists all installed multiplayer missions (maps/mplay/*.smm).\n"
                          "--host PORT hosts a 2-4 player lockstep TCP match on PORT with --mission.\n"
@@ -620,6 +632,7 @@ int main(int argc, char** argv) try {
                          "--lang sets the interface language (English, French or Spanish). The default follows LC_ALL, LC_MESSAGES or LANG. Mission text stays in English.\n";
             return 0;
         } else if (arg == "--game-dir" && i + 1 < argc) gameDir = argv[++i];
+        else if (arg == "--mod" && i + 1 < argc) cliMod = argv[++i];
         else if (arg == "--hd-pack" && i + 1 < argc) hdPack = argv[++i];
         else if (arg == "--mission" && i + 1 < argc) mission = argv[++i];
         else if (arg == "--campaign" && i + 1 < argc) campaignQuery = argv[++i];
@@ -635,6 +648,7 @@ int main(int argc, char** argv) try {
         else if (arg == "--list-missions") listMissions = true;
         else if (arg == "--list-campaigns") listCampaigns = true;
         else if (arg == "--list-multiplayer") listMultiplayer = true;
+        else if (arg == "--list-mods") listMods = true;
         else if (arg == "--host" && i + 1 < argc) {
             mpHostPort = parsePortArg(argv[++i]);
             if (!mpHostPort) throw std::invalid_argument("--host requires a TCP port (1..65535)");
@@ -727,6 +741,40 @@ int main(int argc, char** argv) try {
         if (!dataHome.empty() && std::filesystem::is_directory(dataHome / "ss2/game")) return dataHome / "ss2/game";
         return {};
     };
+    const auto settingsPath = ss2::defaultSettingsPath();
+    const bool persistSettings = !limit && !timing && !overviewOnly && recordPath.empty() && !parsedReplay &&
+                                 !settingsPath.empty();
+    ss2::UserSettings settings = persistSettings ? ss2::loadUserSettings(settingsPath) : ss2::UserSettings{};
+    if (cliMod) {
+        if (ss2::assets::equalsIgnoreCaseAscii(*cliMod, "none") ||
+            ss2::assets::equalsIgnoreCaseAscii(*cliMod, "vanilla") ||
+            ss2::assets::equalsIgnoreCaseAscii(*cliMod, "original")) {
+            ss2::assets::setActiveMod("");
+        } else {
+            const auto directory = resolveGameDir();
+            if (!ss2::assets::resolveMod(directory, *cliMod, ss2::defaultModsDir())) {
+                throw std::invalid_argument("Unknown mod: " + *cliMod);
+            }
+            ss2::assets::setActiveMod(*cliMod);
+        }
+    } else if (persistSettings && !settings.activeMod.empty()) {
+        ss2::assets::setActiveMod(settings.activeMod);
+    }
+    if (listMods) {
+        const auto directory = resolveGameDir();
+        if (directory.empty())
+            throw std::runtime_error("--list-mods needs a game directory: pass --game-dir or set SS2_GAME_DIR");
+        const auto mods = ss2::assets::listInstalledMods(directory, ss2::defaultModsDir());
+        std::cout << "Installed mods (" << mods.size() << "):\n";
+        for (std::size_t i = 0; i < mods.size(); ++i) {
+            const auto& m = mods[i];
+            std::cout << ' ' << (i + 1) << "  " << m.name
+                      << (m.iniPath.empty() ? " [Drop-in]" : " [sudtest.ini]")
+                      << " (" << m.rootDir << ")\n";
+        }
+        if (mods.empty()) std::cout << "  (none found)\n";
+        return 0;
+    }
     if (listMissions) {
         const auto directory = resolveGameDir();
         if (directory.empty())
@@ -735,7 +783,7 @@ int main(int argc, char** argv) try {
         std::cout << "Single-player missions (" << installed.size() << "):\n";
         for (std::size_t i = 0; i < installed.size(); ++i) {
             const auto& m = installed[i];
-            const char* schemeName = m.scheme == 2 ? "Beach" : "Summer";
+            const std::string schemeName = ss2::assets::schemeDisplayName(m.scheme);
             std::cout << ' ' << (i + 1) << "  " << m.name << " [" << m.width << 'x' << m.height << ", " << schemeName << "]\n";
             if (!m.description.empty()) {
                 std::string desc = m.description;
@@ -756,7 +804,7 @@ int main(int argc, char** argv) try {
         for (const auto& c : installed) {
             std::cout << "  " << c.name << " (" << c.missions.size() << "):\n";
             for (const auto& m : c.missions) {
-                const char* schemeName = m.scheme == 2 ? "Beach" : "Summer";
+                const std::string schemeName = ss2::assets::schemeDisplayName(m.scheme);
                 std::cout << "    [" << m.code << "] " << m.title << " [" << m.width << 'x' << m.height
                           << ", " << schemeName << "]\n";
             }
@@ -768,7 +816,7 @@ int main(int argc, char** argv) try {
             for (const auto& c : custom) {
                 std::cout << "  " << c.name << " (" << c.missions.size() << "):\n";
                 for (const auto& m : c.missions) {
-                    const char* schemeName = m.scheme == 2 ? "Beach" : "Summer";
+                    const std::string schemeName = ss2::assets::schemeDisplayName(m.scheme);
                     std::cout << "    [" << m.code << "] " << m.title << " [" << m.width << 'x' << m.height
                               << ", " << schemeName << "]\n";
                 }
@@ -784,7 +832,7 @@ int main(int argc, char** argv) try {
         std::cout << "Multiplayer missions (" << installed.size() << "):\n";
         for (std::size_t i = 0; i < installed.size(); ++i) {
             const auto& m = installed[i];
-            const char* schemeName = m.scheme == 2 ? "Beach" : "Summer";
+            const std::string schemeName = ss2::assets::schemeDisplayName(m.scheme);
             std::cout << ' ' << (i + 1) << "  " << m.name << " [" << m.width << 'x' << m.height
                       << ", " << schemeName << "]\n";
             if (!m.description.empty()) {
@@ -800,7 +848,7 @@ int main(int argc, char** argv) try {
             for (const auto& c : custom) {
                 std::cout << "  " << c.name << " (" << c.missions.size() << "):\n";
                 for (const auto& m : c.missions) {
-                    const char* schemeName = m.scheme == 2 ? "Beach" : "Summer";
+                    const std::string schemeName = ss2::assets::schemeDisplayName(m.scheme);
                     std::cout << "    [" << m.code << "] " << m.title << " [" << m.width << 'x' << m.height
                               << ", " << schemeName << "]\n";
                 }
@@ -880,10 +928,6 @@ int main(int argc, char** argv) try {
             throw std::runtime_error("Could not determine mission for saved game: " + loadSavePath.string());
         }
     }
-    const auto settingsPath = ss2::defaultSettingsPath();
-    const bool persistSettings = !limit && !timing && !overviewOnly && recordPath.empty() && !parsedReplay &&
-                                 !settingsPath.empty();
-    ss2::UserSettings settings = persistSettings ? ss2::loadUserSettings(settingsPath) : ss2::UserSettings{};
     if (!languageChosen && settings.language) {
         ss2::setLanguage(*settings.language);
     }

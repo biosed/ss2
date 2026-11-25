@@ -343,8 +343,14 @@ void playOpeningMovies(const std::filesystem::path& gameDir, bool fullscreen,
                 continue;
             }
         }
-        const auto path = assets::resolveCaseInsensitivePath(gameDir, std::string("movies/") + stem + ".BIK");
-        if (std::filesystem::exists(path, ec)) playMovie(path, fullscreen, true);
+        const auto movieDirs = assets::resolveMovieDirs(gameDir);
+        for (const auto& dir : movieDirs) {
+            const auto path = assets::resolveCaseInsensitivePath(dir, std::string(stem) + ".BIK");
+            if (std::filesystem::exists(path, ec)) {
+                playMovie(path, fullscreen, true);
+                break;
+            }
+        }
     }
 }
 } // namespace ss2

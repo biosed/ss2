@@ -123,6 +123,8 @@ constexpr Entry table[] = {
     {"English", "English", "English"},
     {"French", "Français", "Français"},
     {"Spanish", "Español", "Español"},
+    {"Mod", "Mod", "Mod"},
+    {"Original", "Original", "Original"},
     // Controls reference
     {"Selection & Orders", "Sélection et ordres", "Selección y órdenes"},
     {"Select / box select", "Sélectionner / cadre de sélection", "Seleccionar / recuadro de selección"},

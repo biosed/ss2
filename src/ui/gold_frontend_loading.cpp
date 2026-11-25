@@ -165,12 +165,12 @@ void GoldLoadingScreen::loadAssets(std::optional<int> fixedBgIndex) {
     //   record[8]      : 14x8 completion indicator lamp
     //   record[11..13] : 512-byte RGB565 palettes for the 3 wartime vignette backgrounds
     //   record[14..16] : 640x480 stippled wartime vignette backgrounds
-    for (const char* sueName : {"lng.sue", "lang.sue", "menu_common.sue"}) {
-        const auto suePath = assets::resolveCaseInsensitivePath(gameDir_, sueName);
-        std::error_code ec;
-        if (!std::filesystem::exists(suePath, ec)) continue;
+    const auto menuArchives = assets::resolveMenuArchives(gameDir_);
+    for (const auto& suePath : menuArchives) {
         try {
-            const auto raw = assets::readSueEntry(suePath, "loadscr.dat");
+            const auto rawOpt = assets::tryReadSueEntry(suePath, "loadscr.dat");
+            if (!rawOpt) continue;
+            const auto& raw = *rawOpt;
             std::vector<std::span<const std::uint8_t>> recs;
             if (!parseLoadScrRecords(raw, recs)) continue;
 
@@ -203,13 +203,12 @@ void GoldLoadingScreen::loadAssets(std::optional<int> fixedBgIndex) {
         }
     }
 
-    // Secondary fallback if loadscr.dat is absent but menu_common.sue is present.
-    const auto menuSue = assets::resolveCaseInsensitivePath(gameDir_, "menu_common.sue");
-    std::error_code ec;
-    if (std::filesystem::exists(menuSue, ec)) {
+    // Secondary fallback if loadscr.dat is absent but menu archives supply mainbk000.jpg.
+    if (!menuArchives.empty()) {
         try {
-            const auto bytes = assets::readSueEntry(menuSue, "mainbk000.jpg");
-            assets_->fallbackMenuBg = mapImageToSurface(assets::decodeJpeg(bytes));
+            if (const auto bytes = assets::tryReadSueEntryChain(menuArchives, "mainbk000.jpg")) {
+                assets_->fallbackMenuBg = mapImageToSurface(assets::decodeJpeg(*bytes));
+            }
         } catch (...) {
         }
     }

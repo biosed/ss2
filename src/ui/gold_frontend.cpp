@@ -403,10 +403,33 @@ constexpr std::array<ButtonSpec, 7> kMainButtons{{
 GoldFrontEnd::GoldFrontEnd(SDL_Window* window, const std::filesystem::path& gameDir,
                            std::optional<int> fixedBgIndex)
     : window_(window), gameDir_(gameDir), assets_(std::make_unique<Assets>()) {
+    availableMods_ = gameDir_.empty()
+        ? std::vector<assets::ModInfo>{}
+        : assets::listInstalledMods(gameDir_, defaultModsDir());
     loadAssets(fixedBgIndex);
     loadCreditsText();
     ensureFocusedValid();
     syncMenuMusic();
+}
+
+void GoldFrontEnd::reloadModAssets() {
+    if (!assets_) return;
+    stopMenuMusic();
+    assets_->overviews.clear();
+    assets_->mainBg = makeNullSurface();
+    assets_->briefingBg = makeNullSurface();
+    assets_->menuArchives.clear();
+    assets_->menuSuePath.clear();
+    assets_->backwavBytes = 0;
+    assets_->briefingMusicBytes = 0;
+    assets_->loadedMenuSue = false;
+    availableMods_ = gameDir_.empty()
+        ? std::vector<assets::ModInfo>{}
+        : assets::listInstalledMods(gameDir_, defaultModsDir());
+    loadAssets(std::nullopt);
+    loadCreditsText();
+    syncMenuMusic();
+    dirty_ = true;
 }
 
 GoldFrontEnd::~GoldFrontEnd() {
@@ -453,10 +476,11 @@ std::size_t GoldFrontEnd::creditsLineCount() const {
 
 void GoldFrontEnd::loadAssets(std::optional<int> fixedBgIndex) {
     if (gameDir_.empty()) return;
-    const auto menuSue = assets::resolveCaseInsensitivePath(gameDir_, "menu_common.sue");
-    std::error_code ec;
-    if (!std::filesystem::exists(menuSue, ec)) return;
-    assets_->menuSuePath = menuSue;
+    const auto menuArchives = assets::resolveMenuArchives(gameDir_);
+    if (menuArchives.empty()) return;
+    assets_->menuArchives = menuArchives;
+    assets_->menuSuePath = menuArchives.front();
+    assets_->backwavEntry = assets::resolveBackWavEntry(gameDir_);
 
     int chosen = fixedBgIndex.value_or(-1);
     if (chosen < 0 || chosen > 68) {
@@ -468,10 +492,21 @@ void GoldFrontEnd::loadAssets(std::optional<int> fixedBgIndex) {
 
     auto loadBg = [&](const std::string& entry) -> Surface {
         try {
-            const auto bytes = assets::readSueEntry(menuSue, entry);
-            return mapImageToSurface(assets::decodeJpeg(bytes));
+            if (const auto bytes = assets::tryReadSueEntryChain(menuArchives, entry)) {
+                return mapImageToSurface(assets::decodeJpeg(*bytes));
+            }
         } catch (...) {
-            return makeNullSurface();
+        }
+        return makeNullSurface();
+    };
+    auto tryLoadMenuPckSlot = [&](const char* entry, std::size_t frameIdx, bool keyMagenta, PckSurface& dst) {
+        try {
+            if (const auto bytes = assets::tryReadSueEntryChain(menuArchives, entry)) {
+                if (frameIdx < assets::pckFrameCount(*bytes)) {
+                    dst = pckFrameToSurface(assets::decodeUiPckFrame(*bytes, frameIdx), keyMagenta);
+                }
+            }
+        } catch (...) {
         }
     };
 
@@ -481,58 +516,65 @@ void GoldFrontEnd::loadAssets(std::optional<int> fixedBgIndex) {
     if (!assets_->mainBg && chosen != 0) assets_->mainBg = loadBg("mainbk000.jpg");
     assets_->briefingBg = loadBg("brfbk000.jpg");
 
-    tryLoadPckSlot(menuSue, "nbramka_bk.pck", 0, true, assets_->nbramkaFrame);
-    tryLoadPckSlot(menuSue, "sp3_rb.pck", 0, true, assets_->diamondPlate);
-    tryLoadPckSlot(menuSue, "CREDITS.PCK", 0, false, assets_->creditsBg);
-    tryLoadPckSlot(menuSue, "rg_bt.pck", 1, false, assets_->ratingsDropdownBtn);
+    tryLoadMenuPckSlot("nbramka_bk.pck", 0, true, assets_->nbramkaFrame);
+    tryLoadMenuPckSlot("sp3_rb.pck", 0, true, assets_->diamondPlate);
+    tryLoadMenuPckSlot("CREDITS.PCK", 0, false, assets_->creditsBg);
+    tryLoadMenuPckSlot("rg_bt.pck", 1, false, assets_->ratingsDropdownBtn);
     try {
-        const auto rk = assets::readSueEntry(menuSue, "ramka.pck");
-        const auto n = assets::pckFrameCount(rk);
-        for (std::size_t i = 0; i < assets_->ramka.size() && i < n; ++i) {
-            assets_->ramka[i] = pckFrameToSurface(assets::decodeUiPckFrame(rk, i), true);
+        if (const auto rk = assets::tryReadSueEntryChain(menuArchives, "ramka.pck")) {
+            const auto n = assets::pckFrameCount(*rk);
+            for (std::size_t i = 0; i < assets_->ramka.size() && i < n; ++i) {
+                assets_->ramka[i] = pckFrameToSurface(assets::decodeUiPckFrame(*rk, i), true);
+            }
         }
     } catch (...) {
     }
-    tryLoadPckSlot(menuSue, "speedbar.pck", 0, true, assets_->speedBar);
-    tryLoadPckSlot(menuSue, "speed_bt.pck", 0, true, assets_->speedThumb[0]);
-    tryLoadPckSlot(menuSue, "speed_bt.pck", 1, true, assets_->speedThumb[1]);
-    tryLoadPckSlot(menuSue, "rombik.pck", 0, true, assets_->rombik[0]);
-    tryLoadPckSlot(menuSue, "rombik.pck", 10, true, assets_->rombik[1]);
+    tryLoadMenuPckSlot("speedbar.pck", 0, true, assets_->speedBar);
+    tryLoadMenuPckSlot("speed_bt.pck", 0, true, assets_->speedThumb[0]);
+    tryLoadMenuPckSlot("speed_bt.pck", 1, true, assets_->speedThumb[1]);
+    tryLoadMenuPckSlot("rombik.pck", 0, true, assets_->rombik[0]);
+    tryLoadMenuPckSlot("rombik.pck", 10, true, assets_->rombik[1]);
     try {
-        const auto cb = assets::readSueEntry(menuSue, "colors_bt.pck");
-        const auto n = assets::pckFrameCount(cb);
-        for (std::size_t i = 0; i < assets_->colorSwatch.size() && i < n; ++i) {
-            assets_->colorSwatch[i] = pckFrameToSurface(assets::decodeUiPckFrame(cb, i), true);
-        }
-    } catch (...) {
-    }
-    try {
-        const auto nbrif = assets::readSueEntry(menuSue, "nbrif_bt.pck");
-        const auto n = assets::pckFrameCount(nbrif);
-        for (std::size_t i = 0; i < 12 && (8 + i) < n; ++i) {
-            assets_->slotButtons[i] = pckFrameToSurface(assets::decodeUiPckFrame(nbrif, 8 + i), true);
+        if (const auto cb = assets::tryReadSueEntryChain(menuArchives, "colors_bt.pck")) {
+            const auto n = assets::pckFrameCount(*cb);
+            for (std::size_t i = 0; i < assets_->colorSwatch.size() && i < n; ++i) {
+                assets_->colorSwatch[i] = pckFrameToSurface(assets::decodeUiPckFrame(*cb, i), true);
+            }
         }
     } catch (...) {
     }
     try {
-        const auto sbt = assets::readSueEntry(menuSue, "scrollbar_bt.pck");
-        const auto n = assets::pckFrameCount(sbt);
-        for (std::size_t i = 0; i < 6 && i < n; ++i) {
-            assets_->scrollButtons[i] = pckFrameToSurface(assets::decodeUiPckFrame(sbt, i), true);
+        if (const auto nbrif = assets::tryReadSueEntryChain(menuArchives, "nbrif_bt.pck")) {
+            const auto n = assets::pckFrameCount(*nbrif);
+            for (std::size_t i = 0; i < 12 && (8 + i) < n; ++i) {
+                assets_->slotButtons[i] = pckFrameToSurface(assets::decodeUiPckFrame(*nbrif, 8 + i), true);
+            }
         }
     } catch (...) {
     }
     try {
-        const auto ssp = assets::readSueEntry(menuSue, "scrollbar_sp.pck");
-        const auto n = assets::pckFrameCount(ssp);
-        for (std::size_t i = 0; i < 3 && i < n; ++i) {
-            assets_->scrollTrack[i] = pckFrameToSurface(assets::decodeUiPckFrame(ssp, i), false);
+        if (const auto sbt = assets::tryReadSueEntryChain(menuArchives, "scrollbar_bt.pck")) {
+            const auto n = assets::pckFrameCount(*sbt);
+            for (std::size_t i = 0; i < 6 && i < n; ++i) {
+                assets_->scrollButtons[i] = pckFrameToSurface(assets::decodeUiPckFrame(*sbt, i), true);
+            }
+        }
+    } catch (...) {
+    }
+    try {
+        if (const auto ssp = assets::tryReadSueEntryChain(menuArchives, "scrollbar_sp.pck")) {
+            const auto n = assets::pckFrameCount(*ssp);
+            for (std::size_t i = 0; i < 3 && i < n; ++i) {
+                assets_->scrollTrack[i] = pckFrameToSurface(assets::decodeUiPckFrame(*ssp, i), false);
+            }
         }
     } catch (...) {
     }
 
-    assets_->backwavBytes = assets::sueEntrySize(menuSue, "backwav").value_or(0u) & ~std::size_t(3u);
-    assets_->briefingMusicBytes = assets::sueEntrySize(menuSue, "briefing").value_or(0u) & ~std::size_t(3u);
+    assets_->backwavBytes =
+        assets::sueChainEntrySize(menuArchives, assets_->backwavEntry).value_or(0u) & ~std::size_t(3u);
+    assets_->briefingMusicBytes =
+        assets::sueChainEntrySize(menuArchives, "briefing").value_or(0u) & ~std::size_t(3u);
 
     assets_->loadedMenuSue = assets_->mainBg != nullptr || assets_->briefingBg != nullptr;
     if (window_ != nullptr) {
@@ -544,17 +586,12 @@ void GoldFrontEnd::loadAssets(std::optional<int> fixedBgIndex) {
 void GoldFrontEnd::loadCreditsText() {
     assets_->creditsLines.clear();
     if (!gameDir_.empty()) {
-        std::vector<std::filesystem::path> archives;
-        for (const char* sueName : {"lang.sue", "menu_common.sue"}) {
-            const auto p = assets::resolveCaseInsensitivePath(gameDir_, sueName);
-            std::error_code ec;
-            if (std::filesystem::exists(p, ec)) archives.push_back(p);
-        }
+        const auto archives = assets::resolveMenuArchives(gameDir_);
         for (const auto& arch : archives) {
             try {
-                const auto raw = assets::readSueEntry(arch, "credits.seq");
-                if (raw.empty()) continue;
-                const std::string text(reinterpret_cast<const char*>(raw.data()), raw.size());
+                const auto raw = assets::tryReadSueEntry(arch, "credits.seq");
+                if (!raw || raw->empty()) continue;
+                const std::string text(reinterpret_cast<const char*>(raw->data()), raw->size());
                 std::size_t start = 0;
                 while (start <= text.size()) {
                     const std::size_t nl = text.find('\n', start);
@@ -1404,7 +1441,7 @@ void GoldFrontEnd::stopMenuMusic() {
 
 void GoldFrontEnd::pumpMenuMusic() {
     if (!assets_ || window_ == nullptr || assets_->activeMusicEntry.empty() ||
-        assets_->menuSuePath.empty()) {
+        assets_->menuArchives.empty()) {
         return;
     }
     const std::size_t trackBytes = (assets_->activeMusicEntry == "briefing")
@@ -1456,7 +1493,7 @@ void GoldFrontEnd::pumpMenuMusic() {
         }
         assets::Bytes pcm;
         try {
-            pcm = assets::readSueEntryRange(assets_->menuSuePath, assets_->activeMusicEntry,
+            pcm = assets::readSueChainRange(assets_->menuArchives, assets_->activeMusicEntry,
                                             assets_->musicReadOffset, want);
         } catch (...) {
             stopMenuMusic();
@@ -1486,7 +1523,7 @@ void GoldFrontEnd::syncMenuMusic() {
         if (screen == FrontEnd::Screen::Briefing) {
             if (assets_->briefingMusicBytes >= 4u) desired = "briefing";
         } else if (assets_->backwavBytes >= 4u) {
-            desired = "backwav";
+            desired = assets_->backwavEntry;
         }
     }
     if (desired.empty()) {

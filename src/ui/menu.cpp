@@ -108,10 +108,10 @@ bool Menu::hasRetailSkin() const {
 void Menu::loadRetailAssets(const std::filesystem::path& gameDir) {
     if (gameDir.empty()) return;
     try {
-        const auto lngSue = assets::resolveCaseInsensitivePath(gameDir, "lng.sue");
-        std::error_code ec;
-        if (!std::filesystem::is_regular_file(lngSue, ec)) return;
-        const auto msgb = assets::readSueEntry(lngSue, "msgb.dat");
+        const auto langArchives = assets::resolveLangArchives(gameDir, 0);
+        const auto msgbOpt = assets::tryReadSueEntryChain(langArchives, "msgb.dat");
+        if (!msgbOpt) return;
+        const auto& msgb = *msgbOpt;
         if (msgb.size() < 20u) return;
         const std::span<const std::uint8_t> view(msgb);
         const std::uint32_t count = readU32(view, 0u);

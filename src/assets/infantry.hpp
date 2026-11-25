@@ -64,8 +64,8 @@ private:
     std::filesystem::path gameDir_;
     bool originalSize_{false};
     std::filesystem::path atlases_;
-    std::filesystem::path archive_;
-    std::filesystem::path descArchive_;
+    std::vector<std::filesystem::path> gameArchives_;
+    std::vector<std::filesystem::path> descArchives_;
     bool hasArchive_{false};
     bool hasDesc_{false};
     std::vector<std::uint8_t> palette_;

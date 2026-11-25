@@ -442,10 +442,11 @@ struct ParaSpec {
     bool loaded{false};
 };
 
-/// Lazy, thread-safe parser and cache for Gold 2.2 unit & weapon descriptors (`desc_common.sue`, `lang.sue`).
+/// Lazy, thread-safe parser and cache for Gold 2.2 unit & weapon descriptors (`desc_common.sue`, `desc_scheme*.sue`, `lang.sue`).
 class UnitCatalog {
 public:
-    static std::shared_ptr<const UnitCatalog> load(const std::filesystem::path& gameDir);
+    static std::shared_ptr<const UnitCatalog> load(const std::filesystem::path& gameDir,
+                                                   unsigned scheme = 0);
     static std::shared_ptr<const UnitCatalog> fromSpecs(std::vector<UnitSpec> specs,
                                                         std::vector<PlaneSpec> planes = {});
     static HitType parseHitTypeName(std::string_view token);
@@ -458,6 +459,7 @@ public:
     const PlaneSpec* findPlane(std::string_view planeId) const;
     std::string displayName(std::string_view unitId) const;
     std::string shortName(std::string_view unitId) const;
+    std::string buildingName(unsigned objIndex) const;
     const BuildingDefense& buildingDefense() const { return buildingDefense_; }
     const MineSpec& mineSpec() const { return mineSpec_; }
     const WeatherSpec& weather() const noexcept { return weather_; }
@@ -481,11 +483,12 @@ private:
     ShotInfo resolveShotInfoLocked(std::string_view shotId) const;
     HitType resolveShotHitLocked(std::string_view shotId) const;
 
-    std::filesystem::path descArchive_;
-    std::filesystem::path langArchive_;
+    std::vector<std::filesystem::path> descArchives_;
+    std::vector<std::filesystem::path> langArchives_;
     bool hasDesc_{false};
     bool hasLang_{false};
     BuildingDefense buildingDefense_{BuildingDefense::retailDefault()};
+    std::unordered_map<unsigned, std::string> buildingNames_;
     MineSpec mineSpec_{};
     WeatherSpec weather_{};
     ParaSpec paraSpec_{};

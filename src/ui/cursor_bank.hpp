@@ -16,15 +16,16 @@ namespace ss2 {
 namespace cursor_detail {
 using CursorPtr = std::unique_ptr<SDL_Cursor, decltype(&SDL_DestroyCursor)>;
 
-inline std::vector<CursorPtr> buildCursorsFromSue(const std::filesystem::path& archivePath,
-                                                  std::string_view aniEntry,
-                                                  std::string_view colEntry) {
+inline std::vector<CursorPtr> buildCursorsFromChain(std::span<const std::filesystem::path> archives,
+                                                    std::string_view aniEntry,
+                                                    std::string_view colEntry) {
     std::vector<CursorPtr> out;
-    if (archivePath.empty() || !SDL_WasInit(SDL_INIT_VIDEO)) return out;
+    if (archives.empty() || !SDL_WasInit(SDL_INIT_VIDEO)) return out;
     try {
-        const auto ani = assets::readSueEntry(archivePath, aniEntry);
-        const auto col = assets::readSueEntry(archivePath, colEntry);
-        auto seq = assets::decodeAniSequence(ani, col);
+        const auto ani = assets::tryReadSueEntryChain(archives, aniEntry);
+        const auto col = assets::tryReadSueEntryChain(archives, colEntry);
+        if (!ani || !col) return out;
+        auto seq = assets::decodeAniSequence(*ani, *col);
         if (seq.frames.empty() || seq.width == 0u || seq.height == 0u) return out;
         const int hotX = std::clamp(seq.hotX, 0, int(seq.width) - 1);
         const int hotY = std::clamp(seq.hotY, 0, int(seq.height) - 1);
@@ -42,6 +43,14 @@ inline std::vector<CursorPtr> buildCursorsFromSue(const std::filesystem::path& a
         out.clear();
     }
     return out;
+}
+
+inline std::vector<CursorPtr> buildCursorsFromSue(const std::filesystem::path& archivePath,
+                                                  std::string_view aniEntry,
+                                                  std::string_view colEntry) {
+    if (archivePath.empty()) return {};
+    const std::array<std::filesystem::path, 1> single{archivePath};
+    return buildCursorsFromChain(single, aniEntry, colEntry);
 }
 } // namespace cursor_detail
 
@@ -81,9 +90,8 @@ public:
 
     explicit TacticalCursorBank(std::filesystem::path gameDir) {
         if (!gameDir.empty()) {
-            archivePath_ = assets::resolveCaseInsensitivePath(gameDir, "game_common.sue");
-            std::error_code ec;
-            hasArchive_ = std::filesystem::is_regular_file(archivePath_, ec);
+            archives_ = assets::resolveGameArchives(gameDir);
+            hasArchive_ = !archives_.empty();
         }
     }
 
@@ -179,11 +187,11 @@ private:
     void loadSlot(TacticalCursorKind kind, Slot& slot) {
         if (!hasArchive_) return;
         const auto stem = std::string(stemForKind(kind));
-        slot.cursors = cursor_detail::buildCursorsFromSue(
-            archivePath_, stem + ".ANI", stem + ".COL");
+        slot.cursors = cursor_detail::buildCursorsFromChain(
+            archives_, stem + ".ANI", stem + ".COL");
     }
 
-    std::filesystem::path archivePath_;
+    std::vector<std::filesystem::path> archives_;
     bool hasArchive_{false};
     std::array<Slot, static_cast<std::size_t>(TacticalCursorKind::Count)> slots_{};
     SDL_Cursor* activeRaw_{nullptr};
@@ -247,10 +255,9 @@ public:
         restore();
         cursors_.clear();
         if (gameDir.empty() || !SDL_WasInit(SDL_INIT_VIDEO)) return;
-        const auto menuSue = assets::resolveCaseInsensitivePath(gameDir, "menu_common.sue");
-        std::error_code ec;
-        if (!std::filesystem::is_regular_file(menuSue, ec)) return;
-        cursors_ = cursor_detail::buildCursorsFromSue(menuSue, "MENU_CUR.ANI", "MENU_CUR.COL");
+        const auto menuArchives = assets::resolveMenuArchives(gameDir);
+        if (menuArchives.empty()) return;
+        cursors_ = cursor_detail::buildCursorsFromChain(menuArchives, "MENU_CUR.ANI", "MENU_CUR.COL");
     }
 
     bool loaded() const noexcept { return !cursors_.empty(); }

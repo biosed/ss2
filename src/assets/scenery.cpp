@@ -53,17 +53,9 @@ struct Object {
 using AtlasMap = std::map<std::string, Atlas, std::less<>>;
 
 AtlasMap loadSceneryAtlases(const std::filesystem::path& gameDir, unsigned scheme) {
-    const auto scheme1Archive = resolveCaseInsensitivePath(gameDir, "game_scheme1.sue");
-    std::vector<std::filesystem::path> beachArchives;
-    if (scheme == 2) {
-        beachArchives = {
-            resolveCaseInsensitivePath(gameDir, "game_scheme3.sue"),
-            scheme1Archive,
-        };
-    }
+    const auto archives = resolveSchemeArchives(gameDir, scheme);
     const auto readEntry = [&](const char* name) -> Bytes {
-        if (scheme == 2) return readSueEntryFallback(beachArchives, name);
-        return readSueEntry(scheme1Archive, name);
+        return readSueEntryChain(archives, name);
     };
     AtlasMap atlases;
     const auto load = [&](const char* key, const char* res, const char* pl, size_t offset, Layout layout = Layout::Plain) {
@@ -746,15 +738,9 @@ CraterCatalog loadCraterCatalog(const std::filesystem::path& gameDir, unsigned s
     CraterCatalog out;
     if (gameDir.empty()) return out;
     try {
-        const auto scheme1 = resolveCaseInsensitivePath(gameDir, "game_scheme1.sue");
-        std::vector<std::filesystem::path> archives;
-        if (scheme == 2) {
-            archives = {resolveCaseInsensitivePath(gameDir, "game_scheme3.sue"), scheme1};
-        } else {
-            archives = {scheme1};
-        }
-        const auto vorRes = readSueEntryFallback(archives, "vor.res");
-        const auto vorPl = readSueEntryFallback(archives, "vor.pl");
+        const auto archives = resolveSchemeArchives(gameDir, scheme);
+        const auto vorRes = readSueEntryChain(archives, "vor.res");
+        const auto vorPl = readSueEntryChain(archives, "vor.pl");
         if (vorRes.size() < 8u || vorPl.size() < 512u) return out;
 
         const View data(vorRes);

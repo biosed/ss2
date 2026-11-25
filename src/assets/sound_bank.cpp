@@ -346,20 +346,23 @@ VerbMapping classifyVerb(std::string_view rawVerb, bool vehicleRole) {
 } // namespace
 
 SoundBank SoundBank::load(const std::filesystem::path& gameDir) {
-    const auto hdr = readFileBytes(resolveCaseInsensitivePath(gameDir, "SOUNDS.HDR"));
-    const auto rus = readFileBytes(resolveCaseInsensitivePath(gameDir, "SOUNDS.RUS"));
+    const auto sbFiles = resolveSoundBankFiles(gameDir);
+    const auto hdrPath = sbFiles.hdr.empty() ? resolveCaseInsensitivePath(gameDir, "SOUNDS.HDR") : sbFiles.hdr;
+    const auto rusPath = sbFiles.rus.empty() ? resolveCaseInsensitivePath(gameDir, "SOUNDS.RUS") : sbFiles.rus;
+    const auto hdr = readFileBytes(hdrPath);
+    const auto rus = readFileBytes(rusPath);
     SoundBank bank = fromMemory(hdr, rus);
 
-    std::error_code ec;
-    const auto descPath = resolveCaseInsensitivePath(gameDir, "desc_common.sue");
-    if (std::filesystem::is_regular_file(descPath, ec)) {
+    const auto descArchives = resolveDescArchives(gameDir, 0);
+    if (!descArchives.empty()) {
         auto readEntryText = [&](std::string_view entry) -> std::string {
             try {
-                const auto bytes = readSueEntry(descPath, entry);
-                return std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+                if (const auto bytes = tryReadSueEntryChain(descArchives, entry)) {
+                    return std::string(reinterpret_cast<const char*>(bytes->data()), bytes->size());
+                }
             } catch (const std::exception&) {
-                return {};
             }
+            return {};
         };
         const std::string soundTypesTxt = readEntryText("soundtypes");
         const std::string soundSchemesTxt = readEntryText("soundschemes");

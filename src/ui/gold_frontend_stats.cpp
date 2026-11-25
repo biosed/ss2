@@ -229,6 +229,7 @@ struct GoldPostMissionScreen::Assets {
     FontMap fontMap{pango_cairo_font_map_new(), g_object_unref};
     FontCtx fontCtx{pango_font_map_create_context(fontMap.get()), g_object_unref};
 
+    std::vector<std::filesystem::path> menuArchives;
     std::filesystem::path menuSuePath;
     Surface mainBg = makeNullSurface();
     PckSurface winRusBg;
@@ -257,14 +258,15 @@ struct GoldPostMissionScreen::Assets {
     SDL_AudioStream* fanfareStream{nullptr};
 
     bool ensureFanfareLoaded(bool victory) {
-        if (menuSuePath.empty()) return false;
+        if (menuArchives.empty()) return false;
         if (victory) {
             if (!checkedWinWav) {
                 checkedWinWav = true;
                 try {
-                    const auto winBytes = assets::readSueEntry(menuSuePath, "winwav");
-                    hasWinWav = parseDecodedFanfare(
-                        winBytes, cachedWinFreq, cachedWinChannels, cachedWinPcm);
+                    if (const auto winBytes = assets::tryReadSueEntryChain(menuArchives, "winwav")) {
+                        hasWinWav = parseDecodedFanfare(
+                            *winBytes, cachedWinFreq, cachedWinChannels, cachedWinPcm);
+                    }
                 } catch (...) {
                     hasWinWav = false;
                 }
@@ -274,9 +276,10 @@ struct GoldPostMissionScreen::Assets {
         if (!checkedLooseWav) {
             checkedLooseWav = true;
             try {
-                const auto looseBytes = assets::readSueEntry(menuSuePath, "loosewav");
-                hasLooseWav = parseDecodedFanfare(
-                    looseBytes, cachedLooseFreq, cachedLooseChannels, cachedLoosePcm);
+                if (const auto looseBytes = assets::tryReadSueEntryChain(menuArchives, "loosewav")) {
+                    hasLooseWav = parseDecodedFanfare(
+                        *looseBytes, cachedLooseFreq, cachedLooseChannels, cachedLoosePcm);
+                }
             } catch (...) {
                 hasLooseWav = false;
             }
@@ -331,10 +334,24 @@ bool GoldPostMissionScreen::fanfarePlaying() const {
 
 void GoldPostMissionScreen::loadAssets(std::optional<int> fixedBgIndex) {
     if (gameDir_.empty()) return;
-    const auto menuSue = assets::resolveCaseInsensitivePath(gameDir_, "menu_common.sue");
-    std::error_code ec;
-    if (!std::filesystem::exists(menuSue, ec)) return;
-    assets_->menuSuePath = menuSue;
+    const auto menuArchives = assets::resolveMenuArchives(gameDir_);
+    if (menuArchives.empty()) return;
+    assets_->menuArchives = menuArchives;
+    assets_->menuSuePath = menuArchives.front();
+
+    auto readMenuChain = [&](std::string_view entry) -> assets::Bytes {
+        return assets::readSueEntryChain(menuArchives, entry);
+    };
+    auto tryLoadMenuPckSlot = [&](const char* entry, std::size_t frameIdx, bool keyMagenta, PckSurface& dst) {
+        try {
+            if (const auto bytes = assets::tryReadSueEntryChain(menuArchives, entry)) {
+                if (frameIdx < assets::pckFrameCount(*bytes)) {
+                    dst = pckFrameToSurface(assets::decodeUiPckFrame(*bytes, frameIdx), keyMagenta);
+                }
+            }
+        } catch (...) {
+        }
+    };
 
     int chosen = fixedBgIndex.value_or(-1);
     if (chosen < 0 || chosen > 68) {
@@ -346,7 +363,7 @@ void GoldPostMissionScreen::loadAssets(std::optional<int> fixedBgIndex) {
 
     auto loadJpegBg = [&](const std::string& entry) -> Surface {
         try {
-            return mapImageToSurface(assets::decodeJpeg(assets::readSueEntry(menuSue, entry)));
+            return mapImageToSurface(assets::decodeJpeg(readMenuChain(entry)));
         } catch (...) {
             return makeNullSurface();
         }
@@ -359,12 +376,12 @@ void GoldPostMissionScreen::loadAssets(std::optional<int> fixedBgIndex) {
         assets_->mainBg = loadJpegBg("mainbk000.jpg");
     }
 
-    tryLoadPckSlot(menuSue, "win_rus.pck", 0u, false, assets_->winRusBg);
-    tryLoadPckSlot(menuSue, "win_jap.pck", 0u, false, assets_->winJapBg);
+    tryLoadMenuPckSlot("win_rus.pck", 0u, false, assets_->winRusBg);
+    tryLoadMenuPckSlot("win_jap.pck", 0u, false, assets_->winJapBg);
 
     bool statPicsOk = false;
     try {
-        const auto raw = assets::readSueEntry(menuSue, "stat_pic.pck");
+        const auto raw = readMenuChain("stat_pic.pck");
         const std::size_t count = assets::pckFrameCount(raw);
         if (count >= 9u) {
             statPicsOk = true;
@@ -379,7 +396,7 @@ void GoldPostMissionScreen::loadAssets(std::optional<int> fixedBgIndex) {
 
     bool mstatBtOk = false;
     try {
-        const auto raw = assets::readSueEntry(menuSue, "mstat_bt.pck");
+        const auto raw = readMenuChain("mstat_bt.pck");
         if (assets::pckFrameCount(raw) >= 6u) {
             for (std::size_t i = 0; i < 3u; ++i) {
                 const auto f = assets::decodeUiPckFrame(raw, i * 2u);
@@ -391,7 +408,7 @@ void GoldPostMissionScreen::loadAssets(std::optional<int> fixedBgIndex) {
     }
 
     try {
-        const auto raw = assets::readSueEntry(menuSue, "rs_bt.pck");
+        const auto raw = readMenuChain("rs_bt.pck");
         if (assets::pckFrameCount(raw) >= 3u) {
             for (std::size_t i = 0; i < 3u; ++i) {
                 const auto f = assets::decodeUiPckFrame(raw, i);
@@ -403,9 +420,9 @@ void GoldPostMissionScreen::loadAssets(std::optional<int> fixedBgIndex) {
 
     bool starsOk = false;
     try {
-        const auto rawReg = assets::readSueEntry(menuSue, "ZVEZDY.PCK");
-        const auto rawGold = assets::readSueEntry(menuSue, "ZV_GOLD.PCK");
-        const auto rawSmall = assets::readSueEntry(menuSue, "ZV_M.PCK");
+        const auto rawReg = readMenuChain("ZVEZDY.PCK");
+        const auto rawGold = readMenuChain("ZV_GOLD.PCK");
+        const auto rawSmall = readMenuChain("ZV_M.PCK");
         if (assets::pckFrameCount(rawReg) >= 3u &&
             assets::pckFrameCount(rawGold) >= 15u &&
             assets::pckFrameCount(rawSmall) >= 3u) {

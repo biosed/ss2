@@ -184,7 +184,108 @@ void decompress(Jpeg& jpg, BytesView data, MapImage& image) {
     decompressImpl(jpg, data, image, false);
 }
 
+bool hasFileMagic(const std::filesystem::path& path, const char* magic4) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) return false;
+    char hdr[4]{};
+    if (!in.read(hdr, 4)) return false;
+    return std::memcmp(hdr, magic4, 4) == 0;
+}
+
+std::vector<std::uint8_t> inflateGzipMissionBytes(BytesView compressed) {
+    struct ZGuard {
+        z_stream zs{};
+        bool active{false};
+        ~ZGuard() {
+            if (active) inflateEnd(&zs);
+        }
+    } g;
+    if (inflateInit2(&g.zs, 15 + 32) != Z_OK)
+        throw std::runtime_error("Failed to initialize mission gzip decoder");
+    g.active = true;
+    g.zs.next_in = const_cast<Bytef*>(compressed.data());
+    g.zs.avail_in = static_cast<uInt>(std::min<std::size_t>(compressed.size(), std::numeric_limits<uInt>::max()));
+    std::vector<std::uint8_t> out;
+    std::array<std::uint8_t, 65536> buf{};
+    for (;;) {
+        g.zs.next_out = buf.data();
+        g.zs.avail_out = static_cast<uInt>(buf.size());
+        const int rc = inflate(&g.zs, Z_NO_FLUSH);
+        const std::size_t produced = buf.size() - g.zs.avail_out;
+        if (out.size() + produced > (32u << 20))
+            throw std::runtime_error("Mission exceeds size limit");
+        out.insert(out.end(), buf.begin(), buf.begin() + static_cast<std::ptrdiff_t>(produced));
+        if (rc == Z_STREAM_END) break;
+        if (rc != Z_OK) throw std::runtime_error("Invalid compressed mission");
+        if (g.zs.avail_in == 0 && produced == 0)
+            throw std::runtime_error("Incomplete compressed mission");
+    }
+    return out;
+}
+
+std::vector<std::uint8_t> decodeMissionPayloadOrThrow(std::vector<std::uint8_t> raw) {
+    if (raw.size() >= 2 && raw[0] == 0x1fu && raw[1] == 0x8bu) {
+        return inflateGzipMissionBytes(raw);
+    }
+    if (raw.size() >= 8 && little32(BytesView(raw).subspan(4)) == 0x222u &&
+        (std::memcmp(raw.data(), "MS2S", 4) == 0 || std::memcmp(raw.data(), "MM2S", 4) == 0 ||
+         std::memcmp(raw.data(), "P2SS", 4) == 0 || std::memcmp(raw.data(), "I2SS", 4) == 0)) {
+        return raw;
+    }
+    throw std::runtime_error("Expected a gzip-compressed mission");
+}
+
 std::vector<std::uint8_t> readMission(const std::filesystem::path& mission) {
+    std::error_code ec;
+    if (!std::filesystem::exists(mission, ec)) {
+        // Support virtual SUE/SSX archive members like <addons/pack.ssx>/<mission.ssm>.
+        std::filesystem::path probe = mission.parent_path();
+        while (!probe.empty() && probe != probe.parent_path()) {
+            if (std::filesystem::is_regular_file(probe, ec) && hasFileMagic(probe, "FZFS")) {
+                const auto rel = mission.lexically_relative(probe);
+                std::string entry = rel.generic_string();
+                for (char& ch : entry) if (ch == '/') ch = '\\';
+                if (auto raw = tryReadSueEntry(probe, entry)) {
+                    return decodeMissionPayloadOrThrow(std::move(*raw));
+                }
+                if (auto raw2 = tryReadSueEntry(probe, rel.generic_string())) {
+                    return decodeMissionPayloadOrThrow(std::move(*raw2));
+                }
+                break;
+            }
+            probe = probe.parent_path();
+        }
+    }
+
+    if (std::filesystem::is_regular_file(mission, ec)) {
+        if (hasFileMagic(mission, "FZFS")) {
+            for (const auto& entry : listSueEntries(mission)) {
+                const auto ext = std::filesystem::path(entry).extension().string();
+                if (asciiEqualsIgnoreCase(ext, ".ssm") || asciiEqualsIgnoreCase(ext, ".smm")) {
+                    if (auto raw = tryReadSueEntry(mission, entry)) {
+                        return decodeMissionPayloadOrThrow(std::move(*raw));
+                    }
+                }
+            }
+            throw std::runtime_error("Expected a gzip-compressed mission");
+        }
+        std::ifstream peek(mission, std::ios::binary);
+        char hdr[8]{};
+        if (peek && peek.read(hdr, 8) &&
+            static_cast<unsigned char>(hdr[0]) != 0x1fu &&
+            (std::memcmp(hdr, "MS2S", 4) == 0 || std::memcmp(hdr, "MM2S", 4) == 0 ||
+             std::memcmp(hdr, "P2SS", 4) == 0 || std::memcmp(hdr, "I2SS", 4) == 0) &&
+            little32(BytesView(reinterpret_cast<const std::uint8_t*>(hdr) + 4, 4)) == 0x222u) {
+            const auto sz = std::filesystem::file_size(mission, ec);
+            if (ec || sz > (32u << 20)) throw std::runtime_error("Mission exceeds size limit");
+            std::vector<std::uint8_t> raw(static_cast<std::size_t>(sz));
+            peek.seekg(0);
+            if (!raw.empty() && !peek.read(reinterpret_cast<char*>(raw.data()), static_cast<std::streamsize>(raw.size())))
+                throw std::runtime_error("Invalid compressed mission");
+            return raw;
+        }
+    }
+
     std::unique_ptr<gzFile_s, decltype(&gzclose)> file(gzopen(mission.c_str(), "rb"), gzclose);
     if (!file || gzdirect(file.get())) throw std::runtime_error("Expected a gzip-compressed mission");
     std::array<std::uint8_t, 65536> buffer;
@@ -540,6 +641,19 @@ MissionArchive loadMissionArchive(const std::filesystem::path& path) {
         if (!basePath && parent.has_parent_path()) {
             basePath = findChildFileIgnoreCase(parent.parent_path(), baseName);
         }
+        if (!basePath) {
+            // If a mod overrides NNNMMM.ssc without copying base NNN.ssc, scan active campaign dirs.
+            const auto maybeCamp = parent.filename().string();
+            const auto rootCandidate = asciiEqualsIgnoreCase(maybeCamp, "EASY")
+                ? parent.parent_path().parent_path().parent_path()
+                : parent.parent_path().parent_path();
+            for (const auto& d : resolveCampaignMapDirs(rootCandidate)) {
+                if (auto p = findChildFileIgnoreCase(d, baseName)) {
+                    basePath = *p;
+                    break;
+                }
+            }
+        }
         if (!basePath) throw std::runtime_error("Missing campaign base map " + baseName);
 
         out.mapBytes = readMission(*basePath);
@@ -792,25 +906,56 @@ MissionData readMissionData(const std::filesystem::path& mission) {
 }
 
 namespace {
-std::vector<MissionSummary> listMissionsInSubdir(const std::filesystem::path& gameDir,
-                                                 std::string_view subdirName,
-                                                 std::initializer_list<std::string_view> extensions) {
-    const auto mapsDir = findChildDirIgnoreCase(gameDir, "maps");
-    if (!mapsDir) return {};
-    const auto targetDir = findChildDirIgnoreCase(*mapsDir, subdirName);
-    if (!targetDir) return {};
+std::string_view stemAfterSlash(std::string_view entry) {
+    const auto slash = entry.find_last_of("\\/");
+    return slash == std::string_view::npos ? entry : entry.substr(slash + 1);
+}
 
-    std::vector<std::filesystem::path> files;
-    std::error_code ec;
-    for (std::filesystem::directory_iterator it(*targetDir, ec), end; !ec && it != end; it.increment(ec)) {
-        std::error_code fileEc;
-        if (!it->is_regular_file(fileEc)) continue;
-        const std::string ext = it->path().extension().string();
-        if (std::ranges::any_of(extensions, [&](std::string_view want) { return asciiEqualsIgnoreCase(ext, want); }))
-            files.push_back(it->path());
+void appendSortedMissionEntriesFromDirs(std::span<const std::filesystem::path> dirs,
+                                        std::initializer_list<std::string_view> extensions,
+                                        bool includeFzfsPacks,
+                                        std::vector<std::filesystem::path>& outFiles) {
+    std::vector<std::string> seenNames;
+    for (const auto& m : outFiles) {
+        seenNames.push_back(asciiLower(m.filename().string()));
     }
-    std::ranges::sort(files);
+    auto pushUniqueFile = [&](const std::filesystem::path& filePath, std::string_view keyName) {
+        const std::string low = asciiLower(keyName);
+        if (std::ranges::find(seenNames, low) != seenNames.end()) return;
+        seenNames.push_back(low);
+        outFiles.push_back(filePath);
+    };
 
+    for (const auto& dir : dirs) {
+        std::vector<std::filesystem::path> dirFiles;
+        std::error_code ec;
+        for (std::filesystem::directory_iterator it(dir, std::filesystem::directory_options::skip_permission_denied, ec), end;
+             !ec && it != end; it.increment(ec)) {
+            std::error_code fileEc;
+            if (!it->is_regular_file(fileEc)) continue;
+            const std::string ext = it->path().extension().string();
+            if (std::ranges::any_of(extensions, [&](std::string_view want) { return asciiEqualsIgnoreCase(ext, want); }))
+                dirFiles.push_back(it->path());
+        }
+        std::ranges::sort(dirFiles);
+        for (const auto& file : dirFiles) {
+            if (includeFzfsPacks && asciiEqualsIgnoreCase(file.extension().string(), ".ssx") &&
+                hasFileMagic(file, "FZFS")) {
+                for (const auto& entry : listSueEntries(file)) {
+                    const std::string ext = std::filesystem::path(entry).extension().string();
+                    if (!asciiEqualsIgnoreCase(ext, ".ssm") && !asciiEqualsIgnoreCase(ext, ".smm")) continue;
+                    std::string slashEntry = entry;
+                    for (char& ch : slashEntry) if (ch == '\\') ch = '/';
+                    pushUniqueFile(file / std::filesystem::path(slashEntry), stemAfterSlash(entry));
+                }
+            } else {
+                pushUniqueFile(file, file.filename().string());
+            }
+        }
+    }
+}
+
+std::vector<MissionSummary> scanAndDisambiguateMissions(const std::vector<std::filesystem::path>& files) {
     std::vector<MissionSummary> out;
     for (const auto& file : files) {
         try {
@@ -914,7 +1059,12 @@ std::optional<MissionSummary> findMissionInList(const std::vector<MissionSummary
 } // namespace
 
 std::vector<MissionSummary> listSinglePlayerMissions(const std::filesystem::path& gameDir) {
-    return listMissionsInSubdir(gameDir, "single", {".ssm"});
+    std::vector<std::filesystem::path> files;
+    const auto singleDirs = resolveSingleMapDirs(gameDir);
+    appendSortedMissionEntriesFromDirs(singleDirs, {".ssm", ".ssx"}, true, files);
+    const auto addonsDirs = resolveAddonsDirs(gameDir);
+    appendSortedMissionEntriesFromDirs(addonsDirs, {".ssx"}, true, files);
+    return scanAndDisambiguateMissions(files);
 }
 
 std::optional<MissionSummary> findSinglePlayerMission(const std::filesystem::path& gameDir, std::string_view query) {
@@ -922,7 +1072,10 @@ std::optional<MissionSummary> findSinglePlayerMission(const std::filesystem::pat
 }
 
 std::vector<MissionSummary> listMultiplayerMissions(const std::filesystem::path& gameDir) {
-    return listMissionsInSubdir(gameDir, "mplay", {".smm", ".ssm"});
+    std::vector<std::filesystem::path> files;
+    const auto mpDirs = resolveMultiMapDirs(gameDir);
+    appendSortedMissionEntriesFromDirs(mpDirs, {".smm", ".ssm", ".ssx"}, true, files);
+    return scanAndDisambiguateMissions(files);
 }
 
 std::optional<MissionSummary> findMultiplayerMission(const std::filesystem::path& gameDir, std::string_view query) {
@@ -930,23 +1083,33 @@ std::optional<MissionSummary> findMultiplayerMission(const std::filesystem::path
 }
 
 std::vector<CampaignSummary> listCampaigns(const std::filesystem::path& gameDir) {
-    const auto mapsDir = findChildDirIgnoreCase(gameDir, "maps");
-    if (!mapsDir) return {};
-    const auto campaignDir = findChildDirIgnoreCase(*mapsDir, "campaign");
-    if (!campaignDir) return {};
-    const auto easyDir = findChildDirIgnoreCase(*campaignDir, "EASY");
+    const auto campDirs = resolveCampaignMapDirs(gameDir);
+    if (campDirs.empty()) return {};
+
+    auto findCampaignFile = [&](const std::string& filename) -> std::optional<std::filesystem::path> {
+        for (const auto& dir : campDirs) {
+            if (auto p = findChildFileIgnoreCase(dir, filename)) return p;
+        }
+        return std::nullopt;
+    };
+    auto findEasyFile = [&](const std::string& filename) -> std::optional<std::filesystem::path> {
+        for (const auto& dir : campDirs) {
+            if (const auto easyDir = findChildDirIgnoreCase(dir, "EASY")) {
+                if (auto p = findChildFileIgnoreCase(*easyDir, filename)) return p;
+            }
+        }
+        return std::nullopt;
+    };
 
     const auto loadSummary = [&](const std::string& code, const std::string& title)
         -> std::optional<CampaignMissionSummary> {
-        const auto sscPath = findChildFileIgnoreCase(*campaignDir, code + ".ssc");
+        const auto sscPath = findCampaignFile(code + ".ssc");
         if (!sscPath) return std::nullopt;
         try {
             const auto archive = loadMissionArchive(*sscPath);
             std::filesystem::path easyPath;
-            if (easyDir) {
-                if (const auto ep = findChildFileIgnoreCase(*easyDir, code + ".ssc")) {
-                    easyPath = *ep;
-                }
+            if (const auto ep = findEasyFile(code + ".ssc")) {
+                easyPath = *ep;
             }
             std::string description = parseDescriptionIn(archive, false);
             return CampaignMissionSummary{
@@ -960,12 +1123,10 @@ std::vector<CampaignSummary> listCampaigns(const std::filesystem::path& gameDir)
 
     std::vector<CampaignSummary> campaigns;
     try {
-        const auto langArchive = resolveCaseInsensitivePath(gameDir, "lang.sue");
-        std::error_code ec;
-        if (std::filesystem::is_regular_file(langArchive, ec)) {
-            const auto seqBytes = readSueEntry(langArchive, "CAMPAIGN.SEQ");
+        const auto langArchives = resolveLangArchives(gameDir, 0);
+        if (const auto seqBytes = tryReadSueEntryChain(langArchives, "CAMPAIGN.SEQ")) {
             const std::string seqText = decodeMissionText(
-                std::string_view(reinterpret_cast<const char*>(seqBytes.data()), seqBytes.size()));
+                std::string_view(reinterpret_cast<const char*>(seqBytes->data()), seqBytes->size()));
             std::size_t pos = 0;
             while (pos < seqText.size()) {
                 std::size_t eol = seqText.find('\n', pos);
@@ -998,16 +1159,27 @@ std::vector<CampaignSummary> listCampaigns(const std::filesystem::path& gameDir)
 
     // Fallback when CAMPAIGN.SEQ is unavailable: enumerate NNNMMM.ssc files directly.
     std::vector<std::filesystem::path> files;
-    std::error_code ec;
-    for (std::filesystem::directory_iterator it(*campaignDir, ec), end; !ec && it != end; it.increment(ec)) {
-        std::error_code fileEc;
-        if (!it->is_regular_file(fileEc)) continue;
-        if (asciiEqualsIgnoreCase(it->path().extension().string(), ".ssc") &&
-            it->path().stem().string().size() == 6) {
-            files.push_back(it->path());
+    std::vector<std::string> seenSscNames;
+    for (const auto& dir : campDirs) {
+        std::vector<std::filesystem::path> dirFiles;
+        std::error_code ec;
+        for (std::filesystem::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
+            std::error_code fileEc;
+            if (!it->is_regular_file(fileEc)) continue;
+            if (asciiEqualsIgnoreCase(it->path().extension().string(), ".ssc") &&
+                it->path().stem().string().size() == 6) {
+                dirFiles.push_back(it->path());
+            }
+        }
+        std::ranges::sort(dirFiles);
+        for (const auto& f : dirFiles) {
+            const std::string low = asciiLower(f.filename().string());
+            if (std::ranges::find(seenSscNames, low) == seenSscNames.end()) {
+                seenSscNames.push_back(low);
+                files.push_back(f);
+            }
         }
     }
-    std::ranges::sort(files);
     if (files.empty()) return {};
 
     CampaignSummary fallback{"Campaign", {}};
@@ -1018,10 +1190,8 @@ std::vector<CampaignSummary> listCampaigns(const std::filesystem::path& gameDir)
             std::string title = parseDescriptionIn(archive, true);
             if (title.empty()) title = code;
             std::filesystem::path easyPath;
-            if (easyDir) {
-                if (const auto ep = findChildFileIgnoreCase(*easyDir, code + ".ssc")) {
-                    easyPath = *ep;
-                }
+            if (const auto ep = findEasyFile(code + ".ssc")) {
+                easyPath = *ep;
             }
             std::string description = parseDescriptionIn(archive, false);
             fallback.missions.push_back({
@@ -1044,12 +1214,9 @@ std::vector<CampaignSummary> listCustomCampaigns(const std::filesystem::path& ga
                                                  const std::filesystem::path& userDir) {
     std::vector<std::filesystem::path> candidateRoots;
     std::error_code ec;
-    if (!gameDir.empty()) {
-        if (const auto mapsDir = findChildDirIgnoreCase(gameDir, "maps")) {
-            if (const auto ccDir = findChildDirIgnoreCase(*mapsDir, "custom_campaign");
-                ccDir && std::filesystem::is_directory(*ccDir, ec) && !ec) {
-                candidateRoots.push_back(*ccDir);
-            }
+    for (const auto& ccDir : resolveCustomCampaignDirs(gameDir)) {
+        if (std::filesystem::is_directory(ccDir, ec) && !ec) {
+            candidateRoots.push_back(ccDir);
         }
     }
     if (!userDir.empty() && std::filesystem::is_directory(userDir, ec) && !ec) {

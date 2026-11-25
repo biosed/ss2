@@ -2621,6 +2621,206 @@ void testVehiclesAndShadows() {
         check(airHasTrans && airHasSemi,
               "AIRFIRE.ANI (0xa1 + 1024B .COL) preserves transparent background and soft flame alpha");
     }
+
+    // Retail Scheme3 (Beach) descriptors: desc_scheme3.sue + lang_desc_scheme3.sue LAND\DESCDOM.
+    {
+        const auto beachCat = ss2::assets::UnitCatalog::load(gameDir, 2u);
+        check(beachCat->buildingName(0u) == "HUT",
+              "retail UnitCatalog Scheme3 resolves lang_desc_scheme3.sue LAND\\DESCDOM name obj 0 = HUT");
+        const auto* beachTiger = beachCat->find("tiger");
+        check(beachTiger && beachTiger->health > 0,
+              "retail UnitCatalog Scheme3 still resolves UNITS\\tiger from desc_common.sue");
+    }
+
+    // Retail TotalVictoryTools unpacked mycommon\ camouflage .COL overlay (without modifying ss2-private).
+    {
+        const auto tvtCol = ss2::assets::resolveCaseInsensitivePath(
+            gameDir, "TotalVictoryTools/Camouflages/Early production TIGER.COL");
+        std::error_code ec;
+        if (std::filesystem::is_regular_file(tvtCol, ec)) {
+            struct ActiveModReset {
+                ~ActiveModReset() { ss2::assets::setActiveMod(""); }
+            } resetMod;
+            TempDir tvtMod("ss2_tvt_camo");
+            const auto myCommon = tvtMod.path / "mycommon";
+            std::filesystem::create_directories(myCommon);
+            std::filesystem::copy_file(tvtCol, myCommon / "TIGER.COL",
+                                       std::filesystem::copy_options::overwrite_existing);
+
+            const std::array<ss2::assets::Placement, 1> tigerPlacement{{{"tiger", 96, 96, 4, 100, 10, 0, 0}}};
+            auto renderTiger = [&] {
+                ss2::assets::MapImage canvas{192u, 192u, std::vector<std::uint8_t>(192u * 192u * 4u, 0u)};
+                ss2::assets::VehicleScene scene(gameDir, tigerPlacement);
+                scene.drawAll(canvas);
+                return canvas;
+            };
+            const auto baseTiger = renderTiger();
+            ss2::assets::setActiveMod(tvtMod.path.string());
+            const auto moddedTiger = renderTiger();
+            ss2::assets::setActiveMod("");
+
+            const bool anyPixel = std::any_of(moddedTiger.rgba.begin(), moddedTiger.rgba.end(),
+                                              [](std::uint8_t b) { return b != 0u; });
+            check(anyPixel && baseTiger.rgba != moddedTiger.rgba,
+                  "TotalVictoryTools unpacked mycommon/TIGER.COL overrides VehicleScene camo over retail game_common.sue");
+        }
+    }
+}
+
+void testModVfsAndAddons() {
+    using namespace ss2::assets;
+    struct ActiveModReset {
+        ~ActiveModReset() { setActiveMod(""); }
+    } resetMod;
+
+    TempDir tmp("ss2_mod_vfs");
+    const auto gameDir = tmp.path / "game";
+    std::filesystem::create_directories(gameDir / "maps" / "single");
+    std::filesystem::create_directories(gameDir / "addons");
+    std::filesystem::create_directories(gameDir / "mycommon" / "sub");
+    std::filesystem::create_directories(gameDir / "winter_scheme2");
+
+    // 1. Unpacked folder mount: raw loose file + 0x1f 0x8b gzip loose file + traversal guard.
+    const Bytes rawCol(512u, 0x5Au);
+    {
+        std::ofstream f(gameDir / "mycommon" / "Tiger.col", std::ios::binary | std::ios::trunc);
+        f.write(reinterpret_cast<const char*>(rawCol.data()), static_cast<std::streamsize>(rawCol.size()));
+    }
+    Bytes loosePayload(1024u, 0u);
+    for (std::size_t i = 0; i < loosePayload.size(); ++i) {
+        loosePayload[i] = static_cast<std::uint8_t>((i * 29u + 7u) & 0xFFu);
+    }
+    writeGzipFile(gameDir / "mycommon" / "sub" / "Gzipped.bin", loosePayload);
+
+    check(sueEntrySize(gameDir / "mycommon", "TIGER.COL") == 512u, "unpacked dir sueEntrySize raw");
+    check(sueEntrySize(gameDir / "mycommon", "SUB\\GZIPPED.BIN") == 1024u, "unpacked dir sueEntrySize gzip");
+    check(readSueEntry(gameDir / "mycommon", "tiger.col") == rawCol, "unpacked dir readSueEntry raw");
+    check(readSueEntry(gameDir / "mycommon", "sub\\gzipped.bin") == loosePayload, "unpacked dir readSueEntry gzip");
+    check(readSueEntryRange(gameDir / "mycommon", "SUB\\GZIPPED.BIN", 100u, 200u) ==
+              Bytes(loosePayload.begin() + 100, loosePayload.begin() + 300),
+          "unpacked dir readSueEntryRange gzip slice");
+    check(readSueEntryRange(gameDir / "mycommon", "tiger.col", 10u, 32u) ==
+              Bytes(rawCol.begin() + 10, rawCol.begin() + 42),
+          "unpacked dir readSueEntryRange raw slice");
+    check(!tryReadSueEntry(gameDir / "mycommon", "..\\secret.bin").has_value(),
+          "unpacked dir rejects parent traversal");
+
+    // 2. Base archives + sudtest.ini [Data] & [Game] + Scheme2 winter + Sounds=mod_snd.
+    const std::string baseDescText = "health 100\nsight 10\n";
+    const std::string baseDescdom = "name obj 0 \"Base Hut\"\n";
+    writeSueArchive(gameDir / "desc_common.sue", {
+        {"UNITS\\officer", Bytes(baseDescText.begin(), baseDescText.end()), false, 0u},
+        {"LAND\\DESCDOM", Bytes(baseDescdom.begin(), baseDescdom.end()), false, 0u},
+    });
+    writeSueArchive(gameDir / "game_common.sue", {
+        {"dummy.txt", {'o', 'k'}, false, 0u},
+    });
+    writeSueArchive(gameDir / "game_scheme1.sue", {
+        {"rhombs.res", {'s', '1'}, false, 0u},
+    });
+    {
+        std::ofstream w(gameDir / "winter_scheme2" / "rhombs.res", std::ios::binary | std::ios::trunc);
+        w << "w2";
+        std::ofstream sh(gameDir / "mod_snd.hdr", std::ios::binary | std::ios::trunc);
+        sh << "HDR";
+        std::ofstream sr(gameDir / "mod_snd.rus", std::ios::binary | std::ios::trunc);
+        sr << "RUS";
+        std::ofstream ini(gameDir / "sudtest.ini", std::ios::binary | std::ios::trunc);
+        ini << "[Data]\n"
+            << "Common=lang.sue;[_single\\]maps\\single\\;[_camp000\\]maps\\campaign\\\n"
+            << "Game=mycommon\\;game_common.sue\n"
+            << "Sounds=mod_snd.\n"
+            << "Scheme1=lang.sue;desc_common.sue;game_scheme1.sue\n"
+            << "Scheme2=lang.sue;desc_common.sue;winter_scheme2\\\n"
+            << "Scheme4=lang.sue;desc_common.sue\n"
+            << "Addons=addons\\\n"
+            << "[Game]\n"
+            << "TurnDelay=28\n";
+    }
+
+    check(readSueEntryChain(resolveGameArchives(gameDir), "TIGER.COL") == rawCol,
+          "sudtest.ini Game=mycommon\\;game_common.sue chain resolves unpacked entry");
+    check(readSueEntryChain(resolveSchemeArchives(gameDir, 1u), "rhombs.res") == Bytes{'w', '2'},
+          "sudtest.ini Scheme2 chain resolves winter folder");
+    check(readSueEntryChain(resolveSchemeArchives(gameDir, 3u), "rhombs.res") == Bytes{'s', '1'},
+          "Scheme4 without desert tiles falls back cleanly to Scheme1");
+    check(schemeDisplayName(0u) == "Summer" && schemeDisplayName(1u) == "Winter" &&
+              schemeDisplayName(2u) == "Beach" && schemeDisplayName(3u) == "Desert",
+          "schemeDisplayName labels Summer/Winter/Beach/Desert");
+    const auto snd = resolveSoundBankFiles(gameDir);
+    check(snd.hdr.filename() == "mod_snd.hdr" && snd.rus.filename() == "mod_snd.rus",
+          "sudtest.ini Sounds=mod_snd. resolves mod sound bank files");
+    check(resolveIniTurnDelay(gameDir) == 28u, "resolveIniTurnDelay reads TurnDelay=28");
+
+    // 3. addons/*.ssx (FZFS SUE pack + standalone .ssx mission) + maps/single/*.ssm.
+    MissionSpec mSpecBase{0u, 64u, 64u, "Base Skirmish\nHold line", {}, 0u, 1u, false, std::nullopt};
+    writeMissionFile(gameDir / "maps" / "single" / "Base_One.ssm", mSpecBase);
+
+    MissionSpec mSpecAlpha{1u, 128u, 64u, "Alpha Pack\nWinter raid", {}, 0u, 1u, false, std::nullopt};
+    writeMissionFile(tmp.path / "tmp_alpha.ssm", mSpecAlpha);
+    Bytes alphaGz;
+    {
+        std::ifstream f(tmp.path / "tmp_alpha.ssm", std::ios::binary | std::ios::ate);
+        const auto sz = f.tellg();
+        f.seekg(0);
+        alphaGz.resize(static_cast<std::size_t>(sz));
+        f.read(reinterpret_cast<char*>(alphaGz.data()), sz);
+    }
+    MissionSpec mSpecBravo{2u, 64u, 128u, "Bravo Pack\nBeach landing", {}, 0u, 1u, false, std::nullopt};
+    const Bytes bravoRaw = buildSyntheticMissionBytes(mSpecBravo);
+    writeSueArchive(gameDir / "addons" / "pack01.ssx", {
+        {"Alpha Strike.ssm", alphaGz, false, 0u},
+        {"Bravo Raid.ssm", bravoRaw, true, 512u},
+    });
+    MissionSpec mSpecSolo{3u, 64u, 64u, "Solo SSX\nDesert sortie", {}, 0u, 1u, false, std::nullopt};
+    writeMissionFile(gameDir / "addons" / "Solo_Addon.ssx", mSpecSolo);
+
+    const auto spMissions = listSinglePlayerMissions(gameDir);
+    check(spMissions.size() == 4u, "listSinglePlayerMissions discovers maps/single + FZFS .ssx pack + standalone .ssx");
+    const auto alphaFound = findSinglePlayerMission(gameDir, "Alpha Strike");
+    const auto bravoFound = findSinglePlayerMission(gameDir, "Bravo Raid");
+    const auto soloFound = findSinglePlayerMission(gameDir, "Solo_Addon");
+    check(alphaFound && bravoFound && soloFound, "findSinglePlayerMission finds .ssx pack members and standalone .ssx");
+    const auto alphaData = readMissionData(alphaFound->path);
+    const auto bravoData = readMissionData(bravoFound->path);
+    const auto soloData = readMissionData(soloFound->path);
+    check(alphaData.scheme == 1u && bravoData.scheme == 2u && soloData.scheme == 3u,
+          "readMissionData decodes gzipped and raw FZFS .ssx entries plus standalone .ssx");
+
+    // 4. Drop-in mods/<Name>/ and Run/<Name>/ discovery + live UnitCatalog override & revert.
+    const auto balDir = gameDir / "mods" / "BalanceMod";
+    std::filesystem::create_directories(balDir / "UNITS");
+    std::filesystem::create_directories(balDir / "LAND");
+    {
+        std::ofstream uo(balDir / "UNITS" / "officer", std::ios::binary | std::ios::trunc);
+        uo << "health 250\nsight 14\n";
+        std::ofstream dd(balDir / "LAND" / "DESCDOM", std::ios::binary | std::ios::trunc);
+        dd << "name obj 0 \"Mod Bunker\"\n";
+    }
+    const auto runDir = gameDir / "Run" / "RwmSwitch";
+    std::filesystem::create_directories(runDir);
+    {
+        std::ofstream ri(runDir / "sudtest.ini", std::ios::binary | std::ios::trunc);
+        ri << "[Game]\nTurnDelay=32\n";
+    }
+
+    const auto mods = listInstalledMods(gameDir, tmp.path / "empty_user_mods");
+    check(mods.size() == 2u, "listInstalledMods discovers both mods/ and Run/ mods");
+
+    setActiveMod("BalanceMod");
+    const auto modCat = UnitCatalog::load(gameDir, 0u);
+    const auto* modOff = modCat->find("officer");
+    check(modOff && modOff->health == 250 && modCat->buildingName(0u) == "Mod Bunker",
+          "activeMod BalanceMod overrides UnitCatalog UNITS\\officer and LAND\\DESCDOM");
+
+    setActiveMod("RwmSwitch");
+    check(resolveIniTurnDelay(gameDir) == 32u, "activeMod Run/RwmSwitch overrides TurnDelay=32");
+
+    setActiveMod("vanilla");
+    const auto baseCat = UnitCatalog::load(gameDir, 0u);
+    const auto* baseOff = baseCat->find("officer");
+    check(baseOff && baseOff->health == 100 && baseCat->buildingName(0u) == "Base Hut",
+          "setActiveMod(\"vanilla\") restores base UnitCatalog stats");
 }
 
 } // namespace
@@ -2630,6 +2830,7 @@ int main() {
         testDecodeMissionText();
         testSyntheticMissions();
         testSueAndPaths();
+        testModVfsAndAddons();
         testUnitCatalogPhase4A();
         testBriefingMedia();
         testVehiclesAndShadows();

@@ -1,4 +1,5 @@
 #include "sim/tutorial.hpp"
+#include "assets/sprite.hpp"
 #include <algorithm>
 #include <charconv>
 #include <fstream>
@@ -18,18 +19,8 @@ bool compare(uint32_t mode, int32_t lhs, int32_t rhs) {
 }
 
 unsigned tutorialTurnDelay(const std::filesystem::path& gameDir) {
-    std::ifstream file(gameDir / "sudtest.ini");
-    bool game = false;
-    for (std::string line; std::getline(file, line);) {
-        if (!line.empty() && line.back() == '\r') line.pop_back();
-        if (line.starts_with('[')) game = line == "[Game]";
-        if (game && line.starts_with("TurnDelay=")) {
-            unsigned value{};
-            const auto [ptr, err] = std::from_chars(line.data() + 10, line.data() + line.size(), value);
-            if (err != std::errc{} || ptr != line.data() + line.size() || !value)
-                throw std::runtime_error("Invalid Gold Game/TurnDelay");
-            return value;
-        }
+    if (const auto iniDelay = assets::resolveIniTurnDelay(gameDir)) {
+        return *iniDelay;
     }
     return 40; // Default passed by the retail single-player initialization.
 }

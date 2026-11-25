@@ -20,12 +20,12 @@ constexpr RectD kRatingsCancelRect{542, 512, 118, 35};
 constexpr RectD kCreditsFrameRect{96, 62, 608, 434};
 constexpr RectD kCreditsCancelRect{542, 512, 118, 35};
 
-constexpr RectD kOptionsPanelRect{86, 82, 628, 404};
+constexpr RectD kOptionsPanelRect{86, 82, 628, 434};
 constexpr double kOptionsRowY0 = 94.0;
 constexpr double kOptionsRowStep = 42.0;
 constexpr double kOptionsRowH = 36.0;
-constexpr RectD kOptionsOkRect{132, 512, 112, 35};
-constexpr RectD kOptionsCancelRect{542, 512, 118, 35};
+constexpr RectD kOptionsOkRect{132, 524, 112, 35};
+constexpr RectD kOptionsCancelRect{542, 524, 118, 35};
 
 RectD optionRowRect(std::size_t idx) {
     return {96.0, kOptionsRowY0 + double(idx) * kOptionsRowStep, 608.0, kOptionsRowH};
@@ -148,14 +148,22 @@ bool GoldFrontEnd::takeSettingsSaved() {
 }
 
 void GoldFrontEnd::beginOptionsEdit() {
+    availableMods_ = gameDir_.empty()
+        ? std::vector<assets::ModInfo>{}
+        : assets::listInstalledMods(gameDir_, defaultModsDir());
     optionsDraft_ = settings_;
     optionsDraft_.difficulty = fe_.difficulty();
     optionsBackupLanguage_ = ss2::language();
 }
 
 void GoldFrontEnd::commitOptionsEdit() {
+    const bool modChanged = (settings_.activeMod != optionsDraft_.activeMod);
     settings_ = optionsDraft_;
     fe_.setDifficulty(settings_.difficulty);
+    if (modChanged) {
+        assets::setActiveMod(settings_.activeMod);
+        reloadModAssets();
+    }
     settingsSaved_ = true;
     syncMenuMusic();
 }
@@ -219,6 +227,19 @@ void GoldFrontEnd::adjustOption(const std::string& id, int delta) {
         optionsDraft_.combatEffects = !optionsDraft_.combatEffects;
     } else if (id == "opt_skip_intro") {
         optionsDraft_.skipIntro = !optionsDraft_.skipIntro;
+    } else if (id == "opt_mod") {
+        std::vector<std::string> choices{""};
+        choices.reserve(1 + availableMods_.size());
+        for (const auto& m : availableMods_) choices.push_back(m.id);
+        std::size_t idx = 0;
+        for (std::size_t i = 0; i < choices.size(); ++i) {
+            if (assets::equalsIgnoreCaseAscii(choices[i], optionsDraft_.activeMod)) {
+                idx = i;
+                break;
+            }
+        }
+        idx = (idx + std::size_t(step + int(choices.size()))) % choices.size();
+        optionsDraft_.activeMod = choices[idx];
     }
     dirty_ = true;
     syncMenuMusic();
@@ -288,7 +309,7 @@ void GoldFrontEnd::handleOptionsKey(SDL_Keycode key) {
     static const std::vector<std::string> kOrder{
         "opt_difficulty", "opt_language", "opt_sfx", "opt_music_vol",
         "opt_music_mute", "opt_speed", "opt_smooth", "opt_effects",
-        "opt_skip_intro", "ok", "cancel"
+        "opt_skip_intro", "opt_mod", "ok", "cancel"
     };
     if (key == SDLK_UP) cycleFocus(kOrder, -1);
     else if (key == SDLK_DOWN || key == SDLK_TAB) cycleFocus(kOrder, 1);
@@ -367,11 +388,26 @@ void GoldFrontEnd::renderOptions(const RenderEnv& env) {
     const std::string spdStr = optionsDraft_.speedPercent == 50 ? "0.5x"
         : optionsDraft_.speedPercent == 200 ? "2x" : optionsDraft_.speedPercent == 300 ? "3x" : "1x";
 
+    std::string modStr = tr("Original");
+    if (!optionsDraft_.activeMod.empty()) {
+        modStr = optionsDraft_.activeMod;
+        for (const auto& m : availableMods_) {
+            if (assets::equalsIgnoreCaseAscii(m.id, optionsDraft_.activeMod)) {
+                modStr = m.name;
+                break;
+            }
+        }
+        if (modStr == optionsDraft_.activeMod) {
+            const auto stem = std::filesystem::path(optionsDraft_.activeMod).filename().string();
+            if (!stem.empty()) modStr = stem;
+        }
+    }
+
     struct OptDisplay {
         std::string label;
         std::string value;
     };
-    const std::array<OptDisplay, 9> rows{{
+    const std::array<OptDisplay, 10> rows{{
         {tr("Game difficulty:"), tr(difficultyKey(optionsDraft_.difficulty))},
         {tr("Language"), langLabel},
         {tr("SFX volume"), sfxStr},
@@ -381,6 +417,7 @@ void GoldFrontEnd::renderOptions(const RenderEnv& env) {
         {tr("Smooth terrain"), tr(optionsDraft_.smoothTerrain ? "On" : "Off")},
         {tr("Tracers and flashes"), tr(optionsDraft_.combatEffects ? "On" : "Off")},
         {tr("Skip Intro"), tr(optionsDraft_.skipIntro ? "On" : "Off")},
+        {tr("Mod"), modStr},
     }};
 
     for (std::size_t i = 0; i < kOptionRowIds.size(); ++i) {

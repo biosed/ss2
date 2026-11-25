@@ -40,6 +40,27 @@ Bytes readSueEntry(const std::filesystem::path&, std::string_view) {
 Bytes readSueEntryFallback(const std::vector<std::filesystem::path>&, std::string_view) {
     throw std::runtime_error("stub readSueEntryFallback");
 }
+std::optional<Bytes> tryReadSueEntry(const std::filesystem::path&, std::string_view) {
+    return std::nullopt;
+}
+std::optional<Bytes> tryReadSueEntryChain(std::span<const std::filesystem::path>, std::string_view) {
+    return std::nullopt;
+}
+Bytes readSueEntryChain(std::span<const std::filesystem::path>, std::string_view) {
+    throw std::runtime_error("stub readSueEntryChain");
+}
+std::vector<std::filesystem::path> resolveGameArchives(const std::filesystem::path&) {
+    return {};
+}
+std::vector<std::filesystem::path> resolveDescArchives(const std::filesystem::path&, unsigned) {
+    return {};
+}
+std::vector<std::filesystem::path> resolveLangArchives(const std::filesystem::path&, unsigned) {
+    return {};
+}
+std::optional<unsigned> resolveIniTurnDelay(const std::filesystem::path&) {
+    return std::nullopt;
+}
 std::string decodeMissionText(std::string_view raw) {
     return std::string(raw);
 }
