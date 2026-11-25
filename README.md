@@ -4,6 +4,13 @@ A native C++20 / SDL3 / Vulkan 1.3 reimplementation of *Sudden Strike II (Gold 2
 
 The engine runs all 136 retail `.ssc`/`.ssm`/`.smm` missions (`0` unhandled CAOF opcodes), bit-exact retail visibility, combat, group AI, progressive `dom.res` building and `MOST.RES` bridge destruction, the Gold 2.2 front end, 2–4 player deterministic TCP lockstep multiplayer, 2× HD asset packs, and out-of-the-box community mods.
 
+[![Sudden Strike II Native Engine — 1080p Gameplay Showcase](docs/gameplay-preview.webp)](https://github.com/biosed/ss2/releases/download/v0.1.0/ss2-v0.1.0-gameplay-1080p.mp4)
+
+> **Watch the full 1080p gameplay trailer with stereo game audio:** [`ss2-v0.1.0-gameplay-1080p.mp4` (`1920×1080` H.264 + AAC on Release `v0.1.0`)](https://github.com/biosed/ss2/releases/download/v0.1.0/ss2-v0.1.0-gameplay-1080p.mp4)
+
+> [!IMPORTANT]
+> **Original *Sudden Strike II* Game Data Required:** This repository and its release binaries provide the open-source native engine only. **No copyrighted retail game assets, maps, sprites, sounds, or movies are included.** You must supply your own licensed original CD or GOG *Sudden Strike II (Gold 2.2)* installation.
+
 ## Quick start
 
 ```sh
