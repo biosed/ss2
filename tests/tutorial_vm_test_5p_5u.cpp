@@ -1557,6 +1557,279 @@ void runPhase5Pto5U() {
 
                                 std::cout << "Phase 5V Gold 0x1f sight cap, Easy 1.3x vehicle sight, unbuttoned 100% sniper damage & suppression button-up PASSED\n";
                             }
+
+                            // Phase 5W: Universal Shift-order queueing, retail AVIA*/UNITS* fidelity,
+                            // forest/crater cover, and combined-arms AI (counter-battery + AI mine clearing).
+                            {
+                                auto tc5w = [](int tx, int ty) -> std::pair<int, int> {
+                                    const int u = tx * 32 + 16;
+                                    const int v = ty * 32 + 16;
+                                    return {64 * 32 + u - v, (u + v) / 2};
+                                };
+                                std::vector<std::uint32_t> flags5w(64u * 64u, 0u);
+                                std::vector<std::uint16_t> obst5w(64u * 64u, 0x000Fu);
+                                flags5w[24u * 64u + 24u] |= 0x1000u; // forest cover tile
+
+                                auto vetSpec = ss2::assets::UnitCatalog::parseUnitText(
+                                    "vet_5w",
+                                    "cancrouchexpa 1\nhealth 900\nsight 12\ncrouchsight 9\n"
+                                    "shot1.id mg\nshot1.damage 10 12\nshot1.range 200 220\nshot1.reloadtime 20\n");
+                                auto planeCap = ss2::assets::UnitCatalog::parsePlaneText(
+                                    "yak_5w",
+                                    "health 300\nsight 20\nflyspeed 10\nactiontime 400\nshot_grn_damage 80\nshot_air_damage 90\n");
+                                auto planeBomb = ss2::assets::UnitCatalog::parsePlaneText(
+                                    "he111_5w",
+                                    "health 400\nsight 20\nflyspeed 8\nbombdamage 1800\nbombsnumber 2\nbombaccuracy 90\nbombreloadtime 12\n");
+                                if (!vetSpec.canCrouchExpa || planeCap.actionTime != 400 ||
+                                    planeBomb.bombAccuracy != 90 || planeBomb.bombReloadTime != 12) {
+                                    throw std::runtime_error("Phase 5W retail catalog field parsing check failed");
+                                }
+
+                                ss2::assets::UnitSpec sapSpec5w{};
+                                sapSpec5w.id = "sapper_5w";
+                                sapSpec5w.selType = "sapper";
+                                sapSpec5w.health = 100;
+                                sapSpec5w.sight = 12;
+                                sapSpec5w.moveSpeed = 0.6;
+                                sapSpec5w.mineAmmo = 5;
+                                sapSpec5w.ammo1 = 30;
+                                sapSpec5w.shot1.shotId = "rifle";
+                                sapSpec5w.shot1.hitType = ss2::assets::HitType::Machine;
+                                sapSpec5w.shot1.damage = 10;
+                                sapSpec5w.shot1.range = 180;
+                                sapSpec5w.shot1.reloadTicks = 20;
+
+                                ss2::assets::UnitSpec spgSpec5w{};
+                                spgSpec5w.id = "spg_5w";
+                                spgSpec5w.isVehicle = true;
+                                spgSpec5w.health = 400;
+                                spgSpec5w.sight = 12;
+                                spgSpec5w.moveSpeed = 2.0;
+                                spgSpec5w.backMoveSpeed = 1.6;
+                                spgSpec5w.canMoveBackward = true;
+                                spgSpec5w.ammo1 = 20;
+                                spgSpec5w.shot1.shotId = "he_5w";
+                                spgSpec5w.shot1.hitType = ss2::assets::HitType::Explosive;
+                                spgSpec5w.shot1.damage = 220;
+                                spgSpec5w.shot1.damageMax = 220;
+                                spgSpec5w.shot1.range = 280;
+                                spgSpec5w.shot1.rangeMax = 280;
+                                spgSpec5w.shot1.deadzone = 32;
+                                spgSpec5w.shot1.reloadTicks = 20;
+                                spgSpec5w.shot1.burstShots = 1;
+                                spgSpec5w.shot1.burstReloadTicks = 20;
+                                spgSpec5w.shot1.craterScale = 2;
+
+                                ss2::assets::UnitSpec tractorSpec5w{};
+                                tractorSpec5w.id = "trac_5w";
+                                tractorSpec5w.isVehicle = true;
+                                tractorSpec5w.health = 200;
+                                tractorSpec5w.sight = 10;
+                                tractorSpec5w.moveSpeed = 2.2;
+                                tractorSpec5w.towSpeedByClass = {0.8, 0.7, 0.6, 0.5, 0.4, 0.3};
+
+                                ss2::assets::UnitSpec gunSpec5w{};
+                                gunSpec5w.id = "gun_5w";
+                                gunSpec5w.isVehicle = true;
+                                gunSpec5w.selType = "howitzer";
+                                gunSpec5w.health = 200;
+                                gunSpec5w.sight = 12;
+                                gunSpec5w.moveSpeed = 0.0;
+                                gunSpec5w.towWeightClass = "light";
+                                gunSpec5w.ammo1 = 20;
+                                gunSpec5w.shot1.shotId = "he_5w";
+                                gunSpec5w.shot1.hitType = ss2::assets::HitType::Explosive;
+                                gunSpec5w.shot1.damage = 220;
+                                gunSpec5w.shot1.range = 750;
+                                gunSpec5w.shot1.deadzone = 40;
+                                gunSpec5w.shot1.reloadTicks = 25;
+                                gunSpec5w.shot1.burstShots = 1;
+                                gunSpec5w.shot1.burstReloadTicks = 25;
+                                gunSpec5w.shot1.indirectArc = true;
+
+                                auto cat5w = ss2::assets::UnitCatalog::fromSpecs(
+                                    {vetSpec, sapSpec5w, spgSpec5w, tractorSpec5w, gunSpec5w},
+                                    {planeCap, planeBomb},
+                                    /*retailCatalog=*/true);
+
+                                // 1) Universal Shift queue + shoot-and-scoot + multi-segment selectionOrderLines.
+                                {
+                                    const auto [sx, sy] = tc5w(10, 20);
+                                    const auto [wx, wy] = tc5w(12, 20);
+                                    const auto [bx, by] = tc5w(14, 20);
+                                    const auto [spgX, spgY] = tc5w(10, 14);
+                                    const auto [tgtX, tgtY] = tc5w(15, 14);
+                                    const auto [revX, revY] = tc5w(8, 14);
+                                    const auto [trX, trY] = tc5w(20, 28);
+                                    const auto [trDstX, trDstY] = tc5w(22, 28);
+                                    const auto [gunX, gunY] = tc5w(21, 28);
+
+                                    std::vector<ss2::assets::Infantry> infQ{
+                                        {"sapper_5w", sx, sy, 100, 30, 1, 0},
+                                        {"vet_5w", tc5w(24, 24).first, tc5w(24, 24).second, 900, 30, 2, 0},
+                                    };
+                                    infQ[1].expa = 6000;
+                                    std::vector<ss2::assets::Placement> vehQ{
+                                        {"spg_5w", spgX, spgY, 0, 100, 100, 1, 0},
+                                        {"trac_5w", trX, trY, 0, 100, 0, 1, 0},
+                                        {"gun_5w", gunX, gunY, 0, 100, 100, 1, 0},
+                                    };
+                                    ss2::TutorialUnits simQ(
+                                        ss2::InfantryPathGrid::fromSubCellMasks(64, 64, flags5w, obst5w),
+                                        infQ, vehQ, ss2::FogGrid(64, 64, flags5w), 2, false, {}, cat5w);
+                                    simQ.setBuildings({{bx, by, bx - 16, by - 16, 32, 32, 4, 400}});
+                                    simQ.setMines(std::vector<std::uint8_t>(64u * 64u, 0u));
+
+                                    if (simQ.infantryCoverAtMapPoint(tc5w(24, 24).first, tc5w(24, 24).second) != 1) {
+                                        throw std::runtime_error("Phase 5W forest tile should report forest cover");
+                                    }
+
+                                    // Sapper Shift chain: Move -> LayMine -> GarrisonBuilding
+                                    if (simQ.orderSelection(std::array<size_t, 1>{0u}, wx, wy, false) != 1u ||
+                                        simQ.queueSoldierOrder(std::array<size_t, 1>{0u}, ss2::QueuedSoldierOp::LayMine, 0, 0, 0) != 1u ||
+                                        simQ.queueSoldierOrder(std::array<size_t, 1>{0u}, ss2::QueuedSoldierOp::GarrisonBuilding, 0, 0, 0) != 1u) {
+                                        throw std::runtime_error("Phase 5W sapper Shift-queue chain setup failed");
+                                    }
+                                    const auto sapLines = simQ.selectionOrderLines(std::array<size_t, 1>{0u}, {});
+                                    if (sapLines.size() < 2u) {
+                                        throw std::runtime_error("Phase 5W multi-segment sapper order lines expected >= 2 segments");
+                                    }
+
+                                    // SPG shoot-and-scoot: AttackGround -> ReverseMove
+                                    if (simQ.orderAttackGroundVehicles(std::array<size_t, 1>{0u}, tgtX, tgtY) != 1u ||
+                                        simQ.queueVehicleOrder(std::array<size_t, 1>{0u}, ss2::QueuedVehicleOp::ReverseMove, revX, revY) != 1u) {
+                                        throw std::runtime_error("Phase 5W shoot-and-scoot queue setup failed");
+                                    }
+                                    const auto spgLines = simQ.selectionOrderLines({}, std::array<size_t, 1>{0u});
+                                    if (spgLines.size() < 2u ||
+                                        spgLines[0].kind != ss2::TacticalOrderLine::Kind::AttackGround ||
+                                        spgLines[1].kind != ss2::TacticalOrderLine::Kind::Move) {
+                                        throw std::runtime_error("Phase 5W shoot-and-scoot preview lines check failed");
+                                    }
+
+                                    // Tractor hitch -> Move -> Unhitch
+                                    if (simQ.orderTowVehicle(1u, 2u) != 1u) {
+                                        throw std::runtime_error("Phase 5W tractor hitch failed");
+                                    }
+                                    for (int t = 0; t < 20 && simQ.takeSnapshot().vehicles[1].towedVehicle != 2; ++t) {
+                                        (void)simQ.step();
+                                    }
+                                    if (simQ.moveVehicles(std::array<size_t, 1>{1u}, trDstX, trDstY, false) != 1u ||
+                                        simQ.queueVehicleOrder(std::array<size_t, 1>{1u}, ss2::QueuedVehicleOp::Unhitch, 0, 0) != 1u) {
+                                        throw std::runtime_error("Phase 5W tractor Move->Unhitch queue setup failed");
+                                    }
+
+                                    bool sawCrater = false;
+                                    for (int t = 0; t < 160; ++t) {
+                                        (void)simQ.step();
+                                        if (simQ.infantryCoverAtMapPoint(tgtX, tgtY) == 2) sawCrater = true;
+                                    }
+                                    const auto snapQ = simQ.takeSnapshot();
+                                    if (simQ.visibleMines(0).empty() || snapQ.buildings[0].occupants.size() != 1u) {
+                                        throw std::runtime_error("Phase 5W Move->LayMine->GarrisonBuilding chain failed to complete");
+                                    }
+                                    if (snapQ.vehicles[0].ammo >= 20 || snapQ.vehicles[0].x >= spgX - 24) {
+                                        throw std::runtime_error("Phase 5W SPG shoot-and-scoot failed to fire then reverse");
+                                    }
+                                    if (snapQ.vehicles[1].towedVehicle != -1) {
+                                        throw std::runtime_error("Phase 5W Tractor Move->Unhitch failed to unhitch");
+                                    }
+                                    if (!sawCrater) {
+                                        throw std::runtime_error("Phase 5W heavy HE shell impact failed to stamp crater cover");
+                                    }
+                                }
+
+                                // 2) Fighter CAP loiter (actiontime), bomber scatter craters, & cancrouchexpa veteran prone.
+                                {
+                                    const auto [vx, vy] = tc5w(24, 24);
+                                    const auto [tx, ty] = tc5w(30, 24);
+                                    std::vector<ss2::assets::Infantry> infAir{
+                                        {"vet_5w", vx, vy, 900, 30, 1, 0},
+                                    };
+                                    infAir[0].expa = 6000;
+                                    ss2::TutorialUnits simAir(
+                                        ss2::InfantryPathGrid::fromSubCellMasks(64, 64, flags5w, obst5w),
+                                        infAir, {}, ss2::FogGrid(64, 64, flags5w), 2, false, {}, cat5w);
+                                    std::array<std::array<ss2::assets::AirSupportSlot, 5>, 4> air5w{};
+                                    air5w[0][4] = {"yak_5w", 1, 1};
+                                    air5w[1][0] = {"he111_5w", 1, 1};
+                                    std::array<int, 4> pGrp5w{};
+                                    std::array<std::vector<ss2::assets::ParatrooperEntry>, 4> pRos5w{};
+                                    simAir.setAirSupport(air5w, pGrp5w, pRos5w);
+                                    if (!simAir.callAirSupport(ss2::assets::AirMissionKind::Bomber, vx, vy, 1)) {
+                                        throw std::runtime_error("Phase 5W bomber air support call failed");
+                                    }
+                                    bool sawBombDrop = false;
+                                    for (int t = 0; t < 240 && !sawBombDrop; ++t) {
+                                        (void)simAir.step();
+                                        for (const auto& ae : simAir.takeAirStrikeEvents()) {
+                                            if (ae.kind == ss2::AirStrikeEvent::BombImpact) {
+                                                sawBombDrop = true;
+                                            }
+                                        }
+                                    }
+                                    if (!sawBombDrop) {
+                                        throw std::runtime_error("Phase 5W scattered bomber failed to drop bombs");
+                                    }
+                                    if (!simAir.takeSnapshot().soldiers[0].crouched) {
+                                        throw std::runtime_error("Phase 5W cancrouchexpa veteran failed to auto-prone under bomb suppression");
+                                    }
+                                    if (!simAir.callAirSupport(ss2::assets::AirMissionKind::Fighter, tx, ty, 0)) {
+                                        throw std::runtime_error("Phase 5W fighter air support call failed");
+                                    }
+                                    int fighterTicksAlive = 0;
+                                    for (int t = 0; t < 260; ++t) {
+                                        (void)simAir.step();
+                                        const auto poses = simAir.takeAirSorties();
+                                        for (const auto& sp : poses) {
+                                            if (sp.kind == ss2::assets::AirMissionKind::Fighter && sp.active && sp.alive) {
+                                                ++fighterTicksAlive;
+                                            }
+                                        }
+                                    }
+                                    if (fighterTicksAlive < 110) {
+                                        throw std::runtime_error("Phase 5W fighter actiontime CAP loiter too short");
+                                    }
+                                }
+
+                                // 3) Combined-arms AI: Counter-battery on muzzleRevealTicks & AI Sapper mine clear.
+                                {
+                                    const auto [aiGunX, aiGunY] = tc5w(10, 20);
+                                    const auto [pArtX, pArtY] = tc5w(19, 20);
+                                    const auto [aiSapX, aiSapY] = tc5w(32, 20);
+                                    std::vector<ss2::assets::Infantry> infAi{
+                                        {"sapper_5w", aiSapX, aiSapY, 100, 30, 5, 1},
+                                    };
+                                    std::vector<ss2::assets::Placement> vehAi{
+                                        {"gun_5w", aiGunX, aiGunY, 0, 100, 100, 6, 1},
+                                        {"gun_5w", pArtX, pArtY, 0, 100, 100, 1, 0},
+                                    };
+                                    ss2::TutorialUnits simAi(
+                                        ss2::InfantryPathGrid::fromSubCellMasks(64, 64, flags5w, obst5w),
+                                        infAi, vehAi, ss2::FogGrid(64, 64, flags5w), 2, false, {}, cat5w);
+                                    std::vector<std::uint8_t> minesAi(64u * 64u, 0u);
+                                    minesAi[20u * 64u + 34u] = 0x05u; // Player 0 AT mine 2t east of AI Sapper
+                                    simAi.setMines(minesAi);
+                                    simAi.revealFogAt(aiGunX, aiGunY, 6, 1);
+
+                                    // Player artillery fires once at distant empty ground to emit muzzleRevealTicks (> 0) without line-of-sight
+                                    const auto [shellTargetX, shellTargetY] = tc5w(28, 20);
+                                    (void)simAi.orderAttackGroundVehicles(std::array<size_t, 1>{1u}, shellTargetX, shellTargetY);
+                                    std::vector<std::uint8_t> zonesAi(64u * 64u, 0u);
+                                    for (int t = 0; t < 120; ++t) {
+                                        (void)simAi.orderGroupSoldArt(6u, 0u, zonesAi, 0u, aiGunX, aiGunY, false, 0u, 0, 0, false, true);
+                                        (void)simAi.step();
+                                    }
+                                    if (simAi.takeSnapshot().vehicles[1].hp >= 200) {
+                                        throw std::runtime_error("Phase 5W AI counter-battery failed to hit firing unspotted player artillery");
+                                    }
+                                    if (!simAi.visibleMines(0).empty()) {
+                                        throw std::runtime_error("Phase 5W AI Sapper failed to detect & disarm hostile player mine");
+                                    }
+                                }
+
+                                std::cout << "Phase 5W universal Shift queues, shoot-and-scoot, CAP loiter, cancrouchexpa, forest/crater cover & combined-arms AI PASSED\n";
+                            }
                         }
                     }
 }

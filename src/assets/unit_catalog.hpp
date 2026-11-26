@@ -183,6 +183,7 @@ struct UnitSpec {
     int bonusShotDeadZone{0};
     int scanDelay{0};
     int expaCrush{0};
+    bool canCrouchExpa{false};
     std::string towWeightClass;
     std::array<double, 6> towSpeedByClass{};
 
@@ -367,6 +368,9 @@ struct PlaneSpec {
     int groundAmmo{0};
     std::string groundShotId;
     HitType groundHitType{HitType::None};
+    int actionTime{0};
+    int bombAccuracy{0};
+    int bombReloadTime{0};
 
     bool isLeafletBomber() const { return bombId == "fsheet"; }
     bool isRocketAttacker() const { return groundShotSound == "rocket" || groundShotId == "rs"; }
@@ -448,7 +452,8 @@ public:
     static std::shared_ptr<const UnitCatalog> load(const std::filesystem::path& gameDir,
                                                    unsigned scheme = 0);
     static std::shared_ptr<const UnitCatalog> fromSpecs(std::vector<UnitSpec> specs,
-                                                        std::vector<PlaneSpec> planes = {});
+                                                        std::vector<PlaneSpec> planes = {},
+                                                        bool retailCatalog = false);
     static HitType parseHitTypeName(std::string_view token);
     static UnitSpec parseUnitText(std::string_view unitId, std::string_view descText,
                                   std::string_view langText = {},
@@ -464,6 +469,7 @@ public:
     const MineSpec& mineSpec() const { return mineSpec_; }
     const WeatherSpec& weather() const noexcept { return weather_; }
     const ParaSpec& paraSpec() const noexcept { return paraSpec_; }
+    bool hasRetailCatalog() const noexcept { return hasDesc_; }
     int tankArmorProtection(HitType ht) const {
         if (ht == HitType::Pierce || ht == HitType::Transpierce) return tankArmorProtectionPierce_;
         if (ht == HitType::Explosive || ht == HitType::Mine) return tankArmorProtectionExplosive_;

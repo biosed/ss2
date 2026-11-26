@@ -616,7 +616,8 @@ void GameSession::updateHudAndBeams() {
     const bool showAltSalvage = altHeld && vehicleScene && simulation;
     if (!activeVfx.empty() || !orderPulses.empty() || !burningWrecks.empty() ||
         !lightDamageSmokeVehicles.empty() || !heavyDamageSmokeVehicles.empty() ||
-        !movingSmokeVehicles.empty() || !livePlanes.empty() || hasAirTrailBeams || !orderLines.empty() ||
+        !movingSmokeVehicles.empty() || !movingWaterVehicles.empty() || !livePlanes.empty() ||
+        !liveParachutes.empty() || hasAirTrailBeams || !orderLines.empty() ||
         previewRing || facePreview || showRightDragPreview || !rangePreviews.empty() || threatRing.active ||
         objectiveMarkerSim.has_value() || !visibleOnScreenMines.empty() ||
         !statusBadges.empty() || !beamZeppelins.empty() || !activeBeacons.empty() ||
@@ -641,7 +642,7 @@ void GameSession::updateHudAndBeams() {
         const float s = static_cast<float>(mapScale);
         const auto pushIsoEllipse = [&](float cx, float cy, float radiusSimPx, int segments, float lineW,
                                         std::uint8_t r, std::uint8_t g, std::uint8_t b, float alpha,
-                                        bool additiveGlow = false) {
+                                        bool additiveGlow = false, bool underSprites = false) {
             constexpr float kTwoPi = 6.28318530717958647692f;
             const float rx = radiusSimPx * s;
             const float ry = radiusSimPx * 0.5f * s;
@@ -650,7 +651,7 @@ void GameSession::updateHudAndBeams() {
                 const float a1 = (static_cast<float>(seg + 1) / static_cast<float>(segments)) * kTwoPi;
                 beams.push_back({cx + std::cos(a0) * rx, cy + std::sin(a0) * ry,
                                  cx + std::cos(a1) * rx, cy + std::sin(a1) * ry,
-                                 lineW, r, g, b, alpha, alpha, additiveGlow});
+                                 lineW, r, g, b, alpha, alpha, additiveGlow, underSprites});
             }
         };
         if (hasSelectionRings) {
@@ -667,7 +668,7 @@ void GameSession::updateHudAndBeams() {
                     if (!inViewBounds(ux, uy)) continue;
                     const bool bino = binocularUnits.contains(sid);
                     pushIsoEllipse(ux, uy, 11.0f, 12, 1.5f * s,
-                                   bino ? 244 : 110, bino ? 186 : 224, bino ? 78 : 120, 0.48f);
+                                   bino ? 244 : 110, bino ? 186 : 224, bino ? 78 : 120, 0.48f, false, true);
                     ++ringUnits;
                 }
             }
@@ -681,7 +682,7 @@ void GameSession::updateHudAndBeams() {
                     const float vx = static_cast<float>(v.x) * s;
                     const float vy = static_cast<float>(v.y) * s;
                     if (!inViewBounds(vx, vy)) continue;
-                    pushIsoEllipse(vx, vy, 22.0f, 16, 1.8f * s, 110, 224, 120, 0.52f);
+                    pushIsoEllipse(vx, vy, 22.0f, 16, 1.8f * s, 110, 224, 120, 0.52f, false, true);
                     ++ringUnits;
                 }
             }
@@ -1104,7 +1105,66 @@ void GameSession::updateHudAndBeams() {
             if (hud && hud->hasActiveAirTrails() && beams.size() < kCombatBeamCap) {
                 hud->appendAirTrailBeams(mapScale, kCombatBeamCap - beams.size(), beams);
             }
+            if (vehicleScene && !movingWaterVehicles.empty()) {
+                const auto& vehs = vehicleScene->vehicles();
+                const float animPhase = std::chrono::duration<float>(now - animStart).count();
+                std::size_t wDrawn = 0;
+                for (const std::size_t vi : movingWaterVehicles) {
+                    if (wDrawn >= 8u || beams.size() + 6u >= kCombatBeamCap || vi >= vehs.size()) break;
+                    const auto& v = vehs[vi];
+                    if (!v.alive || !v.visible) continue;
+                    const float vx = static_cast<float>(v.x * mapScale);
+                    const float vy = static_cast<float>(v.y * mapScale);
+                    if (!inViewBounds(vx, vy)) continue;
+                    constexpr float kTwoPi = 6.28318530717958647692f;
+                    const float dirAng = (static_cast<float>(v.hullDir & 31u) / 32.0f) * kTwoPi;
+                    const float fwdU = std::cos(dirAng);
+                    const float fwdV = std::sin(dirAng);
+                    float bfx = fwdU - fwdV;
+                    float bfy = 0.5f * (fwdU + fwdV);
+                    const float bLen = std::max(1e-3f, std::hypot(bfx, bfy));
+                    bfx /= bLen;
+                    bfy /= bLen;
+                    const float latX = -bfy;
+                    const float latY = bfx * 0.65f;
+                    const float pulse = 0.90f + 0.12f * std::sin(animPhase * 6.0f + static_cast<float>(vi));
+                    const float bowX = vx + bfx * 8.0f * s;
+                    const float bowY = vy + bfy * 8.0f * s;
+                    const float trailL = 24.0f * s * pulse;
+                    const float spread = 11.0f * s * pulse;
+                    // Left & right V-wake foam arms behind stern/bow, rendered under unit sprites
+                    beams.push_back({bowX, bowY, vx - bfx * trailL + latX * spread, vy - bfy * trailL + latY * spread,
+                                     2.8f * s, 210, 210, 210, 0.42f, 0.04f, false, true});
+                    beams.push_back({bowX, bowY, vx - bfx * trailL - latX * spread, vy - bfy * trailL - latY * spread,
+                                     2.8f * s, 210, 210, 210, 0.42f, 0.04f, false, true});
+                    beams.push_back({vx - bfx * 4.0f * s, vy - bfy * 4.0f * s,
+                                     vx - bfx * 16.0f * s, vy - bfy * 16.0f * s,
+                                     5.5f * s, 210, 210, 210, 0.22f, 0.03f, false, true});
+                    ++wDrawn;
+                }
+            }
             const bool hasRetailVfx = combatVfx.hasRetailAssets();
+            for (const auto& pp : liveParachutes) {
+                if (beams.size() + 6u >= kCombatBeamCap || !pp.second.active) continue;
+                const auto& p = pp.second;
+                const float px = static_cast<float>(p.x) * s;
+                const float py = static_cast<float>(p.y) * s;
+                const float cy = py - static_cast<float>(std::max(0, p.altitudePx)) * s;
+                if (!inViewBounds(px, py) && !inViewBounds(px, cy)) continue;
+                const float altFrac = std::clamp(static_cast<float>(p.altitudePx) / 280.0f, 0.0f, 1.0f);
+                beams.push_back({px, py, px, py, (6.0f + 5.0f * (1.0f - altFrac)) * s, 60, 55, 50,
+                                 0.34f * (1.0f - 0.35f * altFrac), 0.34f * (1.0f - 0.35f * altFrac), false, true});
+                if (!hasRetailVfx) {
+                    const float topY = cy - 16.0f * s;
+                    const float rimY = topY + 2.6f * s;
+                    beams.push_back({px - 8.0f * s, rimY, px - 3.0f * s, topY, 3.8f * s, 255, 240, 190, 0.90f, 0.90f});
+                    beams.push_back({px - 3.0f * s, topY, px + 3.0f * s, topY, 4.2f * s, 255, 240, 190, 0.94f, 0.94f});
+                    beams.push_back({px + 3.0f * s, topY, px + 8.0f * s, rimY, 3.8f * s, 255, 240, 190, 0.90f, 0.90f});
+                    beams.push_back({px - 7.0f * s, rimY, px, cy, 1.1f * s, 210, 210, 210, 0.65f, 0.55f});
+                    beams.push_back({px, topY + 1.0f * s, px, cy, 1.1f * s, 210, 210, 210, 0.60f, 0.50f});
+                    beams.push_back({px + 7.0f * s, rimY, px, cy, 1.1f * s, 210, 210, 210, 0.65f, 0.55f});
+                }
+            }
             for (const auto& bw : burningWrecks) {
                 if (beams.size() >= kCombatBeamCap) break;
                 const float tSec = std::chrono::duration<float>(bw.until - now).count();
@@ -1113,7 +1173,7 @@ void GameSession::updateHudAndBeams() {
                 const float glow = 0.55f + 0.35f * std::sin(tSec * 9.0f);
                 beams.push_back({bw.x, bw.y - 6.0f * s, bw.x + sway, bw.y - rise, 10.0f * s, 60, 55, 50, 0.45f, 0.08f});
                 if (addGlow) {
-                    beams.push_back({bw.x, bw.y, bw.x, bw.y, 32.0f * s, 255, 145, 40, glow * 0.24f, glow * 0.24f, true});
+                    beams.push_back({bw.x, bw.y, bw.x, bw.y, 40.0f * s, 255, 145, 40, glow * 0.30f, glow * 0.30f, true, true});
                 }
                 beams.push_back({bw.x, bw.y - 4.0f * s, bw.x, bw.y - 4.0f * s, 5.0f * s, 235, 100, 30, glow, glow, addGlow});
             }
@@ -1133,7 +1193,7 @@ void GameSession::updateHudAndBeams() {
                     if (addGlow) {
                         const float mx = (v.x0 + ex) * 0.5f;
                         const float my = (v.y0 + ey) * 0.5f;
-                        beams.push_back({mx, my, mx, my, 26.0f * s, 255, 145, 40, 0.25f * fade, 0.25f * fade, true});
+                        beams.push_back({mx, my, mx, my, 30.0f * s, 255, 145, 40, 0.28f * fade, 0.28f * fade, true, true});
                     }
                     if (!hasRetailVfx) {
                         beams.push_back({v.x0, v.y0, ex, ey, 11.0f * s * flick, 255, 145, 40, 0.90f * fade, 0.25f * fade, addGlow});
@@ -1147,7 +1207,7 @@ void GameSession::updateHudAndBeams() {
                     if (t < 0.45f) {
                         const float fa = 1.0f - (t / 0.45f);
                         if (addGlow) {
-                            beams.push_back({v.x0, v.y0, v.x0, v.y0, (heavy ? 28.0f : 16.0f) * s, 255, 145, 40, fa * 0.28f, fa * 0.28f, true});
+                            beams.push_back({v.x0, v.y0, v.x0, v.y0, (heavy ? 32.0f : 18.0f) * s, 255, 145, 40, fa * 0.30f, fa * 0.30f, true, true});
                         }
                         beams.push_back({v.x0, v.y0, v.x0, v.y0, (heavy ? 12.0f : 8.5f) * s, 255, 230, 130, fa, fa, addGlow});
                     }
@@ -1199,10 +1259,10 @@ void GameSession::updateHudAndBeams() {
                     const float fade = 1.0f - t;
                     const float fireR = (10.0f + 22.0f * std::min(1.0f, t * 2.0f)) * sc * s;
                     if (addGlow) {
-                        beams.push_back({v.x0, v.y0, v.x0, v.y0, fireR * 2.2f, 255, 145, 40, fade * 0.34f, fade * 0.34f, true});
+                        beams.push_back({v.x0, v.y0, v.x0, v.y0, fireR * 2.5f, 255, 145, 40, fade * 0.36f, fade * 0.36f, true, true});
                         if (beams.size() + 14u < kCombatBeamCap) {
-                            pushIsoEllipse(v.x0, v.y0, (12.0f + 44.0f * t) * sc, 12, 1.6f * s,
-                                           255, 230, 130, fade * 0.40f, true);
+                            pushIsoEllipse(v.x0, v.y0, (12.0f + 44.0f * t) * sc, 12, 1.8f * s,
+                                           255, 230, 130, fade * 0.42f, true, true);
                         }
                     }
                     if (!hasRetailVfx) {
@@ -1233,13 +1293,21 @@ void GameSession::updateHudAndBeams() {
                     const float sway = std::sin(t * 9.0f) * 4.5f * s * (1.0f - t);
                     const float px = v.x1 + sway;
                     const float py = v.y0 + (v.y1 - v.y0) * t;
-                    const float cy = py - 14.0f * s;
+                    const float cy = py - 15.0f * s;
                     beams.push_back({v.x1, v.y1, v.x1, v.y1, (10.0f - 4.0f * t) * s, 60, 55, 50,
-                                     0.38f * (1.0f - 0.5f * t), 0.38f * (1.0f - 0.5f * t)});
-                    beams.push_back({px - 6.0f * s, cy, px + 6.0f * s, cy, 9.0f * s, 255, 240, 190,
-                                     0.88f * fade, 0.88f * fade});
-                    beams.push_back({px, cy + 2.0f * s, px, py, 1.8f * s, 255, 240, 190,
-                                     0.65f * fade, 0.45f * fade});
+                                     0.38f * (1.0f - 0.5f * t), 0.38f * (1.0f - 0.5f * t), false, true});
+                    beams.push_back({px - 8.5f * s, cy + 2.0f * s, px - 3.2f * s, cy - 1.5f * s,
+                                     4.2f * s, 255, 240, 190, 0.88f * fade, 0.92f * fade});
+                    beams.push_back({px - 3.2f * s, cy - 1.5f * s, px + 3.2f * s, cy - 1.5f * s,
+                                     4.8f * s, 255, 240, 190, 0.94f * fade, 0.94f * fade});
+                    beams.push_back({px + 3.2f * s, cy - 1.5f * s, px + 8.5f * s, cy + 2.0f * s,
+                                     4.2f * s, 255, 240, 190, 0.92f * fade, 0.88f * fade});
+                    beams.push_back({px - 7.5f * s, cy + 2.0f * s, px, py, 1.15f * s, 210, 210, 210,
+                                     0.68f * fade, 0.48f * fade});
+                    beams.push_back({px, cy - 0.5f * s, px, py, 1.15f * s, 210, 210, 210,
+                                     0.62f * fade, 0.45f * fade});
+                    beams.push_back({px + 7.5f * s, cy + 2.0f * s, px, py, 1.15f * s, 210, 210, 210,
+                                     0.68f * fade, 0.48f * fade});
                     break;
                 }
                 case ActiveVfx::Kind::Ricochet: {
@@ -1250,6 +1318,26 @@ void GameSession::updateHudAndBeams() {
                     const float ty0 = v.y0 + (v.y1 - v.y0) * std::max(0.0f, t - 0.45f);
                     beams.push_back({v.x0, v.y0, v.x0, v.y0, 7.0f * s, 255, 230, 130, fade * 0.85f, fade * 0.85f, addGlow});
                     beams.push_back({tx0, ty0, px, py, 2.2f * s, 255, 195, 90, fade * 0.25f, fade * 0.95f, addGlow});
+                    break;
+                }
+                case ActiveVfx::Kind::MuzzleDust: {
+                    const float fade = (1.0f - t) * (1.0f - t);
+                    const float dx = v.x1 - v.x0;
+                    const float dy = v.y1 - v.y0;
+                    const float reach = 0.25f + 0.85f * t;
+                    const float ex = v.x0 + dx * reach;
+                    const float ey = v.y0 + dy * reach;
+                    const float len = std::max(1.0f, std::hypot(dx, dy));
+                    const float latX = (-dy / len) * (4.0f + 10.0f * t) * s;
+                    const float latY = (dx / len) * (4.0f + 10.0f * t) * 0.65f * s;
+                    const float w = (5.5f + 11.0f * t) * s;
+                    beams.push_back({v.x0, v.y0, ex, ey, w, 210, 210, 210, 0.36f * fade, 0.04f, false, true});
+                    beams.push_back({v.x0, v.y0, ex + latX, ey + latY, w * 0.72f, 210, 210, 210, 0.28f * fade, 0.03f, false, true});
+                    beams.push_back({v.x0, v.y0, ex - latX, ey - latY, w * 0.72f, 210, 210, 210, 0.28f * fade, 0.03f, false, true});
+                    if (addGlow && t < 0.35f) {
+                        const float gf = 1.0f - (t / 0.35f);
+                        beams.push_back({v.x0, v.y0, v.x0, v.y0, 24.0f * s, 255, 145, 40, 0.26f * gf, 0.26f * gf, true, true});
+                    }
                     break;
                 }
                 }

@@ -29,6 +29,7 @@ public:
 
     std::uint8_t tile(int tileX, int tileY) const;
     bool isElevated(int tileX, int tileY) const;
+    bool isForestCover(int tileX, int tileY) const;
     std::span<const std::uint8_t> raw() const { return fog_; }
     int width() const { return tileWidth_; }
     int height() const { return tileHeight_; }

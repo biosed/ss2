@@ -429,26 +429,43 @@ void GameSession::doUnloadOrUnhitch() {
     if (!handledU && !selection->selectedVehicles().empty()) {
         const auto& vsel = selection->selectedVehicles();
         const std::vector<size_t> vids(vsel.begin(), vsel.end());
-        const size_t unhitched = simulation->unhitchVehicles(vids);
-        if (unhitched > 0) {
-            if (vehicleScene && !vids.empty() && vids.front() < vehicleScene->vehicles().size()) {
-                const auto& v = vehicleScene->vehicles()[vids.front()];
-                pushOrderPulse(v.x, v.y, OrderPulse::Kind::Support);
+        if ((SDL_GetModState() & SDL_KMOD_SHIFT) != 0) {
+            std::vector<size_t> towIds, cargoIds;
+            for (const size_t id : vids) {
+                if (id < vehicleTowed.size() && vehicleTowed[id] >= 0) towIds.push_back(id);
+                else if (id < vehicleCargo.size() && vehicleCargo[id].first > 0) cargoIds.push_back(id);
             }
-            playSelectionVoice("unload");
-            showNotice(ss2::trf("Unhitched {0} field guns.", {std::to_string(unhitched)}),
-                       ss2::NoticeKind::accepted);
-            handledU = true;
+            size_t queued = 0;
+            if (!towIds.empty()) queued += simulation->queueVehicleOrder(towIds, ss2::QueuedVehicleOp::Unhitch, 0, 0);
+            if (!cargoIds.empty()) queued += simulation->queueVehicleOrder(cargoIds, ss2::QueuedVehicleOp::Unload, 0, 0);
+            if (queued > 0) {
+                playSelectionVoice("unload");
+                showNotice(ss2::trf("Queued unload/unhitch ({0} vehicles).", {std::to_string(queued)}),
+                           ss2::NoticeKind::accepted);
+                handledU = true;
+            }
         } else {
-            const size_t unloaded = simulation->unloadVehicles(vids);
-            if (unloaded > 0) {
+            const size_t unhitched = simulation->unhitchVehicles(vids);
+            if (unhitched > 0) {
                 if (vehicleScene && !vids.empty() && vids.front() < vehicleScene->vehicles().size()) {
                     const auto& v = vehicleScene->vehicles()[vids.front()];
                     pushOrderPulse(v.x, v.y, OrderPulse::Kind::Support);
                 }
                 playSelectionVoice("unload");
-                showNotice(ss2::trf("Unloaded {0} soldiers.", {std::to_string(unloaded)}), ss2::NoticeKind::accepted);
+                showNotice(ss2::trf("Unhitched {0} field guns.", {std::to_string(unhitched)}),
+                           ss2::NoticeKind::accepted);
                 handledU = true;
+            } else {
+                const size_t unloaded = simulation->unloadVehicles(vids);
+                if (unloaded > 0) {
+                    if (vehicleScene && !vids.empty() && vids.front() < vehicleScene->vehicles().size()) {
+                        const auto& v = vehicleScene->vehicles()[vids.front()];
+                        pushOrderPulse(v.x, v.y, OrderPulse::Kind::Support);
+                    }
+                    playSelectionVoice("unload");
+                    showNotice(ss2::trf("Unloaded {0} soldiers.", {std::to_string(unloaded)}), ss2::NoticeKind::accepted);
+                    handledU = true;
+                }
             }
         }
     }
@@ -488,7 +505,10 @@ void GameSession::doLayMine() {
     syncActiveSubgroup();
     const auto ids = activeInfantrySelection();
     if (ids.empty()) return;
-    const size_t laid = simulation->layMine(ids);
+    const bool shiftQueue = (SDL_GetModState() & SDL_KMOD_SHIFT) != 0;
+    const size_t laid = shiftQueue
+        ? simulation->queueSoldierOrder(ids, ss2::QueuedSoldierOp::LayMine, 0, 0)
+        : simulation->layMine(ids);
     if (laid > 0) {
         liveVisibleMines = simulation->visibleMines();
         if (const auto ctr = selection->selectionCentroid()) {
@@ -496,6 +516,7 @@ void GameSession::doLayMine() {
             pushOrderPulse(ctr->first / s, ctr->second / s, OrderPulse::Kind::Support);
         }
         playSelectionVoice("laymine");
+        if (shiftQueue) showNotice(ss2::tr("Queued mine-laying order."), ss2::NoticeKind::accepted);
     } else {
         orderNotice.show(ss2::tr("Select a Sapper with AT mines to lay mines here."), ss2::NoticeKind::unsupported);
     }

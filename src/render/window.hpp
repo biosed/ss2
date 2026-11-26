@@ -45,6 +45,7 @@ struct MapBeam {
     std::uint8_t r{255}, g{255}, b{255};
     float alpha0{1}, alpha1{1};
     bool additive{false};
+    bool underSprites{false};
 };
 
 // Optional GPU terrain reconstruction (subpixel pixel-AA / 5-tap Catmull-Rom + CAS),

@@ -1304,24 +1304,8 @@ struct VulkanWindow::Impl {
         }
         auto* out = static_cast<SpriteVertex*>(device->mapMemory(*spriteMemory, 0, bytes));
         std::uint32_t index = 0;
-        for (const auto& s : sprites) {
-            const auto& atlas = atlases[s.atlas];
-            const float u0 = s.u0 / atlas.width, u1 = s.u1 / atlas.width;
-            const float v0 = s.v0 / atlas.height, v1 = s.v1 / atlas.height;
-            const float x1 = s.x + s.width, y1 = s.y + s.height;
-            const SpriteVertex corners[4] = {{s.x, s.y, u0, v0, s.brightness, s.alpha}, {x1, s.y, u1, v0, s.brightness, s.alpha},
-                                             {x1, y1, u1, v1, s.brightness, s.alpha}, {s.x, y1, u0, v1, s.brightness, s.alpha}};
-            for (int corner : {0, 1, 2, 0, 2, 3}) *out++ = corners[corner];
-            if (spriteBatches.empty() || spriteBatches.back().atlas != s.atlas)
-                spriteBatches.push_back({s.atlas, index, 0});
-            spriteBatches.back().count += 6;
-            index += 6;
-        }
-        // Beams: a quad along the segment that samples across one colour's glow, or the
-        // whole glow when the segment is a point.
-        if (!beams.empty()) spriteBatches.push_back({beamAtlas, index, std::uint32_t(beams.size() * 6)});
         const float rowsTotal = float(std::max(1u, atlases[beamAtlas].height));
-        for (const auto& b : beams) {
+        const auto emitBeam = [&](const MapBeam& b) {
             const auto colour = std::find(beamPalette.begin(), beamPalette.end(), std::array<std::uint8_t, 3>{b.r, b.g, b.b});
             const float row = float(colour - beamPalette.begin()) * beamBlock;
             const float inset = 0.5f / beamBlock, half = b.width / 2;
@@ -1343,6 +1327,37 @@ struct VulkanWindow::Impl {
                 corners[3] = {b.x0 - nx, b.y0 - ny, 1 - inset, v, bTone, b.alpha0};
             }
             for (int corner : {0, 1, 2, 0, 2, 3}) *out++ = corners[corner];
+            index += 6;
+        };
+        const std::size_t underCount = static_cast<std::size_t>(std::count_if(
+            beams.begin(), beams.end(), [](const MapBeam& b) { return b.underSprites; }));
+        if (underCount > 0) {
+            spriteBatches.push_back({beamAtlas, index, std::uint32_t(underCount * 6)});
+            for (const auto& b : beams) {
+                if (b.underSprites) emitBeam(b);
+            }
+        }
+        for (const auto& s : sprites) {
+            const auto& atlas = atlases[s.atlas];
+            const float u0 = s.u0 / atlas.width, u1 = s.u1 / atlas.width;
+            const float v0 = s.v0 / atlas.height, v1 = s.v1 / atlas.height;
+            const float x1 = s.x + s.width, y1 = s.y + s.height;
+            const SpriteVertex corners[4] = {{s.x, s.y, u0, v0, s.brightness, s.alpha}, {x1, s.y, u1, v0, s.brightness, s.alpha},
+                                             {x1, y1, u1, v1, s.brightness, s.alpha}, {s.x, y1, u0, v1, s.brightness, s.alpha}};
+            for (int corner : {0, 1, 2, 0, 2, 3}) *out++ = corners[corner];
+            if (spriteBatches.empty() || spriteBatches.back().atlas != s.atlas)
+                spriteBatches.push_back({s.atlas, index, 0});
+            spriteBatches.back().count += 6;
+            index += 6;
+        }
+        // Beams: a quad along the segment that samples across one colour's glow, or the
+        // whole glow when the segment is a point.
+        const std::size_t overCount = beams.size() - underCount;
+        if (overCount > 0) {
+            spriteBatches.push_back({beamAtlas, index, std::uint32_t(overCount * 6)});
+            for (const auto& b : beams) {
+                if (!b.underSprites) emitBeam(b);
+            }
         }
         device->unmapMemory(*spriteMemory);
     }

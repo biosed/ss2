@@ -58,6 +58,7 @@ size_t TutorialUnits::orderAttack(std::span<const size_t> ids, size_t targetInde
         s.captureVehicleTarget.reset();
         s.garrisonTarget.reset();
         s.queuedGoals.clear();
+        s.pendingActions.clear();
         s.patrolOrigin.reset();
         s.patrolDest.reset();
         s.attackMove = false;
@@ -151,6 +152,12 @@ void TutorialUnits::applySuppression(size_t soldierIdx, int addTicks, bool allow
         effective = std::max(1, addTicks / 2);
     }
     tgt.suppressionTicks = std::min(35, tgt.suppressionTicks + effective);
+    if (tgt.canCrouchExpa && tgt.expa >= 4000 && tgt.suppressionTicks >= 12 &&
+        !tgt.crouched && !tgt.garrisonBuilding && !tgt.embarked &&
+        !tgt.isFlamer && !tgt.isMortar) {
+        tgt.crouched = true;
+        fogDirty_ = true;
+    }
 }
 
 void TutorialUnits::applyVehicleSuppression(size_t vehicleIdx, int addTicks, int threatX, int threatY) {
@@ -243,6 +250,7 @@ size_t TutorialUnits::orderAttackGroundSoldiers(std::span<const size_t> indices,
         s.patrolOrigin.reset();
         s.patrolDest.reset();
         s.queuedGoals.clear();
+        s.pendingActions.clear();
         s.attackMove = false;
         s.attackGround = std::pair{clampedX, clampedY};
         ++accepted;
@@ -890,9 +898,12 @@ void TutorialUnits::applyMortarSplash(int impactX, int impactY, int rawDamage, i
         const double sd = det::detHypot(static_cast<double>(sx - impactX), static_cast<double>(sy - impactY));
         if (sd > kMortarSplashR) continue;
         const double falloff = 1.0 - 0.55 * (sd / kMortarSplashR);
-        const int splashDmg = scaleVehicleDamageForDifficulty(
+        int splashDmg = scaleVehicleDamageForDifficulty(
             ss.owner, std::max(1, static_cast<int>(det::detRoundToInt(
                 static_cast<double>(rawDamage) * 0.65 * falloff))));
+        if (infantryCoverKindAtTile(ss.cell.x / 2, ss.cell.y / 2) > 0) {
+            splashDmg = std::max(1, (splashDmg * 3) / 4);
+        }
         ss.hp = std::max(0, ss.hp - splashDmg);
         if (ss.hp > 0) applySuppression(k, 25);
         recordHit(ss.owner, ss.group);
@@ -1150,7 +1161,7 @@ void TutorialUnits::stepCombat(std::vector<SoldierPose>& changed) {
                     true, vis, gx, gy, false, s.expa, s.kills, threwGrenade, s.atGrenades,
                     s.isFlamer, isSoldierCamouflaged(s), s.mineAmmo, s.ammo, s.isMortar
                 });
-                if (threwGrenade || s.ammo <= 0) s.attackGround.reset();
+                if (threwGrenade || s.ammo <= 0 || !s.pendingActions.empty()) s.attackGround.reset();
             }
             continue;
         }
@@ -1348,9 +1359,10 @@ void TutorialUnits::stepCombat(std::vector<SoldierPose>& changed) {
             const int flightTicks = std::max(1, int(std::ceil(dist / double(speed))));
             const int baseHitPct = sniperHitPercent(t.desc.armorSniper);
             const int marksmanBonus = (s.isSniper && s.crouched && !s.motion) ? 20 : 0;
+            const int coverPenalty = infantryCoverKindAtTile(t.cell.x / 2, t.cell.y / 2) > 0 ? 15 : 0;
             const int hitPct = s.isSniper
-                ? std::clamp(baseHitPct + marksmanBonus - (t.crouched ? 25 : 0), 10, 95)
-                : (t.crouched ? std::max(10, baseHitPct - 25) : baseHitPct);
+                ? std::clamp(baseHitPct + marksmanBonus - (t.crouched ? 25 : 0) - coverPenalty, 10, 95)
+                : std::max(10, baseHitPct - (t.crouched ? 25 : 0) - coverPenalty);
             projectiles_.push_back(Projectile{
                 i, tid, rawDamage, hitPct, std::max(1, flightTicks - 1), s.isFlamer, s.isMortar, s.isHeavyMg
             });
@@ -1516,7 +1528,8 @@ void TutorialUnits::stepOpenTopPassengerFire(std::vector<SoldierPose>& changed) 
             const int speed = std::max(1, p.desc.projectileSpeed);
             const int flightTicks = std::max(1, int(std::ceil(bestDist / double(speed))));
             const int baseHitPct = sniperHitPercent(t.desc.armorSniper);
-            const int hitPct = t.crouched ? std::max(10, baseHitPct - 25) : baseHitPct;
+            const int coverPenalty = infantryCoverKindAtTile(t.cell.x / 2, t.cell.y / 2) > 0 ? 15 : 0;
+            const int hitPct = std::max(10, baseHitPct - (t.crouched ? 25 : 0) - coverPenalty);
             projectiles_.push_back(Projectile{
                 pIdx, tid, rawDamage, hitPct, std::max(1, flightTicks - 1), p.isFlamer, p.isMortar, p.isHeavyMg
             });
@@ -1555,19 +1568,53 @@ void TutorialUnits::reactToAttack(int victimOwner, int victimGroup, int attacker
     }
     if (victimGroup > 0) {
         int alerted = 0;
+        int garrisoned = 0;
+        const bool tryGarrison = catalog_ && catalog_->hasRetailCatalog() && !buildings_.empty();
         for (size_t i = 0; i < soldiers_.size() && alerted < 6; ++i) {
             auto& s = soldiers_[i];
             if (s.hp <= 0 || s.owner != victimOwner || s.group != victimGroup) continue;
             if (s.embarked || s.garrisonBuilding || s.motion || s.goal ||
-                s.attackTarget || s.autoTarget || s.holdFire) {
+                s.attackTarget || s.autoTarget || s.holdFire || s.garrisonTarget) {
                 continue;
             }
             if (s.lastReactTick != 0 && tick_ - s.lastReactTick < 50u) continue;
             const auto [su, sv] = soldierWorld(s);
             const int sx = originX_ + su - sv;
             const int sy = (su + sv) / 2;
-            if (det::detHypot(static_cast<double>(attackerX - sx), static_cast<double>(attackerY - sy)) > 760.0) {
-                continue;
+            const double atkDist = det::detHypot(static_cast<double>(attackerX - sx), static_cast<double>(attackerY - sy));
+            if (atkDist > 760.0) continue;
+            if (tryGarrison && garrisoned < 2 && atkDist > 180.0 &&
+                s.canFireFromInside && !s.isKamikaze && !s.isMortar && !s.isSapper) {
+                std::optional<size_t> bestBld;
+                double bestBd = 112.0;
+                for (size_t bi = 0; bi < buildings_.size(); ++bi) {
+                    const auto& b = buildings_[bi];
+                    if (b.destroyed || b.hp * 2 < b.maxHp ||
+                        (b.owner >= 0 && b.owner != s.owner) ||
+                        static_cast<int>(b.occupants.size()) >= b.capacity) {
+                        continue;
+                    }
+                    const double bd = det::detHypot(static_cast<double>(b.x - sx), static_cast<double>(b.y - sy));
+                    if (bd <= bestBd && (sameTile(s.cell, b.entryCell) || grid_.hasTerrainRoute(s.cell, b.entryCell))) {
+                        bestBd = bd;
+                        bestBld = bi;
+                    }
+                }
+                if (bestBld) {
+                    s.garrisonTarget = *bestBld;
+                    s.goal = buildings_[*bestBld].entryCell;
+                    s.route.clear();
+                    s.cursor = 0;
+                    s.planning = {};
+                    s.needsRoute = false;
+                    s.queuedGoals.clear();
+                    s.pendingActions.clear();
+                    s.attackMove = false;
+                    s.lastReactTick = tick_;
+                    ++garrisoned;
+                    ++alerted;
+                    continue;
+                }
             }
             if (orderSoldierInternal(i, attackerX, attackerY)) {
                 s.attackMove = true;

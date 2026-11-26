@@ -406,6 +406,26 @@ struct EvacuateSingleSoldier {
     bool operator==(const EvacuateSingleSoldier&) const = default;
 };
 
+struct QueueSoldierOrder {
+    static constexpr std::string_view tag = "queue-soldier-order";
+    using Result = size_t;
+    Ids soldiers;
+    std::uint8_t op{0};
+    int targetX{}, targetY{};
+    std::size_t targetIndex{0};
+    bool operator==(const QueueSoldierOrder&) const = default;
+};
+
+struct QueueVehicleOrder {
+    static constexpr std::string_view tag = "queue-vehicle-order";
+    using Result = size_t;
+    Ids vehicles;
+    std::uint8_t op{0};
+    int targetX{}, targetY{};
+    unsigned dir32{0};
+    bool operator==(const QueueVehicleOrder&) const = default;
+};
+
 using Command = std::variant<
     Move, AttackMove, Patrol, Scatter, Attack, Stop, ToggleHoldFire, ToggleCrouch, ToggleBinoculars, SpawnInfantry,
     MoveVehicles, ReverseMoveVehicles, FaceVehicles, AttackMoveVehicles, PatrolVehicles, AttackWithVehicles,
@@ -415,7 +435,7 @@ using Command = std::variant<
     AttackGroundVehicles, AttackGroundSoldiers, LayMine, DisarmMine, GroupMove, GarrisonBuilding, EvacuateBuilding,
     ToggleBuildingHoldFire, ToggleBuildingBinoculars, BuildingAttack, BuildingAttackBuilding, AttackBuilding,
     AttackBuildingWithVehicles, CallAirSupport, LoadSnapshot, Acknowledge, TogglePause, Resign, SupportBridge,
-    UnloadSingleSoldier, EvacuateSingleSoldier>;
+    UnloadSingleSoldier, EvacuateSingleSoldier, QueueSoldierOrder, QueueVehicleOrder>;
 
 // `tick` is the simulation tick at which the command was applied: after the
 // step that produced `tick` and before the next one.

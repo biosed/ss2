@@ -364,6 +364,7 @@ bool TutorialUnits::loadSnapshotWithExtra(const Snapshot& snap, const ExtraState
     } else {
         std::ranges::fill(mines_, std::uint8_t{0});
     }
+    craterTiles_.clear();
 
     for (size_t i = 0; i < soldiers_.size(); ++i) {
         auto& s = soldiers_[i];
@@ -393,6 +394,7 @@ bool TutorialUnits::loadSnapshotWithExtra(const Snapshot& snap, const ExtraState
         s.disarmWorkTicks = 0;
         s.attackMove = false;
         s.queuedGoals.clear();
+        s.pendingActions.clear();
         s.patrolOrigin.reset();
         s.patrolDest.reset();
         s.patrolToDest = true;
@@ -401,6 +403,7 @@ bool TutorialUnits::loadSnapshotWithExtra(const Snapshot& snap, const ExtraState
         s.wasCamouflaged = false;
         s.suppressionTicks = 0;
         s.wasSuppressed = false;
+        s.lastEmittedCrouch = s.crouched;
         s.spottedMask = 0;
         if (i >= snap.soldiers.size()) {
             s.hp = 0;
@@ -462,6 +465,7 @@ bool TutorialUnits::loadSnapshotWithExtra(const Snapshot& snap, const ExtraState
         v.supportTargetSoldier.reset();
         v.escortVehicleTarget.reset();
         v.escortSoldierTarget.reset();
+        v.pendingActions.clear();
         v.lastReactTick = 0;
         v.aaCooldown = 0;
         v.spottedMask = 0;

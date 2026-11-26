@@ -119,7 +119,7 @@ struct GameSession {
         unsigned direction{0};
     };
     struct ActiveVfx {
-        enum class Kind { Tracer, CannonShell, Rocket, Flamer, Explosion, VehicleExplosion, HealPulse, RepairPulse, Parachute, Ricochet };
+        enum class Kind { Tracer, CannonShell, Rocket, Flamer, Explosion, VehicleExplosion, HealPulse, RepairPulse, Parachute, Ricochet, MuzzleDust };
         Kind kind{Kind::Tracer};
         float x0{}, y0{}, x1{}, y1{};
         std::chrono::steady_clock::time_point start;
@@ -361,6 +361,7 @@ struct GameSession {
     std::vector<bool> vehicleSuppressed;
     std::vector<bool> vehicleHatchOpen;
     std::set<std::size_t> movingSmokeVehicles;
+    std::set<std::size_t> movingWaterVehicles;
     Briefing briefing;
     Notice orderNotice;
     std::deque<std::string> pendingDialogs;

@@ -132,6 +132,12 @@ bool TutorialUnits::callAirSupport(assets::AirMissionKind kind, int targetX, int
     st.altitude = altitude;
     st.isRocketAttacker = isRocketAttacker;
     st.strafeHitType = pSpec ? pSpec->effectiveGroundHitType() : assets::HitType::Machine;
+    if (kind == assets::AirMissionKind::Fighter && pSpec && pSpec->actionTime > 0) {
+        st.loiterTicksLeft = std::clamp(pSpec->actionTime / 4, 45, 240);
+    }
+    if (kind == assets::AirMissionKind::Bomber && !isLeafletBomber && pSpec && pSpec->bombAccuracy > 0) {
+        st.bombScatterPx = std::clamp(pSpec->bombAccuracy / 3, 6, 64);
+    }
     sorties_.push_back(st);
 
     sortiePoses_.push_back(AirSortiePose{
@@ -290,6 +296,29 @@ void TutorialUnits::stepAirSupport(std::vector<SoldierPose>& changed) {
         }
         st.fx += st.vx * stepScale;
         st.fy += st.vy * stepScale;
+        if (st.kind == assets::AirMissionKind::Fighter && st.payloadsLeft <= 0 && st.loiterTicksLeft > 0) {
+            const double spd = std::max(1e-4, det::detHypot(st.vx, st.vy));
+            const double rx = st.fx - static_cast<double>(st.targetX);
+            const double ry = st.fy - static_cast<double>(st.targetY);
+            const double rad = std::max(1.0, det::detHypot(rx, ry));
+            const double along = rx * (st.vx / spd) + ry * (st.vy / spd);
+            if (along >= -24.0 || rad <= 180.0) {
+                --st.loiterTicksLeft;
+                const double tx = -ry / rad;
+                const double ty = rx / rad;
+                const double pull = std::clamp((rad - 140.0) / 140.0, -0.45, 0.45);
+                const double desiredX = tx - (rx / rad) * pull;
+                const double desiredY = ty - (ry / rad) * pull;
+                const double dLen = std::max(1e-4, det::detHypot(desiredX, desiredY));
+                const double blendX = (st.vx / spd) * 0.88 + (desiredX / dLen) * 0.12;
+                const double blendY = (st.vy / spd) * 0.88 + (desiredY / dLen) * 0.12;
+                const double bLen = std::max(1e-4, det::detHypot(blendX, blendY));
+                st.vx = (blendX / bLen) * spd;
+                st.vy = (blendY / bLen) * spd;
+                st.dir32 = vehicleDirFromMapDelta(st.vx, st.vy);
+                if (fog_ && (st.loiterTicksLeft % 4) == 0) fogDirty_ = true;
+            }
+        }
     }
 
     // Air-to-air interception: active Fighter sorties engage hostile aircraft within 420px.
@@ -418,9 +447,20 @@ void TutorialUnits::stepAirSupport(std::vector<SoldierPose>& changed) {
                         AirStrikeEvent::BombImpact, ix, iy, st.owner, 0, {}, st.scoreValue, st.planeId, true
                     });
                 } else {
-                    applyAirSplash(ix, iy, 100.0, st.bombDamage, assets::HitType::Explosive, st.owner);
+                    int bx = ix;
+                    int by = iy;
+                    if (st.bombScatterPx > 0) {
+                        const std::uint32_t span = static_cast<std::uint32_t>(st.bombScatterPx * 2 + 1);
+                        const int lat = static_cast<int>(nextCombatRandom(0x7fffu) % span) - st.bombScatterPx;
+                        bx = std::clamp(static_cast<int>(det::detRoundToInt(st.fx - uy * lat)),
+                                        0, std::max(0, mapPixelW_ - 1));
+                        by = std::clamp(static_cast<int>(det::detRoundToInt(st.fy + ux * lat)),
+                                        0, std::max(0, mapPixelH_ - 1));
+                    }
+                    applyAirSplash(bx, by, 100.0, st.bombDamage, assets::HitType::Explosive, st.owner);
+                    markShellCraterAt(bx, by);
                     airEvents_.push_back(AirStrikeEvent{
-                        AirStrikeEvent::BombImpact, ix, iy, st.owner, 0, {}, st.scoreValue, st.planeId, false
+                        AirStrikeEvent::BombImpact, bx, by, st.owner, 0, {}, st.scoreValue, st.planeId, false
                     });
                 }
             }

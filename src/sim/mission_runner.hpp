@@ -60,6 +60,7 @@ public:
     size_t scatter(std::span<const size_t> indices);
     bool isValidAttackTarget(size_t targetIndex);
     bool isElevatedMapPoint(int mapX, int mapY) const;
+    int infantryCoverAtMapPoint(int mapX, int mapY) const;
     std::optional<size_t> attack(std::span<const size_t> indices, size_t targetIndex);
     size_t stop(std::span<const size_t> indices);
     std::optional<bool> toggleHoldFire(std::span<const size_t> indices);
@@ -98,6 +99,10 @@ public:
     bool embarkImmediate(size_t soldierIdx, size_t vehicleIdx);
     size_t unloadVehicles(std::span<const size_t> vehicleIds);
     bool unloadSinglePassenger(std::size_t vehicleIdx, std::size_t soldierIdx);
+    size_t queueSoldierOrder(std::span<const size_t> soldierIds, QueuedSoldierOp op,
+                             int targetX, int targetY, std::size_t targetIndex = 0);
+    size_t queueVehicleOrder(std::span<const size_t> vehicleIds, QueuedVehicleOp op,
+                             int targetX, int targetY, unsigned dir32 = 0);
     std::vector<std::size_t> vehiclePassengerIds(std::size_t vehicleIdx) const;
     std::string soldierUnitId(std::size_t soldierIdx) const;
     bool canCaptureVehicle(size_t vehicleIdx);
@@ -308,6 +313,8 @@ private:
     cmd::SupportBridge::Result applyLocked(const cmd::SupportBridge&);
     cmd::UnloadSingleSoldier::Result applyLocked(const cmd::UnloadSingleSoldier&);
     cmd::EvacuateSingleSoldier::Result applyLocked(const cmd::EvacuateSingleSoldier&);
+    cmd::QueueSoldierOrder::Result applyLocked(const cmd::QueueSoldierOrder&);
+    cmd::QueueVehicleOrder::Result applyLocked(const cmd::QueueVehicleOrder&);
     void stepGroupAiLocked(bool fastOnly = false);
     struct MpZeppelinWave {
         std::uint32_t packed4{0};

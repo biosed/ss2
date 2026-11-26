@@ -849,6 +849,8 @@ bool GameSession::loadSaveFromPath(const std::filesystem::path& path, const std:
     woundedBarLogged.clear();
     activeVfx.clear();
     burningWrecks.clear();
+    movingSmokeVehicles.clear();
+    movingWaterVehicles.clear();
     livePlanes.clear();
     liveParachutes.clear();
     planeAtlas.reset();

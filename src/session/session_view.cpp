@@ -303,6 +303,14 @@ bool GameSession::updateViewTooltipAndPresent() {
                             if (simulation && simulation->isElevatedMapPoint(u.x, u.y)) {
                                 tc.lines.push_back(ss2::tr("High Ground (+vision, +range)"));
                             }
+                            if (simulation) {
+                                const int infCov = simulation->infantryCoverAtMapPoint(u.x, u.y);
+                                if (infCov == 1) {
+                                    tc.lines.push_back(ss2::tr("[Forest Cover] (-hit, -splash)"));
+                                } else if (infCov == 2) {
+                                    tc.lines.push_back(ss2::tr("[Crater Cover] (-hit, -splash)"));
+                                }
+                            }
                             if (uSpec) {
                                 const int infSight = (binocularUnits.contains(*hovered) && uSpec->binocularSight > 0)
                                     ? uSpec->binocularSight

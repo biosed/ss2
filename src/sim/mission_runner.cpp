@@ -1311,6 +1311,39 @@ cmd::UnloadVehicles::Result MissionRunner::applyLocked(const cmd::UnloadVehicles
 bool MissionRunner::unloadSinglePassenger(std::size_t vehicleIdx, std::size_t soldierIdx) {
     return submit(cmd::UnloadSingleSoldier{vehicleIdx, soldierIdx});
 }
+size_t MissionRunner::queueSoldierOrder(std::span<const size_t> soldierIds, QueuedSoldierOp op,
+                                          int targetX, int targetY, std::size_t targetIndex) {
+    return submit(cmd::QueueSoldierOrder{ids(soldierIds), static_cast<std::uint8_t>(op),
+                                         targetX, targetY, targetIndex});
+}
+size_t MissionRunner::queueVehicleOrder(std::span<const size_t> vehicleIds, QueuedVehicleOp op,
+                                          int targetX, int targetY, unsigned dir32) {
+    return submit(cmd::QueueVehicleOrder{ids(vehicleIds), static_cast<std::uint8_t>(op),
+                                         targetX, targetY, dir32});
+}
+cmd::QueueSoldierOrder::Result MissionRunner::applyLocked(const cmd::QueueSoldierOrder& c) {
+    if (modal_) return 0;
+    std::vector<SoldierPose> outPoses;
+    const size_t res = units_.queueSoldierOrder(c.soldiers, static_cast<QueuedSoldierOp>(c.op),
+                                                c.targetX, c.targetY, c.targetIndex, &outPoses);
+    if (!outPoses.empty()) {
+        mergeSoldierPoses(outPoses);
+        if (auto snap = units_.takeFogSnapshot()) fog_ = std::move(snap);
+    }
+    return res;
+}
+cmd::QueueVehicleOrder::Result MissionRunner::applyLocked(const cmd::QueueVehicleOrder& c) {
+    if (modal_) return 0;
+    std::vector<SoldierPose> outPoses;
+    const size_t res = units_.queueVehicleOrder(c.vehicles, static_cast<QueuedVehicleOp>(c.op),
+                                                c.targetX, c.targetY, c.dir32, &outPoses);
+    if (!outPoses.empty()) mergeSoldierPoses(outPoses);
+    if (res > 0) {
+        collectVehiclePoses();
+        if (auto snap = units_.takeFogSnapshot()) fog_ = std::move(snap);
+    }
+    return res;
+}
 cmd::UnloadSingleSoldier::Result MissionRunner::applyLocked(const cmd::UnloadSingleSoldier& c) {
     if (modal_) return false;
     std::vector<SoldierPose> outPoses;
@@ -1685,6 +1718,10 @@ cmd::TakeReserveUnits::Result MissionRunner::applyLocked(const cmd::TakeReserveU
 bool MissionRunner::isElevatedMapPoint(int mapX, int mapY) const {
     std::lock_guard lock(mutex_);
     return units_.isElevatedMapPoint(mapX, mapY);
+}
+int MissionRunner::infantryCoverAtMapPoint(int mapX, int mapY) const {
+    std::lock_guard lock(mutex_);
+    return units_.infantryCoverAtMapPoint(mapX, mapY);
 }
 void MissionRunner::acknowledge() {
     submit(cmd::Acknowledge{});

@@ -806,6 +806,45 @@ size_t TutorialUnits::orderGroupSoldArt(unsigned group, std::uint32_t aiFlags,
             if (bestTgt) {
                 v.attackTarget = bestTgt;
                 ++accepted;
+            } else if (isGaub && v.hasPrimary && (v.ammoPerShot1 == 0 || v.ammo > 0)) {
+                // Counter-battery: shell enemy artillery revealing its muzzle flash in range.
+                std::optional<std::pair<int, int>> cbTarget;
+                double cbDist = 1e18;
+                for (size_t j = 0; j < vehicles_.size(); ++j) {
+                    if (j == vid) continue;
+                    const auto& tv = vehicles_[j];
+                    if (!tv.alive || tv.hp <= 0 || !isHostile(v.owner, tv.owner) || tv.muzzleRevealTicks == 0u) continue;
+                    const double d = det::detHypot(tv.fx - v.fx, tv.fy - v.fy);
+                    if (d < minR || d > maxR || d >= cbDist) continue;
+                    bool nearAlly = false;
+                    for (size_t k = 0; k < vehicles_.size() && !nearAlly; ++k) {
+                        const auto& av = vehicles_[k];
+                        if (av.alive && av.hp > 0 && isAlliedFor(v.owner, av.owner) &&
+                            det::detHypot(av.fx - tv.fx, av.fy - tv.fy) <= 128.0) {
+                            nearAlly = true;
+                        }
+                    }
+                    if (!nearAlly) {
+                        cbDist = d;
+                        cbTarget = std::pair{tv.x, tv.y};
+                    }
+                }
+                if (cbTarget) {
+                    v.attackGround = cbTarget;
+                    ++accepted;
+                }
+            }
+        }
+        // Clear stale AI counter-battery attackGround once target flash expires & no hostiles remain near it.
+        if (isGaub && v.attackGround && v.owner > 0) {
+            const auto [gx, gy] = *v.attackGround;
+            const bool activeThreat = std::ranges::any_of(vehicles_, [&](const Vehicle& tv) {
+                return tv.alive && tv.hp > 0 && isHostile(v.owner, tv.owner) &&
+                       (tv.muzzleRevealTicks > 0u || (tv.spottedMask & (1u << v.owner)) != 0u) &&
+                       det::detHypot(tv.fx - static_cast<double>(gx), tv.fy - static_cast<double>(gy)) <= 96.0;
+            });
+            if (!activeThreat) {
+                v.attackGround.reset();
             }
         }
     }
@@ -1340,7 +1379,7 @@ size_t TutorialUnits::orderGroupKatya(unsigned group, std::uint32_t aiFlags,
             v.attackGround.reset();
         }
 
-        std::vector<std::pair<int, int>> hostilePts;
+        std::vector<std::tuple<int, int, int>> hostilePts;
         std::vector<std::pair<int, int>> alliedPts;
         for (size_t j = 0; j < soldiers_.size(); ++j) {
             const auto& s = soldiers_[j];
@@ -1358,7 +1397,7 @@ size_t TutorialUnits::orderGroupKatya(unsigned group, std::uint32_t aiFlags,
                 alliedPts.emplace_back(sx, sy);
             } else if (isHostile(v.owner, s.owner)) {
                 if (!fog_ || isVehicleTargetValidFor(v.owner, false, j)) {
-                    hostilePts.emplace_back(sx, sy);
+                    hostilePts.emplace_back(sx, sy, 0);
                 }
             }
         }
@@ -1369,8 +1408,10 @@ size_t TutorialUnits::orderGroupKatya(unsigned group, std::uint32_t aiFlags,
             if (isAlliedFor(v.owner, tv.owner)) {
                 alliedPts.emplace_back(tv.x, tv.y);
             } else if (isHostile(v.owner, tv.owner) && (tv.hasCrew || !tv.passengers.empty())) {
-                if (!fog_ || isVehicleTargetValidFor(v.owner, true, j)) {
-                    hostilePts.emplace_back(tv.x, tv.y);
+                const bool revealedBattery = tv.muzzleRevealTicks > 0u;
+                if (!fog_ || isVehicleTargetValidFor(v.owner, true, j) || revealedBattery) {
+                    const int cbBonus = (revealedBattery && (tv.isArtillery || tv.isRocketArtillery || tv.damage >= 180)) ? 4 : (revealedBattery ? 2 : 0);
+                    hostilePts.emplace_back(tv.x, tv.y, cbBonus);
                 }
             }
         }
@@ -1378,12 +1419,13 @@ size_t TutorialUnits::orderGroupKatya(unsigned group, std::uint32_t aiFlags,
         int bestScore = 0;
         double bestDist = 1e18;
         std::optional<std::pair<int, int>> bestTargetPt;
-        for (const auto& [cx, cy] : hostilePts) {
+        for (const auto& [cx, cy, cbBonus] : hostilePts) {
             const double d = det::detHypot(static_cast<double>(cx) - v.fx,
                                            static_cast<double>(cy) - v.fy);
             if (d < v.deadzone || d > v.range) continue;
-            int score = 0;
-            for (const auto& [hx, hy] : hostilePts) {
+            int score = cbBonus;
+            for (const auto& [hx, hy, hCb] : hostilePts) {
+                (void)hCb;
                 if (det::detHypot(static_cast<double>(hx - cx), static_cast<double>(hy - cy)) <= 160.0) {
                     ++score;
                 }

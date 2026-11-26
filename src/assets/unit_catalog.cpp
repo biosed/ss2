@@ -416,6 +416,10 @@ void parseTextBlock(UnitSpec& spec, std::string_view text, bool isLangOverride,
         } else if (key == "expa_crush" && toks.size() >= 2) {
             int v = 0;
             if (parseInt(toks[1], v) && v > 0) spec.expaCrush = v;
+        } else if (key == "cancrouchexpa") {
+            int v = 1;
+            if (toks.size() >= 2) (void)parseInt(toks[1], v);
+            spec.canCrouchExpa = (v != 0);
         } else if (key == "canbetowed" && toks.size() >= 2) {
             spec.towWeightClass = asciiLower(toks[1]);
         } else if (key == "havepricep" && toks.size() >= 2) {
@@ -777,8 +781,10 @@ std::shared_ptr<const UnitCatalog> UnitCatalog::load(const std::filesystem::path
 }
 
 std::shared_ptr<const UnitCatalog> UnitCatalog::fromSpecs(std::vector<UnitSpec> specs,
-                                                          std::vector<PlaneSpec> planes) {
+                                                          std::vector<PlaneSpec> planes,
+                                                          bool retailCatalog) {
     auto catalog = std::make_shared<UnitCatalog>();
+    catalog->hasDesc_ = retailCatalog;
     for (auto& spec : specs) {
         std::string key = asciiLower(trimView(spec.id));
         if (key.empty()) continue;
@@ -856,6 +862,15 @@ PlaneSpec UnitCatalog::parsePlaneText(std::string_view planeId, std::string_view
         } else if (key == "shot_grn_id") {
             const std::string sid = asciiLower(toks[1]);
             if (!sid.empty() && sid != "none") spec.groundShotId = sid;
+        } else if (key == "actiontime" || key == "action_time") {
+            int v = 0;
+            if (parseInt(toks[1], v) && v > 0) spec.actionTime = v;
+        } else if (key == "bombaccuracy" || key == "bomb_accuracy") {
+            int v = 0;
+            if (parseInt(toks[1], v) && v > 0) spec.bombAccuracy = v;
+        } else if (key == "bombreloadtime" || key == "bomb_reload_time") {
+            int v = 0;
+            if (parseInt(toks[1], v) && v > 0) spec.bombReloadTime = v;
         }
     }
     return spec;

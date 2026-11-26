@@ -63,17 +63,17 @@ static_assert(sizeof(FogGrid) == 1600, "update FogGrid::hashState");
 static_assert(sizeof(TutorialUnits::ReserveUnit) == 56, "update hashValue(ReserveUnit)");
 static_assert(sizeof(assets::AirSupportSlot) == 40, "update hashValue(AirSupportSlot)");
 static_assert(sizeof(assets::ParatrooperEntry) == 40, "update hashValue(ParatrooperEntry)");
-static_assert(sizeof(TutorialUnits) == 4040, "update TutorialUnits::stateHash for the new member");
+static_assert(sizeof(TutorialUnits) == 4064, "update TutorialUnits::stateHash for the new member");
 #endif
 
 std::uint64_t TutorialUnits::stateHash() const {
 #ifdef SS2_STATE_HASH_SIZE_GUARDS
-    static_assert(sizeof(Soldier) == 768, "update the Soldier hash below for the new field");
-    static_assert(sizeof(Vehicle) == 1504, "update the Vehicle hash below for the new field");
+    static_assert(sizeof(Soldier) == 848, "update the Soldier hash below for the new field");
+    static_assert(sizeof(Vehicle) == 1584, "update the Vehicle hash below for the new field");
     static_assert(sizeof(Building) == 80, "update the Building hash below for the new field");
     static_assert(sizeof(Bridge) == 64, "update the Bridge hash below for the new field");
     static_assert(sizeof(Projectile) == 32, "update the Projectile hash below for the new field");
-    static_assert(sizeof(ActiveSortie) == 144, "update the ActiveSortie hash below for the new field");
+    static_assert(sizeof(ActiveSortie) == 152, "update the ActiveSortie hash below for the new field");
     static_assert(sizeof(ActiveParachute) == 80, "update the ActiveParachute hash below for the new field");
 #endif
     StateHasher h;
@@ -224,6 +224,36 @@ std::uint64_t TutorialUnits::stateHash() const {
                 h.all(bi, buildings_[bi].sightBonus);
             }
         }
+    }
+    for (size_t si = 0; si < soldiers_.size(); ++si) {
+        const auto& s = soldiers_[si];
+        if (!s.pendingActions.empty()) {
+            h.all(si, s.pendingActions.size());
+            for (const auto& qa : s.pendingActions) {
+                h.all(static_cast<std::uint8_t>(qa.op), qa.x, qa.y, qa.targetIndex);
+            }
+        }
+        if (s.canCrouchExpa) {
+            h.all(si, s.canCrouchExpa, s.lastEmittedCrouch);
+        }
+    }
+    for (size_t vi = 0; vi < vehicles_.size(); ++vi) {
+        const auto& v = vehicles_[vi];
+        if (!v.pendingActions.empty()) {
+            h.all(vi, v.pendingActions.size());
+            for (const auto& qv : v.pendingActions) {
+                h.all(static_cast<std::uint8_t>(qv.op), qv.x, qv.y, qv.dir32);
+            }
+        }
+    }
+    for (size_t ai = 0; ai < sorties_.size(); ++ai) {
+        const auto& st = sorties_[ai];
+        if (st.loiterTicksLeft != 0 || st.bombScatterPx != 0) {
+            h.all(ai, st.loiterTicksLeft, st.bombScatterPx);
+        }
+    }
+    if (!craterTiles_.empty()) {
+        h.all(craterTiles_);
     }
     return h.value();
 }

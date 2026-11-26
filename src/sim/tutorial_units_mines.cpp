@@ -131,6 +131,7 @@ size_t TutorialUnits::orderDisarmMine(std::span<const size_t> soldierIds, int ma
         auto& s = soldiers_[id];
         if (s.owner != actor || s.hp <= 0 || s.embarked || s.garrisonBuilding || !s.isSapper) continue;
         s.queuedGoals.clear();
+        s.pendingActions.clear();
         s.patrolOrigin.reset();
         s.patrolDest.reset();
         s.boardVehicleTarget.reset();
@@ -354,16 +355,19 @@ void TutorialUnits::stepMines(std::vector<SoldierPose>& changed) {
         s.attackMove = false;
     };
 
+    const bool aiSweepEnabled = multiplayerSymmetry_ || !catalog_ || catalog_->hasRetailCatalog();
     for (size_t i = 0; i < soldiers_.size(); ++i) {
         auto& s = soldiers_[i];
         if (!s.disarmMineTarget) continue;
-        const bool allowedOwner = multiplayerSymmetry_ ? (s.owner >= 0 && s.owner < 4) : (s.owner == 0);
+        const bool allowedOwner = multiplayerSymmetry_
+            ? (s.owner >= 0 && s.owner < 4)
+            : (s.owner == 0 || (aiSweepEnabled && s.owner > 0 && s.owner < 3));
         if (!allowedOwner || s.hp <= 0 || s.embarked || s.garrisonBuilding || !s.isSapper) {
             s.disarmMineTarget.reset();
         s.disarmWorkTicks = 0;
             continue;
         }
-        const int sapOwner = multiplayerSymmetry_ ? s.owner : 0;
+        const int sapOwner = s.owner;
         const int tx = s.disarmMineTarget->first;
         const int ty = s.disarmMineTarget->second;
         const auto* mp = mineTileAt(tx, ty);
@@ -413,11 +417,14 @@ void TutorialUnits::stepMines(std::vector<SoldierPose>& changed) {
     }
 
     if (tick_ % 15 == 0) {
-        for (auto& s : soldiers_) {
-            const bool allowedOwner = multiplayerSymmetry_ ? (s.owner >= 0 && s.owner < 4) : (s.owner == 0);
+        for (size_t si = 0; si < soldiers_.size(); ++si) {
+            auto& s = soldiers_[si];
+            const bool allowedOwner = multiplayerSymmetry_
+                ? (s.owner >= 0 && s.owner < 4)
+                : (s.owner == 0 || (aiSweepEnabled && s.owner > 0 && s.owner < 3));
             if (!allowedOwner || s.hp <= 0 || s.embarked || s.garrisonBuilding) continue;
             if (!s.isSapper && !s.isOfficer && !s.isMedic) continue;
-            const int sapOwner = multiplayerSymmetry_ ? s.owner : 0;
+            const int sapOwner = s.owner;
             const int cx = s.cell.x / 2, cy = s.cell.y / 2;
             const bool canInstantDisarm = s.isSapper && s.getMineTime <= 0 &&
                 ((!s.motion && s.route.empty()) || s.disarmMineTarget.has_value() || s.attackMove);
@@ -435,6 +442,7 @@ void TutorialUnits::stepMines(std::vector<SoldierPose>& changed) {
                     }
                 }
             }
+            std::optional<std::pair<int, int>> aiAutoMine;
             for (int dy = -3; dy <= 3; ++dy) {
                 for (int dx = -3; dx <= 3; ++dx) {
                     auto* mp = mineTileAt(cx + dx, cy + dy);
@@ -449,20 +457,29 @@ void TutorialUnits::stepMines(std::vector<SoldierPose>& changed) {
                         *mp = 0;
                         mineEvents_.push_back({MineEvent::Disarmed, mx, my, antiTank});
                         disarmedOne = true;
+                    } else if (!aiAutoMine && aiSweepEnabled && s.isSapper && s.owner > 0 && s.owner < 3 &&
+                               !s.motion && !s.goal && !s.disarmMineTarget && !s.attackTarget &&
+                               !s.attackVehicleTarget && !s.attackBuildingTarget && s.pendingActions.empty()) {
+                        aiAutoMine = std::pair{cx + dx, cy + dy};
                     }
                 }
+            }
+            if (!disarmedOne && aiAutoMine) {
+                routeSapperToMine(si, s, aiAutoMine->first, aiAutoMine->second);
             }
         }
     }
 
     for (auto& s : soldiers_) {
         if (!s.isSapper || s.getMineTime <= 0) continue;
-        const bool allowedOwner = multiplayerSymmetry_ ? (s.owner >= 0 && s.owner < 4) : (s.owner == 0);
+        const bool allowedOwner = multiplayerSymmetry_
+            ? (s.owner >= 0 && s.owner < 4)
+            : (s.owner == 0 || (aiSweepEnabled && s.owner > 0 && s.owner < 3));
         if (!allowedOwner || s.hp <= 0 || s.embarked || s.garrisonBuilding) {
             s.disarmWorkTicks = 0;
             continue;
         }
-        const int sapOwner = multiplayerSymmetry_ ? s.owner : 0;
+        const int sapOwner = s.owner;
         const bool canDisarmNow = (!s.motion && s.route.empty()) || s.disarmMineTarget.has_value() || s.attackMove;
         if (!canDisarmNow) {
             s.disarmWorkTicks = 0;

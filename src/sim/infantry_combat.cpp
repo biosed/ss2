@@ -244,6 +244,13 @@ bool FogGrid::isElevated(int tileX, int tileY) const {
                    static_cast<std::size_t>(tileX)] & 0x2000u) != 0;
 }
 
+bool FogGrid::isForestCover(int tileX, int tileY) const {
+    if (tileX < 0 || tileY < 0 || tileX >= tileWidth_ || tileY >= tileHeight_) return false;
+    const std::uint32_t f = flags_[static_cast<std::size_t>(tileY) * static_cast<std::size_t>(tileWidth_) +
+                                   static_cast<std::size_t>(tileX)];
+    return (f & 0x1000u) != 0 && (f & 0x0800u) == 0;
+}
+
 InfantryCombatDesc InfantryCombatDesc::dguner() {
     InfantryCombatDesc d;
     d.maxHp = 100;

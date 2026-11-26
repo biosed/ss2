@@ -32,6 +32,12 @@ auto fields(const TutorialUnits::Snapshot::SoldierState& s) {
                     s.group, s.direction, s.crouched, s.holdFire, s.binoculars, s.embarked, s.garrisonBuilding,
                     s.suppressionTicks);
 }
+auto fields(const QueueSoldierOrder& c) {
+    return std::tie(c.soldiers, c.op, c.targetX, c.targetY, c.targetIndex);
+}
+auto fields(const QueueVehicleOrder& c) {
+    return std::tie(c.vehicles, c.op, c.targetX, c.targetY, c.dir32);
+}
 auto fields(const TutorialUnits::Snapshot::VehicleState& v) {
     return std::tie(v.x, v.y, v.hullDir, v.turretDir, v.hp, v.maxHp, v.ammo, v.ammo2, v.expa, v.kills, v.owner,
                     v.group, v.alive, v.holdFire, v.passengers, v.towedVehicle, v.towedBy, v.hasCrew, v.crewHp);

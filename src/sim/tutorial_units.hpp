@@ -22,6 +22,27 @@
 #include <vector>
 
 namespace ss2 {
+enum class QueuedSoldierOp : std::uint8_t {
+    Move = 0,
+    AttackMove = 1,
+    AttackGround = 2,
+    GarrisonBuilding = 3,
+    BoardVehicle = 4,
+    CaptureVehicle = 5,
+    LayMine = 6,
+    DisarmMine = 7,
+};
+
+enum class QueuedVehicleOp : std::uint8_t {
+    Move = 0,
+    AttackMove = 1,
+    ReverseMove = 2,
+    FaceDir = 3,
+    AttackGround = 4,
+    Unload = 5,
+    Unhitch = 6,
+};
+
 struct SoldierPose {
     size_t index;
     int x, y;
@@ -442,6 +463,13 @@ public:
     std::vector<IdleUnit> idlePlayerUnits() const;
     bool canCaptureVehicle(size_t vehicleIdx, int viewerOwner = 0) const;
     size_t orderCaptureVehicle(std::span<const size_t> soldierIds, size_t vehicleIdx);
+    size_t queueSoldierOrder(std::span<const size_t> soldierIds, QueuedSoldierOp op,
+                             int targetX, int targetY, std::size_t targetIndex = 0,
+                             std::vector<SoldierPose>* outPoses = nullptr);
+    size_t queueVehicleOrder(std::span<const size_t> vehicleIds, QueuedVehicleOp op,
+                             int targetX, int targetY, unsigned dir32 = 0,
+                             std::vector<SoldierPose>* outPoses = nullptr);
+    int infantryCoverAtMapPoint(int mapX, int mapY) const;
     std::vector<TacticalOrderLine> selectionOrderLines(std::span<const size_t> soldierIds,
                                                        std::span<const size_t> vehicleIds) const;
     std::vector<VehicleRangePreview> selectionRangePreviews(std::span<const size_t> vehicleIds,
@@ -572,6 +600,16 @@ public:
     std::uint64_t stateHash() const;
 private:
     friend class MissionRunner;
+    struct QueuedSoldierAction {
+        QueuedSoldierOp op{QueuedSoldierOp::Move};
+        int x{}, y{};
+        std::size_t targetIndex{0};
+    };
+    struct QueuedVehicleAction {
+        QueuedVehicleOp op{QueuedVehicleOp::Move};
+        int x{}, y{};
+        unsigned dir32{0};
+    };
     struct Soldier {
         SubCell cell;
         int owner;
@@ -660,6 +698,9 @@ private:
         unsigned crouchStepMax{5u};
         assets::HitType primaryHitType{assets::HitType::Machine};
         bool hasCatalogAtShot{false};
+        bool canCrouchExpa{false};
+        bool lastEmittedCrouch{false};
+        std::deque<QueuedSoldierAction> pendingActions;
         unsigned stepProgressBase() const {
             const unsigned lo = crouched ? crouchStepBase : standStepBase;
             const unsigned hi = crouched ? crouchStepMax : standStepMax;
@@ -839,6 +880,7 @@ private:
         unsigned lastPanicTick{0};
         std::vector<CrewMember> embarkedCrew;
         int unlimberTicks{0};
+        std::deque<QueuedVehicleAction> pendingActions;
 
         std::string_view effectiveTargetType() const {
             if (!targetType.empty()) return targetType;
@@ -925,6 +967,8 @@ private:
         bool isRocketAttacker{false};
         assets::HitType strafeHitType{assets::HitType::Machine};
         unsigned reconTick{0};
+        int loiterTicksLeft{0};
+        int bombScatterPx{0};
     };
     struct ActiveParachute {
         std::uint32_t id{};
@@ -962,6 +1006,13 @@ private:
     int commandActor_{0};
     bool commandActorActive_{false};
     bool multiplayerSymmetry_{false};
+    std::vector<std::uint8_t> craterTiles_;
+    void clearPendingActions(Soldier& s) { s.pendingActions.clear(); }
+    void clearPendingVehicleActions(Vehicle& v) { v.pendingActions.clear(); }
+    bool executeQueuedSoldierAction(size_t id, const QueuedSoldierAction& act, std::vector<SoldierPose>* outPoses = nullptr);
+    bool executeQueuedVehicleAction(size_t id, const QueuedVehicleAction& act, std::vector<SoldierPose>* outPoses = nullptr);
+    void markShellCraterAt(int mapX, int mapY);
+    int infantryCoverKindAtTile(int tx, int ty) const;
     struct Destination { size_t soldier; int mapX, mapY; };
     std::vector<Destination> formationTargets(std::span<const size_t>, int mapX, int mapY) const;
     std::vector<std::pair<size_t, std::pair<int, int>>> vehicleFormationTargets(

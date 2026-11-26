@@ -103,6 +103,8 @@ std::vector<cmd::Command> everyCommand() {
         cmd::SupportBridge{b, 22},
         cmd::UnloadSingleSoldier{52, 53},
         cmd::EvacuateSingleSoldier{54, 55},
+        cmd::QueueSoldierOrder{a, 6, 420, 310, 7},
+        cmd::QueueVehicleOrder{b, 2, -220, 180, 15u},
     };
 }
 

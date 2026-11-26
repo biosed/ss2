@@ -1163,13 +1163,18 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
         const auto [x, y] = renderer.mapPosition(event.button.x, event.button.y);
         const int simX = int(std::floor(x / mapScale));
         const int simY = int(std::floor(y / mapScale));
+        const bool shiftQueue = (SDL_GetModState() & SDL_KMOD_SHIFT) != 0;
         if (armedAirSupport) {
             dispatchAirSupportAt(*armedAirSupport, simX, simY);
             armedAirSupport.reset();
         } else if (reverseMoveArmed) {
             const auto& vsel = selection->selectedVehicles();
             const std::vector<size_t> vids(vsel.begin(), vsel.end());
-            if (const auto res = simulation->reverseMoveVehicles(vids, simX, simY); res && *res > 0) {
+            const auto res = shiftQueue
+                ? std::optional<size_t>(simulation->queueVehicleOrder(
+                      vids, ss2::QueuedVehicleOp::ReverseMove, simX, simY))
+                : simulation->reverseMoveVehicles(vids, simX, simY);
+            if (res && *res > 0) {
                 std::erase_if(activeMarkers, [](const TimedMarker& m) { return m.isOrder; });
                 activeMarkers.push_back({
                     {{(simX - 8) * mapScale, (simY - 8) * mapScale, 16 * mapScale, 16 * mapScale},
@@ -1181,7 +1186,9 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
                 syncMarkers();
                 pushOrderPulse(simX, simY, OrderPulse::Kind::Move);
                 playSelectionVoice("move");
-                showNotice(ss2::trf("Reverse move ordered ({0} vehicles).", {std::to_string(*res)}),
+                showNotice(ss2::trf(shiftQueue ? "Queued reverse move ({0} vehicles)."
+                                               : "Reverse move ordered ({0} vehicles).",
+                                    {std::to_string(*res)}),
                            ss2::NoticeKind::accepted);
             } else {
                 orderNotice.show(ss2::tr("Selected vehicles cannot reverse."), ss2::NoticeKind::blocked);
@@ -1190,7 +1197,11 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
         } else if (faceArmed) {
             const auto& vsel = selection->selectedVehicles();
             const std::vector<size_t> vids(vsel.begin(), vsel.end());
-            if (const auto res = simulation->faceVehicles(vids, simX, simY); res && *res > 0) {
+            const auto res = shiftQueue
+                ? std::optional<size_t>(simulation->queueVehicleOrder(
+                      vids, ss2::QueuedVehicleOp::FaceDir, simX, simY))
+                : simulation->faceVehicles(vids, simX, simY);
+            if (res && *res > 0) {
                 std::erase_if(activeMarkers, [](const TimedMarker& m) { return m.isOrder; });
                 activeMarkers.push_back({
                     {{(simX - 8) * mapScale, (simY - 8) * mapScale, 16 * mapScale, 16 * mapScale},
@@ -1202,7 +1213,9 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
                 syncMarkers();
                 pushOrderPulse(simX, simY, OrderPulse::Kind::Move);
                 playSelectionVoice("move");
-                showNotice(ss2::trf("Rotating front armor ({0} vehicles).", {std::to_string(*res)}),
+                showNotice(ss2::trf(shiftQueue ? "Queued facing rotation ({0} vehicles)."
+                                               : "Rotating front armor ({0} vehicles).",
+                                    {std::to_string(*res)}),
                            ss2::NoticeKind::accepted);
             } else {
                 orderNotice.show(ss2::tr("Selected vehicles cannot rotate."), ss2::NoticeKind::blocked);
@@ -1215,10 +1228,20 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
             const std::vector<size_t> sids(sel.begin(), sel.end());
             size_t totalBombard = 0;
             if (!vids.empty()) {
-                if (const auto res = simulation->attackGroundVehicles(vids, simX, simY)) totalBombard += *res;
+                if (shiftQueue) {
+                    totalBombard += simulation->queueVehicleOrder(
+                        vids, ss2::QueuedVehicleOp::AttackGround, simX, simY);
+                } else if (const auto res = simulation->attackGroundVehicles(vids, simX, simY)) {
+                    totalBombard += *res;
+                }
             }
             if (!sids.empty()) {
-                if (const auto res = simulation->attackGroundSoldiers(sids, simX, simY)) totalBombard += *res;
+                if (shiftQueue) {
+                    totalBombard += simulation->queueSoldierOrder(
+                        sids, ss2::QueuedSoldierOp::AttackGround, simX, simY);
+                } else if (const auto res = simulation->attackGroundSoldiers(sids, simX, simY)) {
+                    totalBombard += *res;
+                }
             }
             if (totalBombard > 0) {
                 std::erase_if(activeMarkers, [](const TimedMarker& m) { return m.isOrder; });
@@ -1232,7 +1255,9 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
                 syncMarkers();
                 pushOrderPulse(simX, simY, OrderPulse::Kind::Attack);
                 playSelectionVoice("attack");
-                showNotice(ss2::trf("Attack ground ordered ({0} units).", {std::to_string(totalBombard)}),
+                showNotice(ss2::trf(shiftQueue ? "Queued attack ground ({0} units)."
+                                               : "Attack ground ordered ({0} units).",
+                                    {std::to_string(totalBombard)}),
                            ss2::NoticeKind::accepted);
             } else {
                 orderNotice.show(ss2::tr("Selected units cannot bombard that location."), ss2::NoticeKind::blocked);
@@ -1418,11 +1443,16 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
                 return;
             }
         }
+        const bool shiftQueue = (SDL_GetModState() & SDL_KMOD_SHIFT) != 0;
         if (!ids.empty() && targetVeh && vehicleScene &&
             (vehicleScene->vehicles().at(*targetVeh).owner == 3 ||
              isAllyOwner(vehicleScene->vehicles().at(*targetVeh).owner)) &&
             simulation->canCaptureVehicle(*targetVeh)) {
-            if (const auto res = simulation->captureVehicle(ids, *targetVeh); res && *res > 0) {
+            const auto res = shiftQueue
+                ? std::optional<size_t>(simulation->queueSoldierOrder(
+                      ids, ss2::QueuedSoldierOp::CaptureVehicle, 0, 0, *targetVeh))
+                : simulation->captureVehicle(ids, *targetVeh);
+            if (res && *res > 0) {
                 const auto& tv = vehicleScene->vehicles().at(*targetVeh);
                 const bool isFriendlyRecrew = (tv.owner != 3 && isAllyOwner(tv.owner));
                 const int mw = tv.width > 0 ? tv.width : 24;
@@ -1451,7 +1481,11 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
         if (!ids.empty() && targetVeh && vehicleScene &&
             vehicleScene->vehicles().at(*targetVeh).owner == localOwner() &&
             simulation->canBoardVehicle(*targetVeh)) {
-            if (const auto res = simulation->boardVehicle(ids, *targetVeh); res && *res > 0) {
+            const auto res = shiftQueue
+                ? std::optional<size_t>(simulation->queueSoldierOrder(
+                      ids, ss2::QueuedSoldierOp::BoardVehicle, 0, 0, *targetVeh))
+                : simulation->boardVehicle(ids, *targetVeh);
+            if (res && *res > 0) {
                 const auto& tv = vehicleScene->vehicles().at(*targetVeh);
                 const int mw = tv.width > 0 ? tv.width : 24;
                 const int mh = tv.height > 0 ? tv.height : 24;
@@ -1607,7 +1641,11 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
             if (targetBld) {
                 const auto& lb = liveBuildings[*targetBld];
                 if (!ids.empty() && simulation->canGarrisonBuilding(*targetBld)) {
-                    if (const auto res = simulation->garrisonBuilding(ids, *targetBld); res && *res > 0) {
+                    const auto res = shiftQueue
+                        ? std::optional<size_t>(simulation->queueSoldierOrder(
+                              ids, ss2::QueuedSoldierOp::GarrisonBuilding, 0, 0, *targetBld))
+                        : simulation->garrisonBuilding(ids, *targetBld);
+                    if (res && *res > 0) {
                         std::erase_if(activeMarkers, [](const TimedMarker& m) { return m.isOrder; });
                         activeMarkers.push_back({
                             {{lb.left * mapScale, lb.top * mapScale, lb.width * mapScale, lb.height * mapScale},
@@ -1698,7 +1736,11 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
                 }
             }
             if (!ids.empty() && simulation->canDisarmMineAt(ids, simX, simY)) {
-                if (const auto res = simulation->orderDisarmMine(ids, simX, simY); res && *res > 0) {
+                const auto res = shiftQueue
+                    ? std::optional<size_t>(simulation->queueSoldierOrder(
+                          ids, ss2::QueuedSoldierOp::DisarmMine, simX, simY))
+                    : simulation->orderDisarmMine(ids, simX, simY);
+                if (res && *res > 0) {
                     std::erase_if(activeMarkers, [](const TimedMarker& m) { return m.isOrder; });
                     activeMarkers.push_back({
                         {{(simX - 8) * mapScale, (simY - 8) * mapScale, 16 * mapScale, 16 * mapScale},

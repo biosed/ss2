@@ -475,8 +475,14 @@ void GameSession::stepSimulationEvents() {
                 if (vp.alive && vp.moving && vp.visible) {
                     if (smSpec && smSpec->hasMoveSmoke) movingSmokeVehicles.insert(vp.index);
                     else movingSmokeVehicles.erase(vp.index);
+                    if (isWaterPoint(vp.x, vp.y) || isShallowsPoint(vp.x, vp.y)) {
+                        movingWaterVehicles.insert(vp.index);
+                    } else {
+                        movingWaterVehicles.erase(vp.index);
+                    }
                 } else {
                     movingSmokeVehicles.erase(vp.index);
+                    movingWaterVehicles.erase(vp.index);
                 }
                 if (vp.alive && vp.hp > 0 && vp.moving && smSpec && smSpec->isTracked()) {
                     if (crushOrBlastTreesAt(vp.x, vp.y, 16, combatEffects && vp.visible)) {
@@ -669,6 +675,25 @@ void GameSession::stepSimulationEvents() {
                             activeVfx.push_back({
                                 ActiveVfx::Kind::Explosion, tx, ty, tx, ty, now, std::chrono::milliseconds(420)
                             });
+                        }
+                        if (!vp.firedSecondary && !vp.firedRocket && !vp.firedFlamer &&
+                            (vp.heavyImpact || (smSpec && smSpec->shot1.hitType != assets::HitType::Machine)) &&
+                            !isWaterPoint(vp.x, vp.y) && activeVfx.size() < 64) {
+                            const float mdx = static_cast<float>(vp.targetX - vp.x);
+                            const float mdy = static_cast<float>(vp.targetY - vp.y);
+                            const float mlen = std::hypot(mdx, mdy);
+                            if (mlen > 1.0f) {
+                                const float nx = mdx / mlen;
+                                const float ny = mdy / mlen;
+                                const float fs = static_cast<float>(mapScale);
+                                const float gx = static_cast<float>(vp.x) * fs;
+                                const float gy = static_cast<float>(vp.y) * fs;
+                                activeVfx.push_back({
+                                    ActiveVfx::Kind::MuzzleDust,
+                                    gx, gy, gx + nx * 24.0f * fs, gy + ny * 24.0f * fs,
+                                    now, std::chrono::milliseconds(340)
+                                });
+                            }
                         }
                         const unsigned shotDir32 = CombatVfxSystem::dir32FromMapDelta(
                             static_cast<double>(vp.targetX - vp.x),

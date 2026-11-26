@@ -106,6 +106,7 @@ size_t TutorialUnits::orderGarrisonBuilding(std::span<const size_t> soldierIds, 
         s.disarmMineTarget.reset();
         s.disarmWorkTicks = 0;
         s.queuedGoals.clear();
+        s.pendingActions.clear();
         s.patrolOrigin.reset();
         s.patrolDest.reset();
         s.attackMove = false;
@@ -244,6 +245,7 @@ size_t TutorialUnits::orderAttackBuilding(std::span<const size_t> soldierIds, si
         s.captureVehicleTarget.reset();
         s.garrisonTarget.reset();
         s.queuedGoals.clear();
+        s.pendingActions.clear();
         s.patrolOrigin.reset();
         s.patrolDest.reset();
         s.attackMove = false;
@@ -282,6 +284,7 @@ size_t TutorialUnits::attackBuildingWithVehicles(std::span<const size_t> vehicle
         v.attackMove = false;
         v.attackMoveEngaging = false;
         v.queuedOrders.clear();
+        v.pendingActions.clear();
         v.patrolOrigin.reset();
         v.patrolDest.reset();
         v.reverseMove = false;
@@ -633,6 +636,7 @@ void TutorialUnits::applyBridgeStageTransition(size_t brIdx, int prevStage, int 
             s.cursor = 0;
             s.needsRoute = false;
             s.queuedGoals.clear();
+            s.pendingActions.clear();
             s.attackMove = false;
             s.attackTarget.reset();
             s.attackVehicleTarget.reset();
@@ -678,6 +682,7 @@ void TutorialUnits::applyBridgeStageTransition(size_t brIdx, int prevStage, int 
             ps.cursor = 0;
             ps.needsRoute = false;
             ps.queuedGoals.clear();
+            ps.pendingActions.clear();
             ps.attackMove = false;
             ps.attackTarget.reset();
             ps.attackVehicleTarget.reset();

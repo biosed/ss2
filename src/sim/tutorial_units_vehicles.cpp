@@ -224,9 +224,16 @@ size_t TutorialUnits::moveVehicles(std::span<const size_t> indices, int mapX, in
         auto& v = vehicles_[id];
         v.pendingTowGun.reset();
         if (append && v.moveTarget) {
-            v.queuedOrders.emplace_back(pt.first, pt.second);
+            if (!v.pendingActions.empty()) {
+                if (v.pendingActions.size() < 16u) {
+                    v.pendingActions.push_back({QueuedVehicleOp::Move, pt.first, pt.second, 0});
+                }
+            } else {
+                v.queuedOrders.emplace_back(pt.first, pt.second);
+            }
         } else {
             v.queuedOrders.clear();
+            v.pendingActions.clear();
             v.attackMove = false;
             v.attackMoveEngaging = false;
             moveVehicleInternal(v, pt.first, pt.second);
@@ -253,6 +260,7 @@ size_t TutorialUnits::reverseMoveVehicles(std::span<const size_t> indices, int m
         auto& v = vehicles_[id];
         v.pendingTowGun.reset();
         v.queuedOrders.clear();
+        v.pendingActions.clear();
         v.attackMove = false;
         v.attackMoveEngaging = false;
         moveVehicleInternal(v, pt.first, pt.second);
@@ -277,6 +285,7 @@ size_t TutorialUnits::faceVehicles(std::span<const size_t> indices, int mapX, in
         v.moveTarget.reset();
         v.waypoints.clear();
         v.queuedOrders.clear();
+        v.pendingActions.clear();
         v.patrolOrigin.reset();
         v.patrolDest.reset();
         v.pendingTowGun.reset();
@@ -318,10 +327,17 @@ size_t TutorialUnits::attackMoveVehicles(std::span<const size_t> indices, int ma
         auto& v = vehicles_[id];
         v.pendingTowGun.reset();
         if (append && v.moveTarget) {
-            v.queuedOrders.emplace_back(pt.first, pt.second);
-            v.attackMove = true;
+            if (!v.pendingActions.empty()) {
+                if (v.pendingActions.size() < 16u) {
+                    v.pendingActions.push_back({QueuedVehicleOp::AttackMove, pt.first, pt.second, 0});
+                }
+            } else {
+                v.queuedOrders.emplace_back(pt.first, pt.second);
+                v.attackMove = true;
+            }
         } else {
             v.queuedOrders.clear();
+            v.pendingActions.clear();
             moveVehicleInternal(v, pt.first, pt.second);
             v.attackMove = true;
             v.attackMoveEngaging = false;
@@ -347,6 +363,7 @@ size_t TutorialUnits::patrolVehicles(std::span<const size_t> indices, int mapX, 
         const std::pair origin{v.x, v.y};
         v.pendingTowGun.reset();
         v.queuedOrders.clear();
+        v.pendingActions.clear();
         moveVehicleInternal(v, pt.first, pt.second);
         if (det::detHypot(static_cast<double>(pt.first - origin.first),
                        static_cast<double>(pt.second - origin.second)) >= 16.0) {
@@ -375,6 +392,7 @@ size_t TutorialUnits::stopVehicles(std::span<const size_t> indices) {
         v.moveTarget.reset();
         v.waypoints.clear();
         v.queuedOrders.clear();
+        v.pendingActions.clear();
         v.patrolOrigin.reset();
         v.patrolDest.reset();
         v.pendingTowGun.reset();
@@ -397,6 +415,102 @@ size_t TutorialUnits::stopVehicles(std::span<const size_t> indices) {
         ++stopped;
     }
     return stopped;
+}
+
+bool TutorialUnits::executeQueuedVehicleAction(size_t id, const QueuedVehicleAction& act,
+                                               std::vector<SoldierPose>* outPoses) {
+    if (id >= vehicles_.size()) return false;
+    auto saved = std::move(vehicles_[id].pendingActions);
+    vehicles_[id].pendingActions.clear();
+    const std::array<size_t, 1> one{id};
+    ScopedCommandActor actorGuard(*this, vehicles_[id].owner);
+    bool ok = false;
+    switch (act.op) {
+    case QueuedVehicleOp::Move:
+        ok = moveVehicles(one, act.x, act.y, false) > 0;
+        break;
+    case QueuedVehicleOp::AttackMove:
+        ok = attackMoveVehicles(one, act.x, act.y, false) > 0;
+        break;
+    case QueuedVehicleOp::ReverseMove:
+        ok = reverseMoveVehicles(one, act.x, act.y) > 0;
+        break;
+    case QueuedVehicleOp::FaceDir:
+        if (act.x != 0 || act.y != 0) {
+            ok = faceVehicles(one, act.x, act.y) > 0;
+        } else {
+            auto& v = vehicles_[id];
+            if (v.alive && v.hp > 0 && v.hasCrew && !v.towedBy) {
+                v.facingTargetDir = act.dir32 & 31u;
+                ok = true;
+            }
+        }
+        break;
+    case QueuedVehicleOp::AttackGround:
+        ok = orderAttackGroundVehicles(one, act.x, act.y) > 0;
+        break;
+    case QueuedVehicleOp::Unload:
+        ok = unloadVehicles(one, outPoses) > 0;
+        break;
+    case QueuedVehicleOp::Unhitch:
+        ok = unhitchVehicles(one) > 0;
+        break;
+    }
+    vehicles_[id].pendingActions = std::move(saved);
+    return ok;
+}
+
+size_t TutorialUnits::queueVehicleOrder(std::span<const size_t> vehicleIds, QueuedVehicleOp op,
+                                          int targetX, int targetY, unsigned dir32,
+                                          std::vector<SoldierPose>* outPoses) {
+    const int actor = actorOwner();
+    const bool formationOp = (op == QueuedVehicleOp::Move || op == QueuedVehicleOp::AttackMove ||
+                              op == QueuedVehicleOp::ReverseMove);
+    std::vector<size_t> eligible;
+    eligible.reserve(vehicleIds.size());
+    for (size_t id : vehicleIds) {
+        if (id >= vehicles_.size() || std::ranges::find(eligible, id) != eligible.end()) continue;
+        const auto& v = vehicles_[id];
+        if (!v.alive || v.hp <= 0 || v.owner != actor || !v.hasCrew || v.towedBy) continue;
+        if (formationOp && v.speedPx <= 0.0) continue;
+        if (op == QueuedVehicleOp::ReverseMove && (!v.canMoveBackward || v.backSpeedPx <= 0.0)) continue;
+        eligible.push_back(id);
+    }
+    size_t accepted = 0;
+    const auto queueOne = [&](size_t id, int px, int py) {
+        auto& v = vehicles_[id];
+        const QueuedVehicleAction act{op, px, py, dir32};
+        const bool isBusy = v.moveTarget.has_value() || !v.waypoints.empty() ||
+                            !v.queuedOrders.empty() || !v.pendingActions.empty() ||
+                            v.attackGround.has_value() || v.facingTargetDir.has_value();
+        if (!isBusy) {
+            if (executeQueuedVehicleAction(id, act, outPoses)) ++accepted;
+            return;
+        }
+        if (!v.queuedOrders.empty()) {
+            const QueuedVehicleOp qOp = v.attackMove ? QueuedVehicleOp::AttackMove : QueuedVehicleOp::Move;
+            while (!v.queuedOrders.empty() && v.pendingActions.size() < 16u) {
+                const auto [qx, qy] = v.queuedOrders.front();
+                v.queuedOrders.pop_front();
+                v.pendingActions.push_back({qOp, qx, qy, 0});
+            }
+            v.queuedOrders.clear();
+        }
+        if (v.pendingActions.size() < 16u) {
+            v.pendingActions.push_back(act);
+            ++accepted;
+        }
+    };
+    if (formationOp && !eligible.empty()) {
+        for (const auto& [vid, pt] : vehicleFormationTargets(eligible, targetX, targetY)) {
+            queueOne(vid, pt.first, pt.second);
+        }
+    } else {
+        for (const size_t id : eligible) {
+            queueOne(id, targetX, targetY);
+        }
+    }
+    return accepted;
 }
 
 std::optional<bool> TutorialUnits::toggleVehicleHoldFire(std::span<const size_t> indices) {
@@ -463,6 +577,7 @@ size_t TutorialUnits::attackWithVehicles(std::span<const size_t> indices, bool t
         v.attackGround.reset();
         v.attackBuildingTarget.reset();
         v.queuedOrders.clear();
+        v.pendingActions.clear();
         v.patrolOrigin.reset();
         v.patrolDest.reset();
         v.reverseMove = false;
@@ -492,6 +607,7 @@ size_t TutorialUnits::attackVehicle(std::span<const size_t> indices, size_t targ
         s.captureVehicleTarget.reset();
         s.garrisonTarget.reset();
         s.queuedGoals.clear();
+        s.pendingActions.clear();
         s.patrolOrigin.reset();
         s.patrolDest.reset();
         s.attackMove = false;
@@ -586,6 +702,7 @@ size_t TutorialUnits::orderBoardVehicle(std::span<const size_t> soldierIds, size
         s.captureVehicleTarget.reset();
         s.garrisonTarget.reset();
         s.queuedGoals.clear();
+        s.pendingActions.clear();
         s.patrolOrigin.reset();
         s.patrolDest.reset();
         s.attackMove = false;
@@ -749,6 +866,7 @@ size_t TutorialUnits::orderCaptureVehicle(std::span<const size_t> soldierIds, si
         s.disarmMineTarget.reset();
         s.disarmWorkTicks = 0;
         s.queuedGoals.clear();
+        s.pendingActions.clear();
         s.patrolOrigin.reset();
         s.patrolDest.reset();
         s.attackMove = false;
@@ -921,6 +1039,7 @@ size_t TutorialUnits::orderAttackGroundVehicles(std::span<const size_t> indices,
         v.attackMove = false;
         v.attackMoveEngaging = false;
         v.queuedOrders.clear();
+        v.pendingActions.clear();
         v.patrolOrigin.reset();
         v.patrolDest.reset();
         v.moveTarget.reset();
@@ -1025,6 +1144,7 @@ void TutorialUnits::destroyVehicle(size_t vehicleIdx, std::vector<SoldierPose>& 
                 ss.route.clear();
                 ss.cursor = 0;
                 ss.queuedGoals.clear();
+                ss.pendingActions.clear();
                 ss.attackMove = false;
                 ss.attackTarget.reset();
                 ss.attackVehicleTarget.reset();
@@ -1119,6 +1239,7 @@ size_t TutorialUnits::orderTowVehicle(size_t tractorIdx, size_t gunIdx) {
     tr.attackMove = false;
     tr.attackMoveEngaging = false;
     tr.queuedOrders.clear();
+    tr.pendingActions.clear();
     tr.patrolOrigin.reset();
     tr.patrolDest.reset();
     tr.facingTargetDir.reset();
@@ -1520,7 +1641,7 @@ void TutorialUnits::stepCaptures(std::vector<SoldierPose>& changed) {
 }
 
 void TutorialUnits::stepVehicles(std::vector<SoldierPose>& changed) {
-    static constexpr std::array<double, 3> kSubtleSteer{{0.0, 0.55, -0.55}};
+    static constexpr std::array<double, 5> kSubtleSteer{{0.0, 0.55, -0.55, 1.05, -1.05}};
     const auto stepFacing = [&](size_t idx, Vehicle& veh) {
         if (!veh.facingTargetDir) return;
         const unsigned targetDir = *veh.facingTargetDir & 31u;
@@ -1586,6 +1707,13 @@ void TutorialUnits::stepVehicles(std::vector<SoldierPose>& changed) {
                 emitVehiclePose(i);
             }
             stepFacing(i, v);
+            if (!v.facingTargetDir && !v.attackGround && !v.pendingActions.empty()) {
+                while (!v.pendingActions.empty()) {
+                    const auto act = v.pendingActions.front();
+                    v.pendingActions.pop_front();
+                    if (executeQueuedVehicleAction(i, act, &changed)) break;
+                }
+            }
             continue;
         }
         if (v.attackMoveEngaging) {
@@ -1621,13 +1749,25 @@ void TutorialUnits::stepVehicles(std::vector<SoldierPose>& changed) {
         if (shallowBog) {
             stepSpeed = std::max(0.35, stepSpeed * 0.70);
         }
-        const auto advanceNextOrderOrPatrol = [&](Vehicle& veh) -> bool {
+        const auto advanceNextOrderOrPatrol = [&](size_t idx, Vehicle& veh) -> bool {
             if (!veh.queuedOrders.empty()) {
                 const auto [nx, ny] = veh.queuedOrders.front();
                 veh.queuedOrders.pop_front();
                 moveVehicleInternal(veh, nx, ny);
                 veh.wasMoving = true;
                 return true;
+            }
+            if (!veh.pendingActions.empty()) {
+                while (!veh.pendingActions.empty()) {
+                    const auto act = veh.pendingActions.front();
+                    veh.pendingActions.pop_front();
+                    if (executeQueuedVehicleAction(idx, act, &changed)) break;
+                }
+                if (veh.moveTarget) {
+                    veh.wasMoving = true;
+                    return true;
+                }
+                return false;
             }
             if (veh.patrolOrigin && veh.patrolDest) {
                 const auto origin = *veh.patrolOrigin;
@@ -1647,7 +1787,11 @@ void TutorialUnits::stepVehicles(std::vector<SoldierPose>& changed) {
         const auto [tx, ty] = *v.moveTarget;
         const double finalDist = det::detHypot(static_cast<double>(tx) - v.fx, static_cast<double>(ty) - v.fy);
         if (finalDist <= kVehicleArrivePx) {
-            if (!advanceNextOrderOrPatrol(v)) {
+            if (!advanceNextOrderOrPatrol(i, v)) {
+                const bool keepFace = v.facingTargetDir.has_value();
+                const bool keepGround = v.attackGround.has_value();
+                const auto savedFace = v.facingTargetDir;
+                const auto savedGround = v.attackGround;
                 v.moveTarget.reset();
                 v.waypoints.clear();
                 v.chasingAttackTarget = false;
@@ -1657,6 +1801,8 @@ void TutorialUnits::stepVehicles(std::vector<SoldierPose>& changed) {
                 v.attackMoveEngaging = false;
                 v.reverseMove = false;
                 v.wasMoving = false;
+                if (keepFace) v.facingTargetDir = savedFace;
+                if (keepGround) v.attackGround = savedGround;
                 emitVehiclePose(i);
             }
             continue;
@@ -1676,6 +1822,21 @@ void TutorialUnits::stepVehicles(std::vector<SoldierPose>& changed) {
             }
         }
 
+        const auto isDetectedAiMineCell = [&](SubCell candCell) -> bool {
+            if (v.owner <= 0 || v.owner >= 3 || mines_.empty() || !catalog_ || !catalog_->hasRetailCatalog()) return false;
+            const int ctx = candCell.x / 2, cty = candCell.y / 2;
+            if (ctx == v.cell.x / 2 && cty == v.cell.y / 2) return false;
+            const int tileW = grid_.width() / 2;
+            const int tileH = grid_.height() / 2;
+            if (ctx < 0 || cty < 0 || ctx >= tileW || cty >= tileH) return false;
+            const std::size_t mIdx = static_cast<std::size_t>(cty) * static_cast<std::size_t>(tileW) +
+                                     static_cast<std::size_t>(ctx);
+            if (mIdx >= mines_.size()) return false;
+            const std::uint8_t mb = mines_[mIdx];
+            if ((mb & 0x85u) != 0x85u) return false;
+            const int mOwner = (mb & 0x60u) == 0x60u ? 3 : ((mb & 0x40u) != 0u ? 1 : ((mb & 0x20u) != 0u ? 2 : 0));
+            return isHostile(mOwner, v.owner);
+        };
         const auto tryStepToward = [&](int targetX, int targetY, bool allowSteer,
                                        double& outFx, double& outFy, SubCell& outCell) -> bool {
             const double dx = static_cast<double>(targetX) - v.fx;
@@ -1685,7 +1846,8 @@ void TutorialUnits::stepVehicles(std::vector<SoldierPose>& changed) {
             const double stepLen = std::min(stepSpeed, dist);
             const double ux = dx / dist;
             const double uy = dy / dist;
-            const std::size_t maxIdx = allowSteer ? kSubtleSteer.size() : 1u;
+            const std::size_t maxIdx = (allowSteer || (v.owner > 0 && v.owner < 3 && !mines_.empty()))
+                ? kSubtleSteer.size() : 1u;
             for (std::size_t k = 0; k < maxIdx; ++k) {
                 const double angle = kSubtleSteer[k];
                 const auto sc = det::detSinCos(angle);
@@ -1696,10 +1858,10 @@ void TutorialUnits::stepVehicles(std::vector<SoldierPose>& changed) {
                 if (angle != 0.0) {
                     const double candDist = det::detHypot(static_cast<double>(targetX) - candFx,
                                                        static_cast<double>(targetY) - candFy);
-                    if (candDist > dist - 0.1) continue;
+                    if (candDist > dist - 0.1 && k < 3u) continue;
                 }
                 SubCell candCell{};
-                if (canVehicleStepTo(v, candFx, candFy, candCell)) {
+                if (canVehicleStepTo(v, candFx, candFy, candCell) && !isDetectedAiMineCell(candCell)) {
                     outFx = candFx;
                     outFy = candFy;
                     outCell = candCell;
@@ -1919,12 +2081,18 @@ void TutorialUnits::stepVehicles(std::vector<SoldierPose>& changed) {
 
         const double newDist = det::detHypot(static_cast<double>(tx) - v.fx, static_cast<double>(ty) - v.fy);
         if (newDist <= kVehicleArrivePx) {
-            if (!advanceNextOrderOrPatrol(v)) {
+            if (!advanceNextOrderOrPatrol(i, v)) {
+                const bool keepFace = v.facingTargetDir.has_value();
+                const bool keepGround = v.attackGround.has_value();
+                const auto savedFace = v.facingTargetDir;
+                const auto savedGround = v.attackGround;
                 v.moveTarget.reset();
                 v.waypoints.clear();
                 v.chasingAttackTarget = false;
                 v.attackMove = false;
                 v.attackMoveEngaging = false;
+                if (keepFace) v.facingTargetDir = savedFace;
+                if (keepGround) v.attackGround = savedGround;
                 v.reverseMove = false;
                 v.wasMoving = false;
             }
@@ -2009,7 +2177,9 @@ void TutorialUnits::stepVehicleCombat(std::vector<SoldierPose>& changed) {
     };
     const auto markMuzzleFlashReveal = [&](Vehicle& veh, bool isSecondary, bool isHeavy, int dmg) {
         if (!fog_ || isSecondary) return;
-        if (!multiplayerSymmetry_ && !isHostile(0, veh.owner)) return;
+        const bool retailCbReveal = catalog_ && catalog_->hasRetailCatalog() &&
+                                    (veh.isArtillery || veh.isRocketArtillery || veh.indirectArc1);
+        if (!multiplayerSymmetry_ && !retailCbReveal && !isHostile(0, veh.owner)) return;
         if (!veh.isArtillery && !veh.isRocketArtillery && !isHeavy && dmg < 80) return;
         const unsigned dur = (veh.isArtillery || veh.isRocketArtillery) ? 125u : 75u;
         veh.muzzleRevealTicks = std::max(veh.muzzleRevealTicks, dur);
@@ -2025,7 +2195,7 @@ void TutorialUnits::stepVehicleCombat(std::vector<SoldierPose>& changed) {
                 }
             }
             if (changedMask) fogDirty_ = true;
-        } else if (!veh.visible) {
+        } else if (isHostile(0, veh.owner) && !veh.visible) {
             veh.visible = true;
             veh.spottedMask = static_cast<std::uint8_t>(veh.spottedMask | 1u);
             fogDirty_ = true;
@@ -2211,6 +2381,9 @@ void TutorialUnits::stepVehicleCombat(std::vector<SoldierPose>& changed) {
         }
 
         const auto applyExplosiveSplash = [&](int impactX, int impactY, int dmgBase, int skipSoldierIdx, int skipBuildingIdx) {
+            if (v.craterScale1 > 0 || dmgBase >= 180) {
+                markShellCraterAt(impactX, impactY);
+            }
             const double splashR = v.indirectArc1 ? 92.0 : 72.0;
             const double bldSplashR = v.indirectArc1 ? 104.0 : 84.0;
             for (size_t k = 0; k < soldiers_.size(); ++k) {
@@ -2222,9 +2395,12 @@ void TutorialUnits::stepVehicleCombat(std::vector<SoldierPose>& changed) {
                 const int sy = (su + sv) / 2;
                 const double sd = det::detHypot(static_cast<double>(sx - impactX), static_cast<double>(sy - impactY));
                 if (sd > splashR) continue;
-                const int splashDmg = scaleVehicleDamageForDifficulty(
+                int splashDmg = scaleVehicleDamageForDifficulty(
                     ss.owner, std::max(1, static_cast<int>(det::detRoundToInt(
                         static_cast<double>(dmgBase) * 0.55 * (1.0 - sd / (splashR + 1.0))))));
+                if (infantryCoverKindAtTile(ss.cell.x / 2, ss.cell.y / 2) > 0) {
+                    splashDmg = std::max(1, (splashDmg * 3) / 4);
+                }
                 ss.hp = std::max(0, ss.hp - splashDmg);
                 if (ss.hp > 0) applySuppression(k, 25);
                 recordHit(ss.owner, ss.group);
@@ -2495,7 +2671,9 @@ void TutorialUnits::stepVehicleCombat(std::vector<SoldierPose>& changed) {
                     destroyVehicle(i, changed);
                     emitVehiclePose(i);
                 }
-                if (v.ammoPerShot1 > 0 && v.ammo <= 0) v.attackGround.reset();
+                if ((v.ammoPerShot1 > 0 && v.ammo <= 0) || (!v.pendingActions.empty() && v.burstCount1 == 0)) {
+                    v.attackGround.reset();
+                }
             }
             continue;
         }
