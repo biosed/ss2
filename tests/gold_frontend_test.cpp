@@ -514,6 +514,54 @@ void testFallbackInteraction() {
     check(lfe.state().screen() == ss2::FrontEnd::Screen::LoadGame, "Esc from LaunchSave returns to LoadGame");
     lfe.handleKey(SDLK_ESCAPE);
     check(lfe.state().screen() == ss2::FrontEnd::Screen::SinglePlayer, "Esc from LoadGame returns to SinglePlayer");
+
+    // Continue latest-save card on SinglePlayer + SingleMissions difficulty selector + scroll settings round-trip.
+    {
+        ss2::UserSettings scrollCfg{};
+        scrollCfg.scrollSpeedPercent = 150;
+        scrollCfg.edgeScroll = false;
+        const std::string ini = ss2::serializeUserSettings(scrollCfg);
+        const ss2::UserSettings roundTrip = ss2::parseUserSettings(ini);
+        check(roundTrip.scrollSpeedPercent == 150 && !roundTrip.edgeScroll,
+              "UserSettings round-trips scroll_speed and edge_scroll");
+        const ss2::UserSettings clamped = ss2::parseUserSettings("scroll_speed=999\nedge_scroll=0\n");
+        check(clamped.scrollSpeedPercent == 100 && !clamped.edgeScroll,
+              "parseUserSettings rejects invalid scroll_speed and keeps default 100");
+    }
+    {
+        ss2::GoldFrontEnd sfe(nullptr, {});
+        sfe.setMissions(makeSyntheticMissions(3));
+        sfe.handleMouseDown(188.0, 128.0, 1);  // SinglePlayer
+        // Empty saves: Continue card hidden, clicking {48, 376, 286, 62} is a no-op.
+        sfe.handleMouseDown(190.0, 405.0, 1);
+        check(sfe.state().screen() == ss2::FrontEnd::Screen::SinglePlayer,
+              "Continue area inactive when no saved games exist");
+        // SingleMissions difficulty button [268, 515, 244, 30] and 'D' shortcut.
+        sfe.handleMouseDown(186.0, 263.0, 1);  // SingleMissions
+        check(sfe.state().screen() == ss2::FrontEnd::Screen::SingleMissions, "entered SingleMissions");
+        sfe.renderToBuffer(1280, 720, buf);
+        check(buf.size() == 1280u * 720u * 4u, "SingleMissions with difficulty selector buffer size");
+        check(sfe.difficulty() == 2, "SingleMissions starts at Normal difficulty");
+        sfe.handleMouseDown(390.0, 530.0, 1);
+        check(sfe.difficulty() == 3, "SingleMissions difficulty button advances Normal -> Hard");
+        sfe.handleKey(SDLK_D);
+        check(sfe.difficulty() == 1, "SingleMissions D shortcut advances Hard -> Easy");
+        sfe.handleKey(SDLK_ESCAPE);
+        check(sfe.state().screen() == ss2::FrontEnd::Screen::SinglePlayer, "Esc returns to SinglePlayer");
+        // Populate saves -> Continue card renders cleanly and 1-click launches latest save.
+        sfe.setSaves({
+            {"Tutorial I — Quick Save", "/tmp/latest_continue.ss2save", "maps/single/--- TUTORIAL I ---.SSM",
+             "Tutorial I", "Quick Save", "2026-11-26 20:00", 1500u, 29u, 0u, 2, 12288u},
+            {"Older Save", "/tmp/older.ss2save", "maps/single/--- TUTORIAL I ---.SSM",
+             "Tutorial I", "Slot 1", "2026-11-26 19:50", 900u, 28u, 0u, 2, 12000u},
+        });
+        sfe.renderToBuffer(1280, 720, buf);
+        check(buf.size() == 1280u * 720u * 4u, "SinglePlayer with Continue card buffer size");
+        sfe.handleMouseDown(190.0, 405.0, 1);
+        check(sfe.state().screen() == ss2::FrontEnd::Screen::LaunchSave &&
+              sfe.state().launchSavePath() == "/tmp/latest_continue.ss2save",
+              "Clicking Continue card launches latest save directly");
+    }
 }
 
 struct SyntheticSueSpec {

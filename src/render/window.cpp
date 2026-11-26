@@ -1822,6 +1822,37 @@ void VulkanWindow::smoothFocusMap(double mapX, double mapY) {
     impl_->clampCenter(impl_->targetCenterX, impl_->targetCenterY, impl_->targetScale);
     impl_->animatingCamera = true;
 }
+void VulkanWindow::zoomBy(double factor) {
+    if (!impl_->hasMap() || !std::isfinite(factor) || factor <= 0.0) return;
+    const double minScale = std::min(1.0, impl_->fitScale());
+    const double prevTarget = impl_->animatingCamera ? impl_->targetScale : impl_->scale;
+    if (!impl_->animatingCamera) {
+        impl_->targetCenterX = impl_->centerX;
+        impl_->targetCenterY = impl_->centerY;
+    }
+    impl_->targetScale = std::clamp(prevTarget * factor, minScale, 8.0);
+    impl_->clampCenter(impl_->targetCenterX, impl_->targetCenterY, impl_->targetScale);
+    impl_->animatingCamera = true;
+}
+void VulkanWindow::resetZoom() {
+    if (!impl_->hasMap()) return;
+    const double minScale = std::min(1.0, impl_->fitScale());
+    if (!impl_->animatingCamera) {
+        impl_->targetCenterX = impl_->centerX;
+        impl_->targetCenterY = impl_->centerY;
+    }
+    impl_->targetScale = std::clamp(1.0, minScale, 8.0);
+    impl_->clampCenter(impl_->targetCenterX, impl_->targetCenterY, impl_->targetScale);
+    impl_->animatingCamera = true;
+}
+void VulkanWindow::fitMapOverview() {
+    if (!impl_->hasMap()) return;
+    impl_->targetCenterX = static_cast<double>(impl_->mapSize.width) * 0.5;
+    impl_->targetCenterY = static_cast<double>(impl_->mapSize.height) * 0.5;
+    impl_->targetScale = impl_->fitScale();
+    impl_->clampCenter(impl_->targetCenterX, impl_->targetCenterY, impl_->targetScale);
+    impl_->animatingCamera = true;
+}
 void VulkanWindow::panMap(double screenDx, double screenDy) {
     if (!impl_->hasMap() || (screenDx == 0.0 && screenDy == 0.0)) return;
     const auto [sx, sy] = impl_->windowScale();

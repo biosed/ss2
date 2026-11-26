@@ -82,6 +82,9 @@ public:
     assets::MapImage captureMap();
     void focusMap(int x, int y, bool zoomFromOverview = false);
     void smoothFocusMap(double mapX, double mapY);
+    void zoomBy(double factor);
+    void resetZoom();
+    void fitMapOverview();
     std::pair<double, double> mapPosition(float windowX, float windowY) const;
     void highlight(std::vector<MapRect>);
     // Replaces all markers; an empty list removes them. They stay until replaced

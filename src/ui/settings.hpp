@@ -67,6 +67,8 @@ struct UserSettings {
     int difficulty{2}; // 1 = Easy, 2 = Normal, 3 = Hard
     bool skipIntro{false};
     bool realismDoctrine{false};
+    int scrollSpeedPercent{100};
+    bool edgeScroll{true};
     std::set<std::string> completedMissions;
     std::map<std::string, int> missionHighScores;
     std::string activeProfile{"YourID"};
@@ -372,6 +374,11 @@ inline std::string serializeUserSettings(const UserSettings& input) {
     out << "difficulty=" << diff << '\n';
     out << "skip_intro=" << (s.skipIntro ? 1 : 0) << '\n';
     out << "realism_doctrine=" << (s.realismDoctrine ? 1 : 0) << '\n';
+    const int scrollSpeed = (s.scrollSpeedPercent == 60 || s.scrollSpeedPercent == 100 ||
+                             s.scrollSpeedPercent == 150 || s.scrollSpeedPercent == 200)
+                          ? s.scrollSpeedPercent : 100;
+    out << "scroll_speed=" << scrollSpeed << '\n';
+    out << "edge_scroll=" << (s.edgeScroll ? 1 : 0) << '\n';
     auto writeCompleted = [&](std::string_view key, const std::set<std::string>& completed) {
         std::set<std::string> normalized;
         for (const auto& m : completed) {
@@ -526,6 +533,14 @@ inline UserSettings parseUserSettings(std::string_view text) {
         } else if (key == "realism_doctrine") {
             bool b = false;
             if (parseBool(val, b)) s.realismDoctrine = b;
+        } else if (key == "scroll_speed") {
+            int sp = 100;
+            if (parseInt(val, sp) && (sp == 60 || sp == 100 || sp == 150 || sp == 200)) {
+                s.scrollSpeedPercent = sp;
+            }
+        } else if (key == "edge_scroll") {
+            bool b = true;
+            if (parseBool(val, b)) s.edgeScroll = b;
         } else if (key == "completed_missions") {
             parseCompletedList(val, s.completedMissions);
         } else if (key == "high_scores") {

@@ -490,7 +490,9 @@ void FrontEnd::activate(const std::string& id) {
             }
             break;
         case Screen::SingleMissions:
-            if (id == "start") {
+            if (id == "difficulty") {
+                cycleDifficulty(1);
+            } else if (id == "start") {
                 if (selectedMission()) {
                     briefingFromCampaign_ = false;
                     screen_ = Screen::Briefing;
@@ -654,6 +656,8 @@ std::string FrontEnd::shortcutId(char letter) const {
             }
             break;
         case Screen::SingleMissions:
+            if (c == 'd') return "difficulty";
+            if (c == 's') return "start";
             break;
         case Screen::Campaigns: {
             if (c == 'c') return "custom";

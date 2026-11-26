@@ -42,6 +42,7 @@ bool GameSession::updateViewTooltipAndPresent() {
     if (needVfxSync) {
         syncGpuSprites();
     }
+    const double scrollScale = std::clamp(settings.scrollSpeedPercent, 60, 200) / 100.0;
     if ((SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS) && !briefing.active() && !menu.active()) {
         const bool* kb = SDL_GetKeyboardState(nullptr);
         double kdx = 0.0, kdy = 0.0;
@@ -52,7 +53,7 @@ bool GameSession::updateViewTooltipAndPresent() {
         if (kdx != 0.0 && kdy != 0.0) { kdx *= 0.70710678; kdy *= 0.70710678; }
         if (kdx != 0.0 || kdy != 0.0) {
             const bool fast = kb[SDL_SCANCODE_LSHIFT] || kb[SDL_SCANCODE_RSHIFT];
-            const double keyPanSpeed = fast ? 1140.0 : 760.0;
+            const double keyPanSpeed = (fast ? 1140.0 : 760.0) * scrollScale;
             renderer.panMap(kdx * keyPanSpeed * frameDt, kdy * keyPanSpeed * frameDt);
         }
     }
@@ -73,7 +74,7 @@ bool GameSession::updateViewTooltipAndPresent() {
             int winW = 1, winH = 1;
             SDL_GetWindowSize(window, &winW, &winH);
             // Classic RTS mouse edge-scrolling when cursor is near the window edges (not while dragging).
-            if (!(buttons & (SDL_BUTTON_LMASK | SDL_BUTTON_MMASK)) && winW > 80 && winH > 80) {
+            if (settings.edgeScroll && !(buttons & (SDL_BUTTON_LMASK | SDL_BUTTON_MMASK)) && winW > 80 && winH > 80) {
                 constexpr float edgeMargin = 24.0f;
                 double dx = 0.0, dy = 0.0;
                 if (mx <= edgeMargin) dx = -1.0;
@@ -82,7 +83,7 @@ bool GameSession::updateViewTooltipAndPresent() {
                 else if (my >= static_cast<float>(winH) - edgeMargin) dy = 1.0;
                 if (dx != 0.0 && dy != 0.0) { dx *= 0.70710678; dy *= 0.70710678; }
                 if (dx != 0.0 || dy != 0.0) {
-                    constexpr double panSpeedPtsPerSec = 760.0;
+                    const double panSpeedPtsPerSec = 760.0 * scrollScale;
                     renderer.panMap(dx * panSpeedPtsPerSec * frameDt, dy * panSpeedPtsPerSec * frameDt);
                 }
             }

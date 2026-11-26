@@ -1090,6 +1090,13 @@ constexpr Entry table[] = {
     {"Select your Sudden Strike II folder (GOG or Retail CD).",
      "Sélectionnez votre dossier Sudden Strike II (GOG ou CD original).",
      "Selecciona tu carpeta de Sudden Strike II (GOG o CD original)."},
+    {"Camera scroll speed", "Vitesse de défilement", "Velocidad de desplazamiento"},
+    {"Edge scrolling", "Défilement aux bords", "Desplazamiento en bordes"},
+    {"Zoom in / out", "Zoom avant / arrière", "Acercar / alejar"},
+    {"Wheel / Num + / -", "Molette / Pavé + / -", "Rueda / Num + / -"},
+    {"Reset zoom / Map overview", "Réinitialiser zoom / Vue d'ensemble", "Restablecer zoom / Vista general"},
+    {"Zoom reset (1:1).", "Zoom réinitialisé (1:1).", "Zoom restablecido (1:1)."},
+    {"Camera: full map overview.", "Caméra : vue d'ensemble de la carte.", "Cámara: vista general del mapa."},
 };
 
 std::atomic<Language> current{Language::english};

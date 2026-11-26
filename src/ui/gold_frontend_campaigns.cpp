@@ -42,6 +42,7 @@ constexpr std::array<ButtonSpec, 2> kSingleMissionButtons{{
 }};
 
 constexpr RectD kDifficultyButtonRect{268, 515, 244, 30};
+constexpr RectD kContinueButtonRect{48, 376, 286, 62};
 
 constexpr std::array<ButtonSpec, 4> kBriefingButtons{{
     {"brief_restart", "Restart", 'R', {577, 211, 186, 33}, false},
@@ -400,6 +401,7 @@ void GoldFrontEnd::advanceBriefingMedia(std::chrono::nanoseconds dt) {
 }
 
 std::string GoldFrontEnd::hitTestSinglePlayer(double sx, double sy) const {
+    if (!saves_.empty() && kContinueButtonRect.contains(sx, sy)) return "continue_latest";
     if (const auto id = hitTestButtons(kSinglePlayerButtons, sx, sy); !id.empty()) return id;
     if (kProfileNameRect.contains(sx, sy)) return "profile_name_field";
     if (kProfileScrollUpRect.contains(sx, sy)) return "profile_scroll_up";
@@ -434,7 +436,8 @@ std::string GoldFrontEnd::hitTestCampaigns(double sx, double sy) const {
 }
 
 std::string GoldFrontEnd::hitTestMissionBrowser(double sx, double sy) const {
-    if (fe_.screen() == FrontEnd::Screen::CampaignMissions &&
+    if ((fe_.screen() == FrontEnd::Screen::CampaignMissions ||
+         fe_.screen() == FrontEnd::Screen::SingleMissions) &&
         kDifficultyButtonRect.contains(sx, sy)) {
         return "difficulty";
     }
@@ -581,6 +584,19 @@ bool GoldFrontEnd::activateSinglePlayer(const std::string& id) {
         }
         return true;
     }
+    if (id == "continue_latest") {
+        if (!saves_.empty()) {
+            if (profileEditMode_ != ProfileEditMode::None) {
+                profileEditMode_ = ProfileEditMode::None;
+                profileNameDraft_ = settings_.activeProfile;
+                if (window_) SDL_StopTextInput(window_);
+            }
+            fe_.selectSave(0);
+            fe_.activate("save:0");
+            onScreenChanged(FrontEnd::Screen::SinglePlayer);
+        }
+        return true;
+    }
     if (profileEditMode_ != ProfileEditMode::None) {
         profileEditMode_ = ProfileEditMode::None;
         profileNameDraft_ = settings_.activeProfile;
@@ -611,10 +627,16 @@ bool GoldFrontEnd::handleSinglePlayerEditKey(SDL_Keycode key) {
 }
 
 void GoldFrontEnd::handleSinglePlayerKey(SDL_Keycode key) {
+    std::vector<std::string> order{"campaigns", "missions", "load"};
+    if (!saves_.empty()) order.emplace_back("continue_latest");
+    order.emplace_back("profile_new");
+    order.emplace_back("profile_rename");
+    order.emplace_back("profile_delete");
+    order.emplace_back("cancel");
     if (key == SDLK_UP || key == SDLK_LEFT) {
-        cycleFocus({"campaigns", "missions", "load", "profile_new", "profile_rename", "profile_delete", "cancel"}, -1);
+        cycleFocus(order, -1);
     } else if (key == SDLK_DOWN || key == SDLK_RIGHT || key == SDLK_TAB) {
-        cycleFocus({"campaigns", "missions", "load", "profile_new", "profile_rename", "profile_delete", "cancel"}, 1);
+        cycleFocus(order, 1);
     } else if (key == SDLK_RETURN || key == SDLK_KP_ENTER || key == SDLK_SPACE) {
         activateId(focusedId_);
     }
@@ -668,14 +690,9 @@ void GoldFrontEnd::handleMissionBrowserKey(SDL_Keycode key) {
     handleActiveListNavigationKey(key);
     if (key == SDLK_LEFT || key == SDLK_RIGHT || key == SDLK_TAB) {
         const int step = key == SDLK_LEFT ? -1 : 1;
-        if (fe_.screen() == FrontEnd::Screen::CampaignMissions) {
-            cycleFocus({"start", "difficulty", "cancel"}, step);
-        } else {
-            cycleFocus({"start", "cancel"}, step);
-        }
+        cycleFocus({"start", "difficulty", "cancel"}, step);
     } else if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
-        if (focusedId_ == "cancel" ||
-            (fe_.screen() == FrontEnd::Screen::CampaignMissions && focusedId_ == "difficulty")) {
+        if (focusedId_ == "cancel" || focusedId_ == "difficulty") {
             activateId(focusedId_);
         } else {
             activateId("start");
@@ -813,6 +830,35 @@ void GoldFrontEnd::renderSinglePlayer(const RenderEnv& env) {
         drawGoldStencilButton(cr, pangoCtx, b.rect, tr(b.enLabel), b.shortcut,
                               hoveredId_ == b.id, focusedId_ == b.id || activeButton, b.enabled,
                               small ? 17.5 : 24.0, small);
+    }
+    if (!saves_.empty()) {
+        const auto& latest = saves_.front();
+        const bool hov = (hoveredId_ == "continue_latest");
+        const bool foc = (focusedId_ == "continue_latest");
+        drawBronzeBox(cr, kContinueButtonRect.x, kContinueButtonRect.y,
+                      kContinueButtonRect.w, kContinueButtonRect.h,
+                      (hov || foc) ? 0.94 : 0.84);
+        if (hov || foc) {
+            cairo_save(cr);
+            cairo_set_source_rgba(cr, 224.0 / 255.0, 198.0 / 255.0, 110.0 / 255.0, 0.85);
+            cairo_set_line_width(cr, 1.4);
+            cairo_rectangle(cr, kContinueButtonRect.x + 1.0, kContinueButtonRect.y + 1.0,
+                            kContinueButtonRect.w - 2.0, kContinueButtonRect.h - 2.0);
+            cairo_stroke(cr);
+            cairo_restore(cr);
+        }
+        const RectD titleR{kContinueButtonRect.x + 8.0, kContinueButtonRect.y + 4.0,
+                           kContinueButtonRect.w - 16.0, 26.0};
+        drawGoldStencilButton(cr, pangoCtx, titleR, tr("Continue"), '\0',
+                              hov, foc, true, 18.0, true);
+        std::string detail = !latest.missionTitle.empty() ? latest.missionTitle : latest.name;
+        if (!latest.slotLabel.empty()) detail += "  (" + latest.slotLabel + ")";
+        auto sub = makeTextLayout(pangoCtx, detail, 11.5, false,
+                                  kContinueButtonRect.w - 20.0, PANGO_ALIGN_CENTER);
+        pango_layout_set_ellipsize(sub.get(), PANGO_ELLIPSIZE_END);
+        cairo_move_to(cr, kContinueButtonRect.x + 10.0, kContinueButtonRect.y + 34.0);
+        cairo_set_source_rgb(cr, 232.0 / 255.0, 224.0 / 255.0, 188.0 / 255.0);
+        pango_cairo_show_layout(cr, sub.get());
     }
 }
 
@@ -1148,7 +1194,7 @@ void GoldFrontEnd::renderMissionBrowserScreen(const RenderEnv& env) {
     } else {
         renderMissionBrowser(tr("Single Player"), [&](std::size_t i) -> const auto& { return missions_[i]; },
                              [](std::size_t) { return true; }, missions_.size(),
-                             fe_.selected(), "mission:", false);
+                             fe_.selected(), "mission:", true);
     }
 }
 

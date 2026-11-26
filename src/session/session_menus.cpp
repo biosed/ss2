@@ -125,6 +125,10 @@ std::vector<MenuItem> GameSession::buildOptionsItems() {
     }
 
     items.push_back({"sec:interface", ss2::tr("Interface"), "", false});
+    items.push_back({"scroll_speed", ss2::tr("Camera scroll speed"),
+                     std::to_string(settings.scrollSpeedPercent) + "%", true});
+    items.push_back({"edge_scroll", ss2::tr("Edge scrolling"),
+                     ss2::tr(settings.edgeScroll ? "On" : "Off"), true});
     const auto current = ss2::language();
     items.push_back({"language", ss2::tr("Language"),
                      current == ss2::Language::french ? "Français" : current == ss2::Language::spanish ? "Español" : "English", true});
@@ -349,6 +353,8 @@ void GameSession::openControlsMenu() {
         {"", ss2::tr("Officer binoculars"), "B", false},
         {"sec:cam", ss2::tr("Camera & Interface"), "", false},
         {"", ss2::tr("Pan / Zoom"), ss2::tr("Edges / Arrows / Wheel"), false},
+        {"", ss2::tr("Zoom in / out"), ss2::tr("Wheel / Num + / -"), false},
+        {"", ss2::tr("Reset zoom / Map overview"), "Backspace / Alt+Home", false},
         {"", ss2::tr("Hide / restore HUD"), "Alt+Y", false},
         {"", ss2::tr("Save / jump bookmark"), "Ctrl+F1..F8 / F1..F8", false},
         {"", ss2::tr("Jump to recent alert (cycle)"), "Space", false},

@@ -491,6 +491,15 @@ int main() {
               sc.shortcutId('l') == "load", "Single Player letter shortcuts");
         sc.activate(sc.shortcutId('s'));
         check(sc.screen() == FrontEnd::Screen::SingleMissions, "shortcut S opens Single Missions");
+        check(sc.shortcutId('d') == "difficulty" && sc.shortcutId('D') == "difficulty",
+              "Single Missions advertises D and maps it to difficulty");
+        sc.activate(sc.shortcutId('d'));
+        check(sc.difficulty() == 3, "Single Missions difficulty D cycles Normal -> Hard");
+        sc.activate("difficulty");
+        check(sc.difficulty() == 1, "Single Missions difficulty cycles Hard -> Easy");
+        sc.activate("difficulty");
+        check(sc.difficulty() == 2, "Single Missions difficulty cycles Easy -> Normal");
+        check(sc.shortcutId('s') == "start", "Single Missions shortcut S maps to Start");
         sc.activate("mission:0");
         check(sc.screen() == FrontEnd::Screen::Briefing && sc.shortcutId('s') == "start",
               "Briefing advertises S and maps it to Start");

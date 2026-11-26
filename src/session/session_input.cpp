@@ -312,6 +312,24 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
                 menu.highlight("language");
                 return true;
             }
+            if (optId == "scroll_speed") {
+                static constexpr std::array<int, 4> kScrollSpeeds{{60, 100, 150, 200}};
+                std::size_t idx = 1;
+                for (std::size_t k = 0; k < kScrollSpeeds.size(); ++k) {
+                    if (kScrollSpeeds[k] == settings.scrollSpeedPercent) { idx = k; break; }
+                }
+                settings.scrollSpeedPercent =
+                    kScrollSpeeds[(idx + std::size_t(step + int(kScrollSpeeds.size()))) % kScrollSpeeds.size()];
+                persistNow();
+                menu.setItems(buildOptionsItems());
+                return true;
+            }
+            if (optId == "edge_scroll") {
+                settings.edgeScroll = !settings.edgeScroll;
+                persistNow();
+                menu.setItems(buildOptionsItems());
+                return true;
+            }
             if (optId == "enhanced") {
                 enhancedGraphics = !enhancedGraphics;
                 settings.enhancedGraphics = enhancedGraphics;
@@ -1070,6 +1088,28 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
                 renderer.smoothFocusMap(ctr->first, ctr->second);
                 return;
             }
+        }
+        if (simulation && event.key.key == SDLK_HOME &&
+            (event.key.mod & SDL_KMOD_ALT) != 0 && !(event.key.mod & SDL_KMOD_CTRL)) {
+            renderer.fitMapOverview();
+            orderNotice.show(ss2::tr("Camera: full map overview."), ss2::NoticeKind::accepted);
+            return;
+        }
+        if (simulation && (event.key.key == SDLK_BACKSPACE || event.key.key == SDLK_KP_0) &&
+            !(event.key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT))) {
+            renderer.resetZoom();
+            orderNotice.show(ss2::tr("Zoom reset (1:1)."), ss2::NoticeKind::accepted);
+            return;
+        }
+        if (simulation && event.key.key == SDLK_KP_PLUS &&
+            !(event.key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT))) {
+            renderer.zoomBy(1.25);
+            return;
+        }
+        if (simulation && event.key.key == SDLK_KP_MINUS &&
+            !(event.key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT))) {
+            renderer.zoomBy(0.8);
+            return;
         }
         if (simulation && selection && scene && event.key.key == SDLK_COMMA &&
             !(event.key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT))) {

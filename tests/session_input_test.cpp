@@ -682,6 +682,52 @@ int main(int argc, char** argv) try {
         m2Replay.renderer.present(m2Replay.empty);
     }
 
+    // Verify Pause -> Options scroll_speed / edge_scroll controls and smooth keyboard zoom hotkeys.
+    {
+        ss2::UserSettings camSettings{};
+        ss2::GameSession camSess(
+            win, validate ? &report : nullptr,
+            0, false, gameDir, {}, {}, false, true,
+            camSettings, false, false, nullptr, {}, nullptr, true);
+        require(camSess.simulation && camSess.scene && camSess.selection,
+                "Camera/Options GameSession failed to initialize");
+        while (camSess.briefing.active()) camSess.handleInputEvent(makeKeyDown(win, SDLK_RETURN));
+
+        // Open Pause -> Options and adjust scroll_speed (100 -> 150 -> 100 -> 60) and edge_scroll (true -> false).
+        camSess.handleInputEvent(makeKeyDown(win, SDLK_ESCAPE));
+        require(camSess.menu.active(), "Esc opens Pause Menu");
+        for (int step = 0; step < 12 && camSess.menu.highlighted() != "options"; ++step) {
+            camSess.handleInputEvent(makeKeyDown(win, SDLK_DOWN));
+        }
+        require(camSess.menu.highlighted() == "options", "Pause Menu contains options");
+        camSess.handleInputEvent(makeKeyDown(win, SDLK_RETURN));
+        require(camSess.menuPage == ss2::GameSession::MenuPage::Options, "Entered Options submenu");
+        for (int step = 0; step < 20 && camSess.menu.highlighted() != "scroll_speed"; ++step) {
+            camSess.handleInputEvent(makeKeyDown(win, SDLK_DOWN));
+        }
+        require(camSess.menu.highlighted() == "scroll_speed", "Options contains scroll_speed");
+        camSess.handleInputEvent(makeKeyDown(win, SDLK_RIGHT));
+        require(camSess.settings.scrollSpeedPercent == 150, "Right steps scroll_speed 100 -> 150");
+        camSess.handleInputEvent(makeKeyDown(win, SDLK_LEFT));
+        camSess.handleInputEvent(makeKeyDown(win, SDLK_LEFT));
+        require(camSess.settings.scrollSpeedPercent == 60, "Left steps scroll_speed 150 -> 100 -> 60");
+        camSess.handleInputEvent(makeKeyDown(win, SDLK_DOWN));
+        require(camSess.menu.highlighted() == "edge_scroll", "Options places edge_scroll below scroll_speed");
+        camSess.handleInputEvent(makeKeyDown(win, SDLK_RETURN));
+        require(!camSess.settings.edgeScroll, "Return toggles edge_scroll off");
+        camSess.handleInputEvent(makeKeyDown(win, SDLK_ESCAPE));
+        camSess.handleInputEvent(makeKeyDown(win, SDLK_ESCAPE));
+        require(!camSess.menu.active(), "Esc closes Pause Menu back to gameplay");
+
+        // Exercise keyboard zoom hotkeys cleanly.
+        camSess.handleInputEvent(makeKeyDown(win, SDLK_KP_PLUS));
+        camSess.handleInputEvent(makeKeyDown(win, SDLK_KP_MINUS));
+        camSess.handleInputEvent(makeKeyDown(win, SDLK_BACKSPACE));
+        camSess.handleInputEvent(makeKeyDown(win, SDLK_HOME, SDL_KMOD_ALT));
+        camSess.updateViewTooltipAndPresent();
+        camSess.renderer.present(camSess.empty);
+    }
+
     require(report.errors.load() == 0, "Vulkan validation errors observed during GameSession input test");
     std::cout << "GameSession headless input-to-command + replay parity (" << recordedLog.size()
               << " commands, tick " << endTick << ", stateHash 0x" << std::hex << endHash << std::dec
