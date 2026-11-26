@@ -343,6 +343,32 @@ int main(int argc, char**) {
                 throw std::runtime_error("Phase 4U clicks >= 2 failed on triple-click");
             }
             std::cout << "Phase 4U double-click hidden-unit exclusion & clicks>=2 selection PASSED\n";
+
+            // Ctrl+Shift+4 appends to control group 4 without discarding prior members; Ctrl+4 replaces.
+            sel4u.setSelection({0}, {});
+            SDL_Event grp{};
+            grp.type = SDL_EVENT_KEY_DOWN;
+            grp.key.key = SDLK_4;
+            grp.key.mod = SDL_KMOD_CTRL;
+            sel4u.handle(grp);
+            sel4u.setSelection({1}, {});
+            grp.key.mod = static_cast<SDL_Keymod>(SDL_KMOD_CTRL | SDL_KMOD_SHIFT);
+            sel4u.handle(grp);
+            sel4u.setSelection({}, {});
+            grp.key.mod = SDL_KMOD_NONE;
+            sel4u.handle(grp);
+            if (sel4u.selected() != (std::set<size_t>{0, 1})) {
+                throw std::runtime_error("Ctrl+Shift+4 did not append soldier 1 to group 4");
+            }
+            sel4u.setSelection({1}, {});
+            grp.key.mod = SDL_KMOD_CTRL;
+            sel4u.handle(grp);
+            sel4u.setSelection({}, {});
+            grp.key.mod = SDL_KMOD_NONE;
+            sel4u.handle(grp);
+            if (sel4u.selected() != (std::set<size_t>{1})) {
+                throw std::runtime_error("Ctrl+4 did not overwrite group 4");
+            }
         }
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

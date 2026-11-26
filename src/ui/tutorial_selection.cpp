@@ -410,9 +410,19 @@ void TutorialSelection::handle(const SDL_Event& e) {
         auto& group = groups_[slot];
         auto& vgroup = vehicleGroups_[slot];
         if (e.key.mod & SDL_KMOD_CTRL) {
-            group.clear();
+            const bool append = (e.key.mod & SDL_KMOD_SHIFT) != 0;
+            if (!append) {
+                group.clear();
+                vgroup.clear();
+            } else {
+                std::erase_if(group, [&](size_t i) {
+                    return i >= units_.size() || !alive(i) || units_[i].owner != localPlayer_;
+                });
+                std::erase_if(vgroup, [&](size_t i) {
+                    return i >= vehicles_.size() || !vehicleAlive(i) || vehicles_[i].owner != localPlayer_;
+                });
+            }
             for (const auto i : selected_) if (alive(i) && units_[i].owner == localPlayer_) group.insert(i);
-            vgroup.clear();
             for (const auto i : selectedVehicles_) if (vehicleAlive(i) && vehicles_[i].owner == localPlayer_) vgroup.insert(i);
             refresh();
         } else {

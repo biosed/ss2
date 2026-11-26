@@ -345,7 +345,7 @@ void GameSession::openControlsMenu() {
         {"", ss2::tr("Deploy tactical smoke screen"), "Y + click", false},
         {"", ss2::tr("Game speed (- / +)"), "[ / ]", false},
         {"", ss2::tr("Quick Save / Quick Load"), "F9 / F10 (Ctrl+S / L)", false},
-        {"", ss2::tr("Assign / recall / focus group"), "Ctrl+0..9 / 0..9 / 2x 0..9", false},
+        {"", ss2::tr("Assign / append / recall group"), "Ctrl / Ctrl+Shift / 0..9", false},
         {"sec:stance", ss2::tr("Tactical Stance"), "", false},
         {"", ss2::tr("Stop selected units"), "S", false},
         {"", ss2::tr("Hold fire / Depot hold (trucks)"), "H", false},
@@ -1166,7 +1166,11 @@ bool GameSession::loadSaveFromPath(const std::filesystem::path& path, const std:
 }
 
 void GameSession::doLoadSlot(int slot) {
-    const std::string notice = (slot < 0)
+    const std::string notice = (slot == -2)
+        ? ss2::tr("Loaded Mission-Start Auto-Save.")
+        : (slot == -3)
+        ? ss2::tr("Loaded Objective Auto-Save.")
+        : (slot < 0)
         ? ss2::tr("Loaded Auto-Save.")
         : (slot == 0 ? ss2::tr("Quick-loaded mission state (F10).")
                      : ss2::trf("Loaded mission state from Slot {0}.", {std::to_string(slot)}));
@@ -1194,8 +1198,14 @@ void GameSession::openSaveLoadMenu() {
             const unsigned remS = secs % 60u;
             const std::string mmss = (mins < 10u ? "0" : "") + std::to_string(mins) + ":" +
                                      (remS < 10u ? "0" : "") + std::to_string(remS);
-            return mmss + " | " + std::to_string(decoded->meta.playerSoldiers) + " inf / " +
-                   std::to_string(decoded->meta.playerVehicles) + " veh";
+            std::string tag = mmss + " | " + std::to_string(decoded->meta.playerSoldiers) + " inf / " +
+                              std::to_string(decoded->meta.playerVehicles) + " veh";
+            if (decoded->meta.hasMetadata) {
+                const char* diffKey = decoded->meta.difficulty <= 1 ? "Easy"
+                                    : decoded->meta.difficulty >= 3 ? "Hard" : "Normal";
+                tag += " | " + ss2::tr(diffKey);
+            }
+            return tag;
         }
         const auto fsz = std::filesystem::file_size(path, ec);
         return std::to_string(std::max<std::uintmax_t>(1u, fsz / 1024u)) + " KB";

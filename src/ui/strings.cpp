@@ -1097,6 +1097,16 @@ constexpr Entry table[] = {
     {"Reset zoom / Map overview", "Réinitialiser zoom / Vue d'ensemble", "Restablecer zoom / Vista general"},
     {"Zoom reset (1:1).", "Zoom réinitialisé (1:1).", "Zoom restablecido (1:1)."},
     {"Camera: full map overview.", "Caméra : vue d'ensemble de la carte.", "Cámara: vista general del mapa."},
+    {"Scroll", "Défilement", "Desplaz."},
+    {"Edge", "Bords", "Bordes"},
+    {"Assign / append / recall group", "Assigner / ajouter / rappeler groupe", "Asignar / añadir / llamar grupo"},
+    {"Group {0} assigned ({1} units).", "Groupe {0} assigné ({1} unités).", "Grupo {0} asignado ({1} unidades)."},
+    {"Added to group {0} ({1} units).", "Ajouté au groupe {0} ({1} unités).", "Añadido al grupo {0} ({1} unidades)."},
+    {"Group {0} cleared.", "Groupe {0} vidé.", "Grupo {0} vacío."},
+    {"Loaded Mission-Start Auto-Save.", "Sauvegarde auto de début de mission chargée.",
+     "Autoguardado inicial de misión cargado."},
+    {"Loaded Objective Auto-Save.", "Sauvegarde auto d'objectif chargée.",
+     "Autoguardado de objetivo cargado."},
 };
 
 std::atomic<Language> current{Language::english};

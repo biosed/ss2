@@ -726,6 +726,24 @@ int main(int argc, char** argv) try {
         camSess.handleInputEvent(makeKeyDown(win, SDLK_HOME, SDL_KMOD_ALT));
         camSess.updateViewTooltipAndPresent();
         camSess.renderer.present(camSess.empty);
+
+        // Verify Ctrl+1 and Ctrl+Shift+1 append both TutorialSelection and hudGroups cleanly.
+        std::vector<std::size_t> p0Soldiers;
+        for (std::size_t idx = 0; idx < camSess.scene->units().size() && p0Soldiers.size() < 2u; ++idx) {
+            const auto& u = camSess.scene->units()[idx];
+            if (u.owner == 0 && u.hp > 0 && u.visible) p0Soldiers.push_back(idx);
+        }
+        require(p0Soldiers.size() == 2u, "Tutorial I must have at least 2 visible Player 0 soldiers");
+        camSess.selection->setSelection({p0Soldiers[0]}, {});
+        camSess.handleInputEvent(makeKeyDown(win, SDLK_1, SDL_KMOD_CTRL));
+        camSess.selection->setSelection({p0Soldiers[1]}, {});
+        camSess.handleInputEvent(
+            makeKeyDown(win, SDLK_1, static_cast<SDL_Keymod>(SDL_KMOD_CTRL | SDL_KMOD_SHIFT)));
+        require(camSess.hudGroups[1].size() == 2u, "Ctrl+Shift+1 must append second unit to hudGroups[1]");
+        camSess.selection->setSelection({}, {});
+        camSess.handleInputEvent(makeKeyDown(win, SDLK_1));
+        require(camSess.selection->selected().size() == 2u,
+                "Pressing 1 must recall both soldiers appended via Ctrl+Shift+1");
     }
 
     require(report.errors.load() == 0, "Vulkan validation errors observed during GameSession input test");

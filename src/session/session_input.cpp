@@ -2223,8 +2223,41 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
         if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat &&
             (event.key.mod & SDL_KMOD_CTRL) && event.key.key >= SDLK_0 && event.key.key <= SDLK_9) {
             const auto grpIdx = static_cast<std::size_t>(event.key.key - SDLK_0);
-            hudGroups[grpIdx] = selection->selected();
-            hudVehicleGroups[grpIdx] = selection->selectedVehicles();
+            const bool append = (event.key.mod & SDL_KMOD_SHIFT) != 0;
+            if (!append) {
+                hudGroups[grpIdx] = selection->selected();
+                hudVehicleGroups[grpIdx] = selection->selectedVehicles();
+            } else {
+                if (scene) {
+                    const auto& units = scene->units();
+                    std::erase_if(hudGroups[grpIdx], [&](size_t i) {
+                        return i >= units.size() || units[i].hp <= 0 || units[i].owner != localOwner();
+                    });
+                }
+                if (vehicleScene) {
+                    const auto& vehs = vehicleScene->vehicles();
+                    std::erase_if(hudVehicleGroups[grpIdx], [&](size_t i) {
+                        return i >= vehs.size() || !vehs[i].alive || vehs[i].hp <= 0 || vehs[i].owner != localOwner();
+                    });
+                }
+                hudGroups[grpIdx].insert(selection->selected().begin(), selection->selected().end());
+                hudVehicleGroups[grpIdx].insert(selection->selectedVehicles().begin(),
+                                                selection->selectedVehicles().end());
+            }
+            const std::size_t total = hudGroups[grpIdx].size() + hudVehicleGroups[grpIdx].size();
+            if (audio) audio->playGroup("switch", 0.30f, ss2::VoicePriority::Low);
+            if (total == 0u) {
+                orderNotice.show(ss2::trf("Group {0} cleared.", {std::to_string(grpIdx)}),
+                                 ss2::NoticeKind::accepted);
+            } else if (append) {
+                orderNotice.show(ss2::trf("Added to group {0} ({1} units).",
+                                          {std::to_string(grpIdx), std::to_string(total)}),
+                                 ss2::NoticeKind::accepted);
+            } else {
+                orderNotice.show(ss2::trf("Group {0} assigned ({1} units).",
+                                          {std::to_string(grpIdx), std::to_string(total)}),
+                                 ss2::NoticeKind::accepted);
+            }
         }
         selection->handle(event);
         if (!selection->selected().empty() || !selection->selectedVehicles().empty()) {

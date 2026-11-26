@@ -1210,7 +1210,8 @@ void GoldFrontEnd::activateId(const std::string& id) {
         return;
     }
     if (prev == FrontEnd::Screen::Options) {
-        if (id == "opt_enhanced_gfx" || id == "opt_doctrine") {
+        if (id == "opt_enhanced_gfx" || id == "opt_doctrine" ||
+            id == "opt_scroll_speed" || id == "opt_edge_scroll") {
             focusedId_ = id;
             adjustOption(id, 1);
             return;

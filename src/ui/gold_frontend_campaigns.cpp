@@ -989,6 +989,17 @@ void GoldFrontEnd::renderMissionBrowserScreen(const RenderEnv& env) {
                                     const char* rowPrefix, bool showDifficulty) {
         drawHeading(cr, pangoCtx, heading, {200, 38, 400, 28}, 17.0);
         drawHeading(cr, pangoCtx, tr("Missions:"), {130, 110, 150, 20}, 15.0);
+        if (rowCount > 0) {
+            std::size_t completedCount = 0;
+            for (std::size_t i = 0; i < rowCount; ++i) {
+                if (rowAt(i).completed) ++completedCount;
+            }
+            const std::string progress = std::to_string(completedCount) + "/" + std::to_string(rowCount);
+            auto progLbl = makeTextLayout(pangoCtx, progress, 12.5, true, 80.0, PANGO_ALIGN_RIGHT);
+            cairo_move_to(cr, 292.0, 111.0);
+            cairo_set_source_rgb(cr, 226.0 / 255.0, 206.0 / 255.0, 138.0 / 255.0);
+            pango_cairo_show_layout(cr, progLbl.get());
+        }
         drawHeading(cr, pangoCtx, tr("Description:"), {520, 110, 144, 20}, 15.0);
 
         drawBronzeBox(cr, kListX, kListY, kListW, kListH, 0.88);

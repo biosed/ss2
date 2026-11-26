@@ -28,6 +28,8 @@ constexpr RectD kOptionsOkRect{132, 524, 112, 35};
 constexpr RectD kOptionsEnhancedGfxRect{264, 524, 258, 35};
 constexpr RectD kOptionsCancelRect{542, 524, 118, 35};
 constexpr RectD kOptionsDoctrineRect{526, 26, 188, 30};
+constexpr RectD kOptionsScrollSpeedRect{86, 26, 132, 30};
+constexpr RectD kOptionsEdgeScrollRect{224, 26, 114, 30};
 
 RectD optionRowRect(std::size_t idx) {
     return {96.0, kOptionsRowY0 + double(idx) * kOptionsRowStep, 608.0, kOptionsRowH};
@@ -234,6 +236,17 @@ void GoldFrontEnd::adjustOption(const std::string& id, int delta) {
     } else if (id == "opt_doctrine") {
         optionsDraft_.realismDoctrine = !optionsDraft_.realismDoctrine;
         openCue = optionsDraft_.realismDoctrine;
+    } else if (id == "opt_scroll_speed") {
+        static constexpr std::array<int, 4> kScrollSpeeds{{60, 100, 150, 200}};
+        std::size_t idx = 1;
+        for (std::size_t i = 0; i < kScrollSpeeds.size(); ++i) {
+            if (kScrollSpeeds[i] == optionsDraft_.scrollSpeedPercent) { idx = i; break; }
+        }
+        optionsDraft_.scrollSpeedPercent =
+            kScrollSpeeds[(idx + std::size_t(step + int(kScrollSpeeds.size()))) % kScrollSpeeds.size()];
+    } else if (id == "opt_edge_scroll") {
+        optionsDraft_.edgeScroll = !optionsDraft_.edgeScroll;
+        openCue = optionsDraft_.edgeScroll;
     } else if (id == "opt_effects") {
         optionsDraft_.combatEffects = !optionsDraft_.combatEffects;
         openCue = optionsDraft_.combatEffects;
@@ -284,6 +297,8 @@ std::string GoldFrontEnd::hitTestOptions(double sx, double sy) const {
     if (kOptionsOkRect.contains(sx, sy)) return "ok";
     if (kOptionsEnhancedGfxRect.contains(sx, sy)) return "opt_enhanced_gfx";
     if (kOptionsDoctrineRect.contains(sx, sy)) return "opt_doctrine";
+    if (kOptionsScrollSpeedRect.contains(sx, sy)) return "opt_scroll_speed";
+    if (kOptionsEdgeScrollRect.contains(sx, sy)) return "opt_edge_scroll";
     if (kOptionsCancelRect.contains(sx, sy)) return "cancel";
     for (std::size_t i = 0; i < kOptionRowIds.size(); ++i) {
         if (optionDecRect(i).contains(sx, sy)) return std::string("opt_dec:") + kOptionRowIds[i];
@@ -325,7 +340,8 @@ void GoldFrontEnd::handleOptionsKey(SDL_Keycode key) {
     static const std::vector<std::string> kOrder{
         "opt_difficulty", "opt_language", "opt_sfx", "opt_music_vol",
         "opt_music_mute", "opt_speed", "opt_smooth", "opt_effects",
-        "opt_skip_intro", "opt_mod", "opt_doctrine", "opt_enhanced_gfx", "ok", "cancel"
+        "opt_skip_intro", "opt_mod", "opt_doctrine", "opt_enhanced_gfx",
+        "opt_scroll_speed", "opt_edge_scroll", "ok", "cancel"
     };
     if (key == SDLK_UP) cycleFocus(kOrder, -1);
     else if (key == SDLK_DOWN || key == SDLK_TAB) cycleFocus(kOrder, 1);
@@ -390,6 +406,23 @@ void GoldFrontEnd::renderOptions(const RenderEnv& env) {
     PangoContext* pangoCtx = env.pangoCtx;
 
     drawHeading(cr, pangoCtx, tr("Options"), {200, 28, 400, 32}, 18.0);
+    {
+        const bool spdHov = (hoveredId_ == "opt_scroll_speed");
+        const bool spdFoc = (focusedId_ == "opt_scroll_speed");
+        drawBronzeBox(cr, kOptionsScrollSpeedRect.x, kOptionsScrollSpeedRect.y,
+                      kOptionsScrollSpeedRect.w, kOptionsScrollSpeedRect.h, (spdHov || spdFoc) ? 0.94 : 0.85);
+        const std::string spdLabel = tr("Scroll") + ": " + std::to_string(optionsDraft_.scrollSpeedPercent) + "%";
+        drawGoldStencilButton(cr, pangoCtx, kOptionsScrollSpeedRect, spdLabel, '\0',
+                              spdHov, spdFoc, true, 13.0, true);
+
+        const bool edgeHov = (hoveredId_ == "opt_edge_scroll");
+        const bool edgeFoc = (focusedId_ == "opt_edge_scroll");
+        drawBronzeBox(cr, kOptionsEdgeScrollRect.x, kOptionsEdgeScrollRect.y,
+                      kOptionsEdgeScrollRect.w, kOptionsEdgeScrollRect.h, (edgeHov || edgeFoc) ? 0.94 : 0.85);
+        const std::string edgeLabel = tr("Edge") + ": " + tr(optionsDraft_.edgeScroll ? "On" : "Off");
+        drawGoldStencilButton(cr, pangoCtx, kOptionsEdgeScrollRect, edgeLabel, '\0',
+                              edgeHov, edgeFoc, true, 13.0, true);
+    }
     {
         const bool docHov = (hoveredId_ == "opt_doctrine");
         const bool docFoc = (focusedId_ == "opt_doctrine");

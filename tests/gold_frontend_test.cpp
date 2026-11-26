@@ -435,30 +435,38 @@ void testFallbackInteraction() {
     // Toggle language row (index 1: y=94+42+4=140..168) -> increments Language::english -> french.
     ofe.handleMouseDown(674.0, 154.0, 1);
     check(ss2::language() == ss2::Language::french, "Options live-previews Language");
-    // Toggle Skip Intro row (index 8: y=94+8*42+4=434..462), Doctrine pill {526,26,188,30}, and Enhanced graphics toggle {264,524,258,35}
+    // Toggle Skip Intro row (index 8: y=94+8*42+4=434..462), Doctrine pill {526,26,188,30}, Scroll/Edge pills {86,26,132,30}/{224,26,114,30}, and Enhanced graphics toggle {264,524,258,35}
     ofe.handleMouseDown(674.0, 448.0, 1);
     ofe.handleMouseDown(600.0, 40.0, 1);
+    ofe.handleMouseDown(152.0, 40.0, 1);   // opt_scroll_speed -> 150%
+    ofe.handleMouseDown(280.0, 40.0, 1);   // opt_edge_scroll -> Off
     ofe.handleMouseDown(393.0, 540.0, 1);
     ofe.handleKey(SDLK_ESCAPE);
     check(ofe.state().screen() == ss2::FrontEnd::Screen::MainMenu, "Esc returns from Options to MainMenu");
     check(ss2::language() == ss2::Language::english, "Cancel/Esc reverts live Language preview");
     check(!ofe.takeSettingsSaved() && !ofe.settings().skipIntro && !ofe.settings().realismDoctrine &&
-              ofe.settings().enhancedGraphics,
+              ofe.settings().enhancedGraphics && ofe.settings().scrollSpeedPercent == 100 &&
+              ofe.settings().edgeScroll,
           "Cancel/Esc discards unsaved Options edits");
 
     ofe.handleKey(SDLK_O);
     check(ofe.state().screen() == ss2::FrontEnd::Screen::Options, "O reopens Options");
-    // Use exact keyboard navigation on Options: start focused on opt_difficulty -> 6x Down (opt_smooth), Right, 2x Down (opt_skip_intro), Right, click opt_doctrine & opt_enhanced_gfx, OK
+    // Use exact keyboard navigation on Options: start focused on opt_difficulty -> 6x Down (opt_smooth), Right, 2x Down (opt_skip_intro), Right, click opt_doctrine, Scroll/Edge pills & opt_enhanced_gfx, OK
     for (int k = 0; k < 6; ++k) ofe.handleKey(SDLK_DOWN);
     ofe.handleKey(SDLK_RIGHT);
     for (int k = 0; k < 2; ++k) ofe.handleKey(SDLK_DOWN);
     ofe.handleKey(SDLK_RIGHT);
     ofe.handleMouseDown(600.0, 40.0, 1);   // opt_doctrine {526,26,188,30} -> true
+    ofe.handleMouseDown(152.0, 40.0, 1);   // opt_scroll_speed {86,26,132,30} -> 150
+    ofe.handleMouseDown(280.0, 40.0, 1);   // opt_edge_scroll {224,26,114,30} -> false
     ofe.handleMouseDown(393.0, 540.0, 1);  // opt_enhanced_gfx {264,524,258,35} -> false
+    ofe.renderToBuffer(1280, 720, buf);
+    check(buf.size() == 1280u * 720u * 4u, "Options with Scroll/Edge header pills renders cleanly");
     ofe.handleMouseDown(188.0, 529.0, 1);  // OK [132,512,112,35]
     check(ofe.state().screen() == ss2::FrontEnd::Screen::MainMenu, "OK returns from Options to MainMenu");
     check(ofe.takeSettingsSaved() && ofe.settings().smoothTerrain && ofe.settings().skipIntro &&
-              ofe.settings().realismDoctrine && !ofe.settings().enhancedGraphics,
+              ofe.settings().realismDoctrine && !ofe.settings().enhancedGraphics &&
+              ofe.settings().scrollSpeedPercent == 150 && !ofe.settings().edgeScroll,
           "OK commits Options edits and sets takeSettingsSaved()");
 
     // Synthetic Replay Browser flow: empty notice, then populate 2 replays and launch via double-click.
