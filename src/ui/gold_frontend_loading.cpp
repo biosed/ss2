@@ -361,15 +361,8 @@ void GoldLoadingScreen::drawAndPresent(VulkanWindow& renderer, std::string_view 
     pw = std::max(1, pw);
     ph = std::max(1, ph);
 
-    int rw = pw;
-    int rh = ph;
-    if (rh > 1080) {
-        rw = std::max(1, static_cast<int>(std::lround(static_cast<double>(pw) * 1080.0 / static_cast<double>(ph))));
-        rh = 1080;
-    }
-
-    renderToBuffer(rw, rh, missionTitle, progress01, rgba_);
-    renderer.setOverlay(static_cast<unsigned>(rw), static_cast<unsigned>(rh), rgba_, OverlaySlot::panel, true);
+    renderToBuffer(pw, ph, missionTitle, progress01, rgba_);
+    renderer.setOverlay(static_cast<unsigned>(pw), static_cast<unsigned>(ph), rgba_, OverlaySlot::panel, true);
     const Snapshot empty{};
     (void)renderer.present(empty);
 }

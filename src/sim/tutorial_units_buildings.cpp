@@ -133,23 +133,9 @@ size_t TutorialUnits::evacuateBuilding(size_t buildingIdx, std::vector<SoldierPo
         const SubCell spot = findSpawnCell(grid_, b.entryCell);
         s.garrisonBuilding.reset();
         s.garrisonTarget.reset();
-        s.cell = spot;
-        s.motion.reset();
-        clearMovingSightPenalty(s);
-        s.goal.reset();
-        s.route.clear();
-        s.cursor = 0;
-        s.needsRoute = false;
-        grid_.setOccupied(spot, true);
-        if (outPoses) {
-            const auto [u, w] = soldierWorld(s);
-            const bool vis = !fog_ || isAlliedFor(viewerOwner_, s.owner) ||
-                             ((fog_->tile(spot.x / 2, spot.y / 2) & static_cast<std::uint8_t>(1u << viewerOwner_)) != 0);
-            pushOrUpdateSoldierPose(*outPoses, {
-                sid, originX_ + u - w, (u + w) / 2, s.direction, 0, false,
-                s.hp, true, s.owner, s.group, false, vis, 0, 0, false
-            });
-        }
+        const bool vis = !fog_ || isAlliedFor(viewerOwner_, s.owner) ||
+                         ((fog_->tile(spot.x / 2, spot.y / 2) & static_cast<std::uint8_t>(1u << viewerOwner_)) != 0);
+        placeDisembarkedSoldier(sid, spot, vis, outPoses);
         ++evacuated;
     }
     b.occupants.clear();
@@ -157,19 +143,38 @@ size_t TutorialUnits::evacuateBuilding(size_t buildingIdx, std::vector<SoldierPo
     fogDirty_ = true;
     emitBuildingUpdate(buildingIdx);
     if (evacuated > 0 && fog_) refreshSpotting(outPoses, true);
-    if (outPoses) {
-        for (auto& pose : *outPoses) {
-            if (pose.index < soldiers_.size()) {
-                pose.expa = soldiers_[pose.index].expa;
-                pose.kills = soldiers_[pose.index].kills;
-                pose.atGrenades = soldiers_[pose.index].atGrenades;
-                pose.mineAmmo = soldiers_[pose.index].mineAmmo;
-                pose.ammo = soldiers_[pose.index].ammo;
-                pose.suppressed = soldiers_[pose.index].isSuppressed();
-            }
-        }
-    }
+    populateSoldierPoseStats(outPoses);
     return evacuated;
+}
+
+bool TutorialUnits::evacuateSingleOccupant(std::size_t buildingIdx, std::size_t soldierIdx,
+                                           std::vector<SoldierPose>* outPoses) {
+    if (buildingIdx >= buildings_.size() || soldierIdx >= soldiers_.size()) return false;
+    auto& b = buildings_[buildingIdx];
+    const int actor = actorOwner();
+    if (b.destroyed || b.owner < 0 || (b.owner != actor && !isAlliedFor(actor, b.owner))) {
+        return false;
+    }
+    const auto it = std::ranges::find(b.occupants, soldierIdx);
+    if (it == b.occupants.end()) return false;
+    auto& s = soldiers_[soldierIdx];
+    if (s.hp <= 0) return false;
+    if (s.owner != actor && !isAlliedFor(actor, s.owner)) return false;
+    const SubCell spot = findSpawnCell(grid_, b.entryCell);
+    s.garrisonBuilding.reset();
+    s.garrisonTarget.reset();
+    const bool vis = !fog_ || isAlliedFor(viewerOwner_, s.owner) ||
+                     ((fog_->tile(spot.x / 2, spot.y / 2) & static_cast<std::uint8_t>(1u << viewerOwner_)) != 0);
+    placeDisembarkedSoldier(soldierIdx, spot, vis, outPoses);
+    b.occupants.erase(it);
+    if (b.occupants.empty()) {
+        b.owner = -1;
+    }
+    fogDirty_ = true;
+    emitBuildingUpdate(buildingIdx);
+    if (fog_) refreshSpotting(outPoses, true);
+    populateSoldierPoseStats(outPoses);
+    return true;
 }
 
 std::optional<bool> TutorialUnits::toggleBuildingHoldFire(size_t buildingIdx) {

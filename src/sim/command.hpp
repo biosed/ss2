@@ -393,6 +393,18 @@ struct SupportBridge {
     std::size_t bridge{};
     bool operator==(const SupportBridge&) const = default;
 };
+struct UnloadSingleSoldier {
+    static constexpr std::string_view tag = "unload-single-soldier";
+    using Result = bool;
+    std::size_t vehicle{}, soldier{};
+    bool operator==(const UnloadSingleSoldier&) const = default;
+};
+struct EvacuateSingleSoldier {
+    static constexpr std::string_view tag = "evacuate-single-soldier";
+    using Result = bool;
+    std::size_t building{}, soldier{};
+    bool operator==(const EvacuateSingleSoldier&) const = default;
+};
 
 using Command = std::variant<
     Move, AttackMove, Patrol, Scatter, Attack, Stop, ToggleHoldFire, ToggleCrouch, ToggleBinoculars, SpawnInfantry,
@@ -402,7 +414,8 @@ using Command = std::variant<
     AbandonVehicles, TowVehicle, UnhitchVehicles, SpawnVehicle, AddReserveUnit, TakeReserveUnits,
     AttackGroundVehicles, AttackGroundSoldiers, LayMine, DisarmMine, GroupMove, GarrisonBuilding, EvacuateBuilding,
     ToggleBuildingHoldFire, ToggleBuildingBinoculars, BuildingAttack, BuildingAttackBuilding, AttackBuilding,
-    AttackBuildingWithVehicles, CallAirSupport, LoadSnapshot, Acknowledge, TogglePause, Resign, SupportBridge>;
+    AttackBuildingWithVehicles, CallAirSupport, LoadSnapshot, Acknowledge, TogglePause, Resign, SupportBridge,
+    UnloadSingleSoldier, EvacuateSingleSoldier>;
 
 // `tick` is the simulation tick at which the command was applied: after the
 // step that produced `tick` and before the next one.

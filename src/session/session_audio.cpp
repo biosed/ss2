@@ -169,7 +169,7 @@ std::string GameSession::inferVoiceRole(const std::string& id, bool isVehicle) c
 }
 
 void GameSession::playUnitVoiceForId(std::string_view verb, const std::string& id,
-                                     bool isVehicle, bool force, bool isVeteran) {
+                                     bool isVehicle, bool force, bool isVeteran, float pan) {
     if (!audio || id.empty()) return;
     const auto now = std::chrono::steady_clock::now();
     if (verb == "underattack" || verb == "close") {
@@ -187,7 +187,7 @@ void GameSession::playUnitVoiceForId(std::string_view verb, const std::string& i
     const VoicePriority prio = urgent ? ss2::VoicePriority::High : ss2::VoicePriority::Normal;
 
     const std::string resolved = audio->bank().resolveUnitVoice(nation, role, verb, isVeteran);
-    if (!resolved.empty() && audio->playGroup(resolved, gain, prio)) {
+    if (!resolved.empty() && audio->playGroup(resolved, gain, prio, pan)) {
         if (!urgent) lastUnitVoiceAt = now;
         return;
     }
@@ -201,12 +201,12 @@ void GameSession::playUnitVoiceForId(std::string_view verb, const std::string& i
                               : nation == "french" ? "f_"
                               : nation == "italian" ? "i_"
                               : "d_";
-        if (audio->playGroup(pfx + role + "_" + std::string(verb), gain, prio) ||
+        if (audio->playGroup(pfx + role + "_" + std::string(verb), gain, prio, pan) ||
             audio->playGroup(nation == "russian" ? "ack_rus"
                                                  : (nation == "german" || nation == "italian")
                                                        ? "ack_deu"
                                                        : "ack_ally",
-                             gain, prio)) {
+                             gain, prio, pan)) {
             if (!urgent) lastUnitVoiceAt = now;
         }
     }
@@ -214,15 +214,27 @@ void GameSession::playUnitVoiceForId(std::string_view verb, const std::string& i
 
 void GameSession::playSelectionVoice(std::string_view verb) {
     if (!audio || !selection) return;
+    float pan = 0.0f;
+    if (const auto ctr = selection->selectionCentroid()) {
+        int winW = 1, winH = 1;
+        if (window && SDL_GetWindowSize(window, &winW, &winH)) {
+            const auto [mx0, my0] = renderer.mapPosition(0.0, 0.0);
+            const auto [mx1, my1] = renderer.mapPosition(static_cast<double>(winW), static_cast<double>(winH));
+            (void)my0; (void)my1;
+            const double camX = 0.5 * (mx0 + mx1);
+            const double halfWidth = 0.5 * std::abs(mx1 - mx0);
+            pan = ss2::viewportStereoPan(static_cast<double>(ctr->first) - camX, halfWidth, 0.35f);
+        }
+    }
     if (!selection->selectedVehicles().empty() && vehicleScene) {
         const size_t vid = *selection->selectedVehicles().begin();
         if (vid < vehicleScene->vehicles().size()) {
             const bool isVet = (vid < vehExpa.size() && vehExpa[vid] >= 16384);
-            playUnitVoiceForId(verb, vehicleScene->vehicles()[vid].id, true, false, isVet);
+            playUnitVoiceForId(verb, vehicleScene->vehicles()[vid].id, true, false, isVet, pan);
             if (verb == "select") {
                 const auto* vSpec = unitCatalog ? unitCatalog->find(vehicleScene->vehicles()[vid].id) : nullptr;
                 if (vSpec && !vSpec->idleSound.empty()) {
-                    (void)audio->playGroup(vSpec->idleSound, 0.18f, ss2::VoicePriority::Low);
+                    (void)audio->playGroup(vSpec->idleSound, 0.18f, ss2::VoicePriority::Low, pan);
                 }
             }
             return;
@@ -232,7 +244,7 @@ void GameSession::playSelectionVoice(std::string_view verb) {
         const size_t sid = *selection->selected().begin();
         if (sid < scene->units().size()) {
             const bool isVet = (sid < unitExpa.size() && unitExpa[sid] >= 16384);
-            playUnitVoiceForId(verb, scene->units()[sid].id, false, false, isVet);
+            playUnitVoiceForId(verb, scene->units()[sid].id, false, false, isVet, pan);
             return;
         }
     }
@@ -242,7 +254,7 @@ void GameSession::playSelectionVoice(std::string_view verb) {
             const size_t sid = sb.occupantIds.front();
             if (sid < scene->units().size()) {
                 const bool isVet = (sid < unitExpa.size() && unitExpa[sid] >= 16384);
-                playUnitVoiceForId(verb, scene->units()[sid].id, false, false, isVet);
+                playUnitVoiceForId(verb, scene->units()[sid].id, false, false, isVet, pan);
             }
         }
     }

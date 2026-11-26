@@ -119,7 +119,7 @@ struct GameSession {
         unsigned direction{0};
     };
     struct ActiveVfx {
-        enum class Kind { Tracer, CannonShell, Rocket, Flamer, Explosion, VehicleExplosion, HealPulse, RepairPulse, Parachute };
+        enum class Kind { Tracer, CannonShell, Rocket, Flamer, Explosion, VehicleExplosion, HealPulse, RepairPulse, Parachute, Ricochet };
         Kind kind{Kind::Tracer};
         float x0{}, y0{}, x1{}, y1{};
         std::chrono::steady_clock::time_point start;
@@ -342,6 +342,20 @@ struct GameSession {
     unsigned enemyTanksDestroyed = 0;
     unsigned enemyGunsDestroyed = 0;
     unsigned enemyPlanesShotDown = 0;
+    unsigned friendlyInfLost = 0;
+    unsigned friendlyTanksLost = 0;
+    unsigned friendlyVehiclesLost = 0;
+    unsigned friendlyGunsLost = 0;
+    std::string activeSubgroupLabel;
+    std::size_t specialistCursor = 0;
+    bool rightDragActive = false;
+    float rightDragStartScreenX = 0.0f;
+    float rightDragStartScreenY = 0.0f;
+    float rightDragCurScreenX = 0.0f;
+    float rightDragCurScreenY = 0.0f;
+    std::chrono::steady_clock::time_point lastHoverChimeAt = std::chrono::steady_clock::now() - std::chrono::seconds(2);
+    std::chrono::steady_clock::time_point lastWeatherLightningAt = std::chrono::steady_clock::now() - std::chrono::seconds(30);
+    unsigned nextObjAutoSaveTick = 1500u;
     std::vector<bool> vehicleCrewImpaired;
     std::vector<bool> vehicleMoveImpaired;
     std::vector<bool> vehicleSuppressed;
@@ -474,7 +488,7 @@ struct GameSession {
     std::string inferNation(const std::string& id) const;
     std::string inferVoiceRole(const std::string& id, bool isVehicle) const;
     void playUnitVoiceForId(std::string_view verb, const std::string& id, bool isVehicle,
-                            bool force = false, bool isVeteran = false);
+                            bool force = false, bool isVeteran = false, float pan = 0.0f);
     void playSelectionVoice(std::string_view verb);
     std::tuple<std::string, int, float> weaponSoundForUnit(const std::string& id) const;
     bool playWorldSound(const std::string& group, float baseGain, int simX, int simY,
@@ -496,7 +510,7 @@ struct GameSession {
     void openForceOverviewMenu(bool fromPauseMenu);
     void openMissionBriefing();
     std::filesystem::path quickSavePath(int slot) const;
-    void doSaveSlot(int slot);
+    void doSaveSlot(int slot, bool quiet = false);
     bool loadSaveFromPath(const std::filesystem::path& path, const std::string& loadedNotice,
                           bool isStartupLoad = false);
     void doLoadSlot(int slot);
@@ -505,6 +519,10 @@ struct GameSession {
     void openSaveLoadMenu();
 
     // Tactical unit/vehicle/air orders (session_orders.cpp).
+    void syncActiveSubgroup();
+    std::vector<std::size_t> activeInfantrySelection() const;
+    std::vector<std::size_t> activeVehicleSelection() const;
+    std::vector<std::string> selectionClassOrder() const;
     void armAirSupportKind(assets::AirMissionKind kind);
     void doTogglePause();
     void stepGameSpeed(int delta);

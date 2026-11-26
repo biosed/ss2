@@ -124,6 +124,7 @@ std::vector<MenuItem> GameSession::buildPauseItems() {
 void GameSession::dismissPostMissionScreen() {
     if (postMissionScreen && postMissionScreen->active()) {
         postMissionScreen->clear(renderer);
+        renderer.setSpriteSharpness(enhancedGraphics ? 1.0f : 0.0f);
     }
 }
 
@@ -168,7 +169,10 @@ void GameSession::openPauseMenu() {
     } else {
         menuPausedClock = false;
     }
-    if (audio) audio->playGroup("push", 0.42f, ss2::VoicePriority::High);
+    if (audio) {
+        audio->stopAllLoops();
+        audio->playGroup("push", 0.42f, ss2::VoicePriority::High);
+    }
     menu.open(ss2::tr("Paused"), buildPauseItems());
 }
 
@@ -191,8 +195,8 @@ void GameSession::openMissionsMenu() {
     items.push_back({"back", ss2::tr("Back to pause menu"), "", true});
     for (std::size_t i = 0; i < menuMissions.size(); ++i) {
         const auto& m = menuMissions[i];
-        std::string tag = std::to_string(m.width) + "x" + std::to_string(m.height) +
-                          (m.scheme == 2 ? " Beach" : " Summer");
+        const char* schemeTag = m.scheme == 1 ? " Winter" : m.scheme == 2 ? " Beach" : m.scheme == 3 ? " Desert" : " Summer";
+        std::string tag = std::to_string(m.width) + "x" + std::to_string(m.height) + schemeTag;
         const std::string mKey = ss2::normalizeMissionKey(m.path.stem().string());
         if (settings.completedMissions.contains(mKey)) {
             tag = ss2::tr("Completed") + " | " + tag;
@@ -246,8 +250,8 @@ void GameSession::openCampaignMissionsMenu(std::size_t campaignIdx) {
     items.push_back({"back_campaigns", ss2::tr("Back to campaigns"), "", true});
     for (std::size_t i = 0; i < c.missions.size(); ++i) {
         const auto& m = c.missions[i];
-        std::string tag = std::to_string(m.width) + "x" + std::to_string(m.height) +
-                          (m.scheme == 2 ? " Beach" : " Summer");
+        const char* schemeTag = m.scheme == 1 ? " Winter" : m.scheme == 2 ? " Beach" : m.scheme == 3 ? " Desert" : " Summer";
+        std::string tag = std::to_string(m.width) + "x" + std::to_string(m.height) + schemeTag;
         const std::string codeKey = ss2::normalizeMissionKey(m.code);
         const std::string stemKey = canonicalCampaignKey(m.path);
         const std::string easyKey = !m.easyPath.empty() ? canonicalCampaignKey(m.easyPath) : std::string{};
@@ -505,6 +509,53 @@ void GameSession::openDebriefMenu(bool victory) {
     stats.buildingsDemolished = buildingsDemolished;
     stats.airSortiesFlown = airSortiesFlown;
     stats.friendlyCasualties = static_cast<unsigned>(selection ? selection->playerLosses() : 0u);
+    stats.friendlyInfantryLost = friendlyInfLost;
+    stats.friendlyTanksLost = friendlyTanksLost;
+    stats.friendlyVehiclesLost = friendlyVehiclesLost;
+    stats.friendlyGunsLost = friendlyGunsLost;
+    {
+        unsigned bestScore = 0u;
+        int bestKills = 0;
+        int bestExpa = 0;
+        std::string bestId;
+        if (scene) {
+            const auto& units = scene->units();
+            for (std::size_t i = 0; i < units.size(); ++i) {
+                if (units[i].owner != localOwner()) continue;
+                const int k = i < unitKills.size() ? unitKills[i] : 0;
+                const int e = i < unitExpa.size() ? unitExpa[i] : 0;
+                if (k <= 0) continue;
+                const unsigned rankMetric = static_cast<unsigned>(k) * 100000u + static_cast<unsigned>(std::max(0, e));
+                if (rankMetric > bestScore) {
+                    bestScore = rankMetric;
+                    bestKills = k;
+                    bestExpa = e;
+                    bestId = units[i].id;
+                }
+            }
+        }
+        if (vehicleScene) {
+            const auto& vehs = vehicleScene->vehicles();
+            for (std::size_t i = 0; i < vehs.size(); ++i) {
+                if (vehs[i].owner != localOwner()) continue;
+                const int k = i < vehKills.size() ? vehKills[i] : 0;
+                const int e = i < vehExpa.size() ? vehExpa[i] : 0;
+                if (k <= 0) continue;
+                const unsigned rankMetric = static_cast<unsigned>(k) * 100000u + static_cast<unsigned>(std::max(0, e));
+                if (rankMetric > bestScore) {
+                    bestScore = rankMetric;
+                    bestKills = k;
+                    bestExpa = e;
+                    bestId = vehs[i].id;
+                }
+            }
+        }
+        if (bestKills > 0 && !bestId.empty()) {
+            stats.mvpUnitName = ss2::tr(hudDisplayName(bestId));
+            stats.mvpKills = static_cast<unsigned>(bestKills);
+            stats.mvpStars = bestExpa >= 24576 ? 5 : bestExpa >= 16384 ? 4 : bestExpa >= 8192 ? 3 : bestExpa >= 4096 ? 2 : 1;
+        }
+    }
     stats.battleScore = netBattleScore;
     stats.bestScore = bestShown;
     stats.isNewBest = victory && netBattleScore > prevBestScore;
@@ -520,6 +571,8 @@ void GameSession::openDebriefMenu(bool victory) {
         const std::optional<int> fixedBg = manualClock ? std::optional<int>(0) : std::nullopt;
         postMissionScreen = std::make_unique<GoldPostMissionScreen>(window, gameDir, fixedBg);
     }
+    if (audio) audio->stopAllLoops();
+    renderer.setSpriteSharpness(0.0f);
     const bool playFanfare = audio && audio->available() && !manualClock && !limit && !timing && !replayFile;
     postMissionScreen->open(std::move(stats), playFanfare);
     menu.highlight(postMissionScreen->focusedId());
@@ -689,16 +742,18 @@ std::filesystem::path GameSession::quickSavePath(int slot) const {
     }
     const std::string stem = currentMissionPath.empty() ? std::string("tutorial1")
                                                         : currentMissionPath.stem().string();
-    const std::string fname = (slot < 0)
-        ? (stem + "_autosave.ss2save")
-        : (slot == 0 ? (stem + ".ss2save") : (stem + "_slot" + std::to_string(slot) + ".ss2save"));
+    const std::string fname = (slot == -2) ? (stem + "_auto_start.ss2save")
+                            : (slot == -3) ? (stem + "_auto_obj.ss2save")
+                            : (slot < 0)   ? (stem + "_autosave.ss2save")
+                            : (slot == 0)  ? (stem + ".ss2save")
+                                           : (stem + "_slot" + std::to_string(slot) + ".ss2save");
     return dir / fname;
 }
 
-void GameSession::doSaveSlot(int slot) {
+void GameSession::doSaveSlot(int slot, bool quiet) {
     if (!simulation) return;
     if (multiplayer.enabled) {
-        orderNotice.show(ss2::tr("Save/load disabled in multiplayer."), ss2::NoticeKind::unsupported);
+        if (!quiet) orderNotice.show(ss2::tr("Save/load disabled in multiplayer."), ss2::NoticeKind::unsupported);
         return;
     }
     const auto path = quickSavePath(slot);
@@ -731,11 +786,11 @@ void GameSession::doSaveSlot(int slot) {
     meta.friendlyScoreLost = friendlyScoreLost;
 
     if (!ss2::writeSaveFile(path, meta, simulation->takeFullSnapshot())) {
-        orderNotice.show(ss2::tr("Could not write quick-save file."), ss2::NoticeKind::blocked);
+        if (!quiet) orderNotice.show(ss2::tr("Could not write quick-save file."), ss2::NoticeKind::blocked);
         return;
     }
     if (slot < 0) {
-        orderNotice.show(ss2::tr("Auto-saved mission progress."), ss2::NoticeKind::accepted);
+        if (!quiet) orderNotice.show(ss2::tr("Auto-saved mission progress."), ss2::NoticeKind::accepted);
         return;
     }
     if (audio) audio->playGroup("accept", 0.45f);
@@ -1034,7 +1089,11 @@ bool GameSession::loadSaveFromPath(const std::filesystem::path& path, const std:
     (void)simulation->pollAirStrikeEvents();
     (void)simulation->poll();
     syncGpuSprites();
+    friendlyInfLost = friendlyTanksLost = friendlyVehiclesLost = friendlyGunsLost = 0;
+    activeSubgroupLabel.clear();
+    rightDragActive = false;
     nextAutoSaveTick = simulation->simTick() + 7500u;
+    nextObjAutoSaveTick = simulation->simTick() + 1500u;
     if (isStartupLoad) {
         std::cout << "Loaded saved game: " << path << " (tick " << simulation->simTick()
                   << ", " << decoded->meta.playerSoldiers << " infantry, "
@@ -1104,6 +1163,12 @@ void GameSession::openSaveLoadMenu() {
         bool autoExists = false;
         const std::string autoTag = saveSlotStatus(quickSavePath(-1), autoExists);
         items.push_back({"load:-1", ss2::tr("Load Auto-Save"), autoTag, autoExists});
+        bool objExists = false;
+        const std::string objTag = saveSlotStatus(quickSavePath(-3), objExists);
+        if (objExists) items.push_back({"load:-3", ss2::tr("Load Objective Auto-Save"), objTag, true});
+        bool startExists = false;
+        const std::string startTag = saveSlotStatus(quickSavePath(-2), startExists);
+        if (startExists) items.push_back({"load:-2", ss2::tr("Load Mission-Start Auto-Save"), startTag, true});
     }
     for (int s = 0; s <= 3; ++s) {
         const std::string lbl = (s == 0) ? ss2::tr("Quick Load (F10)")

@@ -628,24 +628,9 @@ size_t TutorialUnits::unloadVehicles(std::span<const size_t> vehicleIds, std::ve
             } else {
                 spotOpt = findSpawnCell(grid_, v.cell);
             }
-            const SubCell spot = *spotOpt;
             s.embarked = false;
-            s.cell = spot;
-            s.motion.reset();
-            clearMovingSightPenalty(s);
-            s.goal.reset();
-            s.route.clear();
-            s.cursor = 0;
-            s.needsRoute = false;
             s.boardVehicleTarget.reset();
-            grid_.setOccupied(spot, true);
-            if (outPoses) {
-                const auto [u, w] = soldierWorld(s);
-                pushOrUpdateSoldierPose(*outPoses, {
-                    sIdx, originX_ + u - w, (u + w) / 2, s.direction, 0, false,
-                    s.hp, true, s.owner, s.group, false, true
-                });
-            }
+            placeDisembarkedSoldier(sIdx, *spotOpt, true, outPoses);
             ++unloaded;
             vehUnloadedAny = true;
         }
@@ -656,19 +641,77 @@ size_t TutorialUnits::unloadVehicles(std::span<const size_t> vehicleIds, std::ve
         }
     }
     if (unloaded > 0 && fog_) refreshSpotting(outPoses, true);
+    populateSoldierPoseStats(outPoses);
+    return unloaded;
+}
+
+bool TutorialUnits::unloadSinglePassenger(std::size_t vehicleIdx, std::size_t soldierIdx,
+                                          std::vector<SoldierPose>* outPoses) {
+    if (vehicleIdx >= vehicles_.size() || soldierIdx >= soldiers_.size()) return false;
+    auto& v = vehicles_[vehicleIdx];
+    if (!v.alive || v.hp <= 0 || v.owner != actorOwner()) return false;
+    const auto it = std::ranges::find(v.passengers, soldierIdx);
+    if (it == v.passengers.end()) return false;
+    auto& s = soldiers_[soldierIdx];
+    if (s.hp <= 0) return false;
+    const bool waterBound = v.isNaval || !grid_.walkable(v.cell);
+    const std::optional<SubCell> spotOpt = waterBound
+        ? findDisembarkCellBounded(grid_, v.cell, 8)
+        : std::optional<SubCell>{findSpawnCell(grid_, v.cell)};
+    if (!spotOpt) return false;
+    s.embarked = false;
+    s.boardVehicleTarget.reset();
+    placeDisembarkedSoldier(soldierIdx, *spotOpt, true, outPoses);
+    v.passengers.erase(it);
+    emitVehiclePose(vehicleIdx);
+    fogDirty_ = true;
+    if (fog_) refreshSpotting(outPoses, true);
+    populateSoldierPoseStats(outPoses);
+    return true;
+}
+
+std::vector<std::size_t> TutorialUnits::vehiclePassengerIds(std::size_t vehicleIdx) const {
+    if (vehicleIdx >= vehicles_.size()) return {};
+    return vehicles_[vehicleIdx].passengers;
+}
+
+std::string TutorialUnits::soldierUnitId(std::size_t soldierIdx) const {
+    if (soldierIdx >= soldiers_.size() || soldierIdx >= soldierIds_.size()) return {};
+    return soldierIds_[soldierIdx];
+}
+
+void TutorialUnits::placeDisembarkedSoldier(size_t soldierIdx, SubCell spot, bool vis,
+                                            std::vector<SoldierPose>* outPoses) {
+    auto& s = soldiers_[soldierIdx];
+    s.cell = spot;
+    s.motion.reset();
+    clearMovingSightPenalty(s);
+    s.goal.reset();
+    s.route.clear();
+    s.cursor = 0;
+    s.needsRoute = false;
+    grid_.setOccupied(spot, true);
     if (outPoses) {
-        for (auto& pose : *outPoses) {
-            if (pose.index < soldiers_.size()) {
-                pose.expa = soldiers_[pose.index].expa;
-                pose.kills = soldiers_[pose.index].kills;
-                pose.atGrenades = soldiers_[pose.index].atGrenades;
-                pose.mineAmmo = soldiers_[pose.index].mineAmmo;
-                pose.ammo = soldiers_[pose.index].ammo;
-                pose.suppressed = soldiers_[pose.index].isSuppressed();
-            }
+        const auto [u, w] = soldierWorld(s);
+        pushOrUpdateSoldierPose(*outPoses, {
+            soldierIdx, originX_ + u - w, (u + w) / 2, s.direction, 0, false,
+            s.hp, true, s.owner, s.group, false, vis
+        });
+    }
+}
+
+void TutorialUnits::populateSoldierPoseStats(std::vector<SoldierPose>* outPoses) const {
+    if (!outPoses) return;
+    for (auto& pose : *outPoses) {
+        if (pose.index < soldiers_.size()) {
+            pose.expa = soldiers_[pose.index].expa;
+            pose.kills = soldiers_[pose.index].kills;
+            pose.atGrenades = soldiers_[pose.index].atGrenades;
+            pose.mineAmmo = soldiers_[pose.index].mineAmmo;
+            pose.ammo = soldiers_[pose.index].ammo;
+            pose.suppressed = soldiers_[pose.index].isSuppressed();
         }
     }
-    return unloaded;
 }
 
 bool TutorialUnits::canCaptureVehicle(size_t vehicleIdx, int viewerOwner) const {
@@ -1186,7 +1229,8 @@ void TutorialUnits::emitVehiclePose(size_t index, bool fired, int targetX, int t
                                     bool firedSecondary, std::string_view fireSound,
                                     bool heavyImpact, bool hitVehicle,
                                     bool repaired, bool resupplied, bool captured,
-                                    bool firedRocket, bool firedFlamer, bool decrewed) {
+                                    bool firedRocket, bool firedFlamer, bool decrewed,
+                                    std::uint8_t armorHitOutcome, std::uint8_t hitImpactDir32) {
     if (index >= vehicles_.size()) return;
     const auto& v = vehicles_[index];
     VehiclePose pose{
@@ -1228,6 +1272,8 @@ void TutorialUnits::emitVehiclePose(size_t index, bool fired, int targetX, int t
         v.isSuppressed(),
         static_cast<std::uint8_t>((fired && !firedSecondary && heavyImpact) ? std::clamp(v.craterScale1, 0, 15) : 0),
         isVehicleUnbuttoned(v),
+        armorHitOutcome,
+        hitImpactDir32,
     };
     const auto it = std::ranges::find(vehiclePoses_, index, &VehiclePose::index);
     if (it == vehiclePoses_.end()) {
@@ -1247,6 +1293,8 @@ void TutorialUnits::emitVehiclePose(size_t index, bool fired, int targetX, int t
     const bool wasResupplied = it->resupplied;
     const bool wasCaptured = it->captured;
     const bool wasDecrewed = it->decrewed;
+    const std::uint8_t oldArmorOutcome = it->armorHitOutcome;
+    const std::uint8_t oldHitImpactDir = it->hitImpactDir32;
     std::string oldSnd = std::move(it->fireSound);
     *it = pose;
     if (wasFired && !fired) {
@@ -1265,6 +1313,10 @@ void TutorialUnits::emitVehiclePose(size_t index, bool fired, int targetX, int t
     it->resupplied = it->resupplied || wasResupplied;
     it->captured = it->captured || wasCaptured;
     it->decrewed = it->decrewed || wasDecrewed;
+    if (oldArmorOutcome > pose.armorHitOutcome) {
+        it->armorHitOutcome = oldArmorOutcome;
+        it->hitImpactDir32 = oldHitImpactDir;
+    }
 }
 
 bool TutorialUnits::canVehicleStepTo(const Vehicle& v, double nextFx, double nextFy, SubCell& outCell) const {
@@ -2546,6 +2598,9 @@ void TutorialUnits::stepVehicleCombat(std::vector<SoldierPose>& changed) {
             const int dealt = scaleVehicleDamageForDifficulty(
                 tv.owner, applyVehicleDamage(tv.x, tv.y, tv.hullDir, tv.armor, tv.hasCatalogArmor,
                                              v.x, v.y, weapon.damage, weapon.hitType));
+            const auto armorHit = computeArmorHitOutcome(
+                tv.x, tv.y, tv.hullDir, tv.armor, tv.hasCatalogArmor,
+                v.x, v.y, weapon.damage, weapon.hitType, dealt);
             tv.hp = std::max(0, tv.hp - dealt);
             if (dealt > 0 && tv.hp > 0 && tv.expaOnHit > 0) {
                 tv.expa = std::min(0x8000, tv.expa + std::min(200, dealt * tv.expaOnHit));
@@ -2564,7 +2619,8 @@ void TutorialUnits::stepVehicleCombat(std::vector<SoldierPose>& changed) {
                     applyVehicleSuppression(tid, weapon.hitType == assets::HitType::Explosive ? 24 : 16, v.x, v.y);
                 }
             }
-            emitVehiclePose(tid);
+            emitVehiclePose(tid, false, 0, 0, false, {}, false, false, false, false, false,
+                            false, false, false, armorHit.outcome, armorHit.impactDir32);
         } else {
             auto& ts = soldiers_[tid];
             const int dmg = scaleVehicleDamageForDifficulty(ts.owner, weapon.damage);

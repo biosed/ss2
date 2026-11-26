@@ -103,6 +103,7 @@ public:
     static GoldStageRect computeStage(int pixelW, int pixelH);
     static GoldPoint windowToStage(double windowX, double windowY,
                                    int winW, int winH, int pixelW, int pixelH);
+    static std::string schemeLabel(unsigned scheme);
 
     int scrollOffset() const { return scrollOffset_; }
     int ratingsScroll() const { return ratingsScroll_; }
@@ -227,6 +228,8 @@ private:
     enum class MpEditField { None, HostAddress, Port };
     MpEditField mpEditField_{MpEditField::None};
     std::string mpPortDraft_{"27015"};
+    std::size_t selectedLanIndex_{0};
+    bool lanPickedOnce_{false};
     enum class ProfileEditMode { None, New, Rename };
     ProfileEditMode profileEditMode_{ProfileEditMode::None};
     std::string profileNameDraft_{"YourID"};
@@ -329,6 +332,14 @@ struct GoldPostMissionStats {
     unsigned buildingsDemolished{0};
     unsigned airSortiesFlown{0};
     unsigned friendlyCasualties{0};
+    unsigned friendlyInfantryLost{0};
+    unsigned friendlyTanksLost{0};
+    unsigned friendlyVehiclesLost{0};
+    unsigned friendlyGunsLost{0};
+
+    std::string mvpUnitName;
+    unsigned mvpKills{0};
+    int mvpStars{0};
 
     int battleScore{0};
     int bestScore{0};
@@ -411,6 +422,9 @@ private:
     bool dirty_{true};
     int lastPixelW_{0};
     int lastPixelH_{0};
+    int lastBgW_{0};
+    int lastBgH_{0};
+    int lastBgVariant_{-1};
     std::vector<std::uint8_t> rgba_;
 };
 

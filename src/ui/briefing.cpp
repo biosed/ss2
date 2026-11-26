@@ -98,11 +98,16 @@ void Briefing::layout() {
     auto* cr = graphics.get();
     color(cr, 27, 32, 30);
     cairo_paint(cr);
-    color(cr, 132, 127, 101);
     const double lw = double(uiScale);
+    color(cr, 132, 127, 101);
     cairo_set_line_width(cr, lw);
     cairo_rectangle(cr, lw * 0.5, lw * 0.5, panelW - lw, panelH - lw);
     cairo_stroke(cr);
+    if (uiScale >= 2) {
+        color(cr, 78, 76, 62);
+        cairo_rectangle(cr, lw * 2.5, lw * 2.5, panelW - lw * 5.0, panelH - lw * 5.0);
+        cairo_stroke(cr);
+    }
     cairo_save(cr);
     cairo_rectangle(cr, pad, pad, contentW, bodyH);
     cairo_clip(cr);
@@ -118,7 +123,7 @@ void Briefing::layout() {
     width_ = unsigned(panelW);
     height_ = unsigned(panelH);
     left_ = (pixelW - panelW) / 2;
-    top_ = std::max(0, (availH - panelH) / 2);
+    top_ = std::max(0, (pixelH - panelH) / 2);
     rgba_.resize(std::size_t(panelW) * panelH * 4);
     cairo_surface_flush(panel.get());
     if (!SDL_ConvertPixels(panelW, panelH, SDL_PIXELFORMAT_ARGB8888, cairo_image_surface_get_data(panel.get()),

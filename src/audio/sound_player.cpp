@@ -111,11 +111,25 @@ SoundPlayer::SoundPlayer(assets::SoundBank bank) : bank_(std::move(bank)) {
             SDL_BindAudioStream(device_, v.stream);
         }
     }
+    for (auto& ch : loopChannels_) {
+        ch.stream = SDL_CreateAudioStream(&spec, &spec);
+        if (ch.stream) {
+            SDL_BindAudioStream(device_, ch.stream);
+            SDL_SetAudioStreamGain(ch.stream, 0.0f);
+        }
+    }
     SDL_ResumeAudioDevice(device_);
 }
 
 SoundPlayer::~SoundPlayer() {
     music_.reset();
+    stopAllLoops();
+    for (auto& ch : loopChannels_) {
+        if (ch.stream) {
+            SDL_DestroyAudioStream(ch.stream);
+            ch.stream = nullptr;
+        }
+    }
     for (auto& v : voices_) {
         if (v.stream) SDL_DestroyAudioStream(v.stream);
     }
@@ -172,6 +186,10 @@ bool SoundPlayer::playGroup(const std::string& group, float gain, VoicePriority 
                               (normGroup[0] == 'a' || normGroup[0] == 'b' || normGroup[0] == 'd' ||
                                normGroup[0] == 'f' || normGroup[0] == 'i' || normGroup[0] == 'j' ||
                                normGroup[0] == 'r'));
+    const bool isUiCue = (normGroup == "choose" || normGroup == "switch" ||
+                          normGroup == "push" || normGroup == "pull" ||
+                          normGroup == "accept" || normGroup == "checkbox_open" ||
+                          normGroup == "checkbox_close" || normGroup == "e_telegram");
 
     if (const auto it = hdClips_.find(normGroup); it != hdClips_.end() && !it->second.empty()) {
         const std::size_t variant = variantSelector_.next(normGroup, it->second.size());
@@ -286,9 +304,15 @@ bool SoundPlayer::playGroup(const std::string& group, float gain, VoicePriority 
     SDL_AudioSpec src{};
     src.format = SDL_AUDIO_S16;
     src.channels = streamChannels;
-    const std::uint32_t pitchStep = pitchCounter_++;
-    const float pitchMul = isVoiceover ? 1.0f : (0.97f + 0.015f * static_cast<float>(pitchStep % 5u));
-    src.freq = std::max(8000, static_cast<int>(static_cast<float>(baseFreq) * pitchMul));
+    const std::uint32_t pitchStep = ++pitchCounter_;
+    float pitchMul = 1.0f;
+    if (!isVoiceover && !isUiCue) {
+        std::uint32_t seed = audio_detail::hashGroupSeed(normGroup) ^ (pitchStep * 2654435761u);
+        const std::uint32_t r = audio_detail::xorshift32(seed);
+        const float unit = static_cast<float>(r & 0xFFFFu) / 65535.0f;
+        pitchMul = 0.965f + unit * 0.070f;
+    }
+    src.freq = std::max(8000, static_cast<int>(std::lround(static_cast<float>(baseFreq) * pitchMul)));
     SDL_SetAudioStreamFormat(stream, &src, nullptr);
     SDL_SetAudioStreamGain(stream, effectiveGain);
     SDL_ClearAudioStream(stream);
@@ -446,6 +470,183 @@ bool SoundPlayer::musicPlaying() const {
 
 void SoundPlayer::setSfxVolume(float volume) {
     sfxVolume_ = clampVolume(volume);
+}
+
+void SoundPlayer::pumpLoopChannel(LoopChannel& ch) {
+    if (!device_ || !ch.active || !ch.stream || ch.pcm.empty()) return;
+    const std::size_t frameBytes = static_cast<std::size_t>(std::max(1, ch.channels)) * 2u;
+    const std::size_t totalBytes = (ch.pcm.size() / frameBytes) * frameBytes;
+    if (totalBytes == 0u) return;
+
+    const int targetFreq = std::max(8000, static_cast<int>(std::lround(static_cast<float>(ch.baseFreq) * ch.pitch)));
+    if (ch.appliedFreq != targetFreq) {
+        SDL_AudioSpec src{};
+        src.format = SDL_AUDIO_S16;
+        src.channels = 2;
+        src.freq = targetFreq;
+        SDL_SetAudioStreamFormat(ch.stream, &src, nullptr);
+        ch.appliedFreq = targetFreq;
+    }
+
+    const float effGain = (sfxVolume_ <= 0.001f) ? 0.0f
+        : std::clamp(ch.currentGain * clampVolume(sfxVolume_), 0.0f, 1.0f);
+    SDL_SetAudioStreamGain(ch.stream, effGain);
+
+    // Maintain ~0.25s of stereo 16-bit PCM queued so continuous engine/ambient loops never underrun.
+    const int lowWaterBytes = std::max(4096, targetFreq);
+    const std::size_t chunkFrames = static_cast<std::size_t>(std::max(256, targetFreq / 10));
+    const std::size_t chunkSrcBytes = chunkFrames * frameBytes;
+    for (int iter = 0; iter < 6 && SDL_GetAudioStreamQueued(ch.stream) < lowWaterBytes; ++iter) {
+        if (ch.cursor >= totalBytes) ch.cursor = 0u;
+        const std::size_t sliceBytes = std::min(chunkSrcBytes, totalBytes - ch.cursor);
+        if (sliceBytes < frameBytes) {
+            ch.cursor = 0u;
+            continue;
+        }
+        applyStereoPanS16(
+            std::span<const std::uint8_t>(ch.pcm.data() + ch.cursor, sliceBytes),
+            ch.channels, ch.currentPan, loopChunkScratch_);
+        if (!loopChunkScratch_.empty()) {
+            SDL_PutAudioStreamData(ch.stream, loopChunkScratch_.data(),
+                                   static_cast<int>(loopChunkScratch_.size()));
+        }
+        ch.cursor = (ch.cursor + sliceBytes) % totalBytes;
+    }
+}
+
+void SoundPlayer::setLoopChannel(unsigned slot, const std::string& group, float targetGain,
+                                 float pan, float pitch) {
+    if (!device_ || slot >= loopChannels_.size()) return;
+    auto& ch = loopChannels_[slot];
+    const std::string normGroup = audio_detail::lowerAscii(group);
+    const float clampedGain = clampVolume(targetGain);
+    const float clampedPan = clampPan(pan);
+    const float clampedPitch = std::isfinite(pitch) ? std::clamp(pitch, 0.5f, 2.0f) : 1.0f;
+
+    if (normGroup.empty() || clampedGain <= 0.005f) {
+        ch.targetGain = 0.0f;
+        if (!ch.active || ch.currentGain <= 0.005f || normGroup.empty()) {
+            if (ch.stream) {
+                SDL_ClearAudioStream(ch.stream);
+                SDL_SetAudioStreamGain(ch.stream, 0.0f);
+            }
+            ch.active = false;
+            ch.currentGain = 0.0f;
+            ch.cursor = 0u;
+            ch.appliedFreq = 0;
+            ch.group.clear();
+            ch.pcm.clear();
+        }
+        return;
+    }
+
+    if (!ch.active || ch.group != normGroup || ch.pcm.empty()) {
+        std::vector<std::uint8_t> loadedPcm;
+        int loadedFreq = 22050;
+        int loadedChannels = 1;
+        bool found = false;
+
+        if (const auto it = hdClips_.find(normGroup); it != hdClips_.end() && !it->second.empty()) {
+            const auto& hc = it->second[variantSelector_.next(normGroup, it->second.size())];
+            if (!hc.pcm.empty() && (hc.channels == 1 || hc.channels == 2)) {
+                loadedPcm = hc.pcm;
+                loadedFreq = static_cast<int>(hc.sampleRate ? hc.sampleRate : 48000u);
+                loadedChannels = static_cast<int>(hc.channels);
+                found = true;
+            }
+        }
+        if (!found) {
+            const std::size_t count = bank_.variantCount(normGroup);
+            for (std::size_t i = 0; i < count; ++i) {
+                const auto* clip = bank_.clip(normGroup, i);
+                if (clip && !clip->pcm.empty() && clip->bitsPerSample == 16) {
+                    loadedPcm = clip->pcm;
+                    loadedFreq = static_cast<int>(clip->sampleRate ? clip->sampleRate : 22050u);
+                    loadedChannels = 1;
+                    found = true;
+                    break;
+                }
+            }
+        }
+        if (!found) {
+            if (ch.stream) {
+                SDL_ClearAudioStream(ch.stream);
+                SDL_SetAudioStreamGain(ch.stream, 0.0f);
+            }
+            ch.active = false;
+            ch.currentGain = 0.0f;
+            ch.targetGain = 0.0f;
+            ch.cursor = 0u;
+            ch.appliedFreq = 0;
+            ch.group.clear();
+            ch.pcm.clear();
+            return;
+        }
+
+        if (ch.stream) {
+            SDL_ClearAudioStream(ch.stream);
+        }
+        ch.group = normGroup;
+        ch.pcm = std::move(loadedPcm);
+        ch.baseFreq = std::max(8000, loadedFreq);
+        ch.channels = loadedChannels;
+        ch.appliedFreq = 0;
+        ch.cursor = 0u;
+        ch.currentGain = 0.0f;
+        ch.currentPan = clampedPan;
+        ch.active = true;
+    }
+
+    ch.targetGain = clampedGain;
+    ch.targetPan = clampedPan;
+    ch.pitch = clampedPitch;
+    if (ch.stream && SDL_GetAudioStreamQueued(ch.stream) == 0) {
+        ch.currentGain = std::min(ch.targetGain, std::max(ch.currentGain, ch.targetGain * 0.25f));
+        pumpLoopChannel(ch);
+    }
+}
+
+void SoundPlayer::updateLoops() {
+    if (!device_) return;
+    for (auto& ch : loopChannels_) {
+        if (!ch.active) continue;
+        const float dGain = ch.targetGain - ch.currentGain;
+        ch.currentGain = (std::abs(dGain) < 0.002f) ? ch.targetGain : (ch.currentGain + dGain * 0.25f);
+        const float dPan = ch.targetPan - ch.currentPan;
+        ch.currentPan = (std::abs(dPan) < 0.002f) ? ch.targetPan : (ch.currentPan + dPan * 0.25f);
+
+        if (ch.targetGain <= 0.005f && ch.currentGain <= 0.005f) {
+            if (ch.stream) {
+                SDL_ClearAudioStream(ch.stream);
+                SDL_SetAudioStreamGain(ch.stream, 0.0f);
+            }
+            ch.active = false;
+            ch.currentGain = 0.0f;
+            ch.cursor = 0u;
+            ch.appliedFreq = 0;
+            ch.group.clear();
+            ch.pcm.clear();
+            continue;
+        }
+        pumpLoopChannel(ch);
+    }
+}
+
+void SoundPlayer::stopAllLoops() {
+    if (!device_) return;
+    for (auto& ch : loopChannels_) {
+        if (ch.stream) {
+            SDL_ClearAudioStream(ch.stream);
+            SDL_SetAudioStreamGain(ch.stream, 0.0f);
+        }
+        ch.active = false;
+        ch.currentGain = 0.0f;
+        ch.targetGain = 0.0f;
+        ch.cursor = 0u;
+        ch.appliedFreq = 0;
+        ch.group.clear();
+        ch.pcm.clear();
+    }
 }
 
 void SoundPlayer::setMusicVolume(float volume) {

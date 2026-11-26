@@ -97,6 +97,8 @@ auto fields(const Acknowledge&) { return std::tuple<>{}; }
 auto fields(const TogglePause&) { return std::tuple<>{}; }
 auto fields(const Resign& c) { return std::tie(c.seat); }
 auto fields(const SupportBridge& c) { return std::tie(c.supporters, c.bridge); }
+auto fields(const UnloadSingleSoldier& c) { return std::tie(c.vehicle, c.soldier); }
+auto fields(const EvacuateSingleSoldier& c) { return std::tie(c.building, c.soldier); }
 
 template<class T> struct IsVector : std::false_type {};
 template<class T> struct IsVector<std::vector<T>> : std::true_type {};

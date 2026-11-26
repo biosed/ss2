@@ -47,6 +47,20 @@ inline unsigned turnTowardDir32(unsigned current, unsigned target, unsigned maxS
     const int step = std::clamp(diff, -static_cast<int>(maxStep), static_cast<int>(maxStep));
     return static_cast<unsigned>((cur + step + 32) % 32);
 }
+inline int directionalArmorValue(
+    int targetX, int targetY, unsigned targetHullDir,
+    const std::array<assets::DirectionalArmor, static_cast<std::size_t>(assets::HitType::Count)>& armorTable,
+    bool hasCatalogArmor, int attackerX, int attackerY, assets::HitType hitType) {
+    if (!hasCatalogArmor || hitType == assets::HitType::None || hitType >= assets::HitType::Count) {
+        return 0;
+    }
+    const auto& da = armorTable[static_cast<std::size_t>(hitType)];
+    const unsigned incomingDir = vehicleDirFromMapDelta(static_cast<double>(attackerX - targetX),
+                                                        static_cast<double>(attackerY - targetY));
+    int diff = std::abs(int(incomingDir) - int(targetHullDir & 31u));
+    if (diff > 16) diff = 32 - diff;
+    return (diff <= 5) ? da.front : (diff <= 11 ? da.side : da.rear);
+}
 inline int applyVehicleDamage(int targetX, int targetY, unsigned targetHullDir,
                        const std::array<assets::DirectionalArmor, static_cast<std::size_t>(assets::HitType::Count)>& armorTable,
                        bool hasCatalogArmor, int attackerX, int attackerY,
@@ -54,17 +68,33 @@ inline int applyVehicleDamage(int targetX, int targetY, unsigned targetHullDir,
     if (!hasCatalogArmor || hitType == assets::HitType::None || hitType >= assets::HitType::Count) {
         return rawDamage;
     }
-    const auto& da = armorTable[static_cast<std::size_t>(hitType)];
-    const unsigned incomingDir = vehicleDirFromMapDelta(static_cast<double>(attackerX - targetX),
-                                                        static_cast<double>(attackerY - targetY));
-    int diff = std::abs(int(incomingDir) - int(targetHullDir & 31u));
-    if (diff > 16) diff = 32 - diff;
-    const int armorVal = (diff <= 5) ? da.front : (diff <= 11 ? da.side : da.rear);
+    const int armorVal = directionalArmorValue(
+        targetX, targetY, targetHullDir, armorTable, hasCatalogArmor, attackerX, attackerY, hitType);
     if (armorVal >= 256) return 0;
     const int reduced = rawDamage - armorVal * 4;
     if (reduced > 0) return reduced;
     if (rawDamage > armorVal * 2) return std::max(1, rawDamage / 12);
     return 0;
+}
+struct ArmorHitOutcome {
+    std::uint8_t outcome{0}; // 0=None, 1=Penetrated, 2=Glancing, 3=Ricochet
+    std::uint8_t impactDir32{0};
+};
+inline ArmorHitOutcome computeArmorHitOutcome(
+    int targetX, int targetY, unsigned targetHullDir,
+    const std::array<assets::DirectionalArmor, static_cast<std::size_t>(assets::HitType::Count)>& armorTable,
+    bool hasCatalogArmor, int attackerX, int attackerY,
+    int rawDamage, assets::HitType hitType, int dealt) {
+    if (rawDamage <= 0 && dealt <= 0) return {};
+    const std::uint8_t impactDir32 = static_cast<std::uint8_t>(
+        det::detDir32(static_cast<double>(attackerX - targetX), static_cast<double>(attackerY - targetY)) & 31u);
+    if (dealt <= 0) {
+        return {std::uint8_t{3}, impactDir32};
+    }
+    const int armorVal = directionalArmorValue(
+        targetX, targetY, targetHullDir, armorTable, hasCatalogArmor, attackerX, attackerY, hitType);
+    const std::uint8_t outcome = (armorVal > 0 && rawDamage <= armorVal * 4) ? std::uint8_t{2} : std::uint8_t{1};
+    return {outcome, impactDir32};
 }
 inline void pushOrUpdateSoldierPose(std::vector<SoldierPose>& changed, const SoldierPose& pose) {
     const auto it = std::ranges::find(changed, pose.index, &SoldierPose::index);

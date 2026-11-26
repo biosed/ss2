@@ -670,6 +670,8 @@ void MissionRunner::collectVehiclePoses() {
         const bool wasResupplied = old->resupplied;
         const bool wasCaptured = old->captured;
         const bool wasDecrewed = old->decrewed;
+        const std::uint8_t oldArmorOutcome = old->armorHitOutcome;
+        const std::uint8_t oldHitImpactDir = old->hitImpactDir32;
         std::string oldSnd = std::move(old->fireSound);
         *old = pose;
         if (wasFired && !pose.fired) {
@@ -688,6 +690,10 @@ void MissionRunner::collectVehiclePoses() {
         old->resupplied = old->resupplied || wasResupplied;
         old->captured = old->captured || wasCaptured;
         old->decrewed = old->decrewed || wasDecrewed;
+        if (oldArmorOutcome > pose.armorHitOutcome) {
+            old->armorHitOutcome = oldArmorOutcome;
+            old->hitImpactDir32 = oldHitImpactDir;
+        }
     }
 }
 
@@ -1302,6 +1308,28 @@ cmd::UnloadVehicles::Result MissionRunner::applyLocked(const cmd::UnloadVehicles
     if (auto snap = units_.takeFogSnapshot()) fog_ = std::move(snap);
     return count;
 }
+bool MissionRunner::unloadSinglePassenger(std::size_t vehicleIdx, std::size_t soldierIdx) {
+    return submit(cmd::UnloadSingleSoldier{vehicleIdx, soldierIdx});
+}
+cmd::UnloadSingleSoldier::Result MissionRunner::applyLocked(const cmd::UnloadSingleSoldier& c) {
+    if (modal_) return false;
+    std::vector<SoldierPose> outPoses;
+    const bool ok = units_.unloadSinglePassenger(c.vehicle, c.soldier, &outPoses);
+    if (ok) {
+        mergeSoldierPoses(outPoses);
+        collectVehiclePoses();
+        if (auto snap = units_.takeFogSnapshot()) fog_ = std::move(snap);
+    }
+    return ok;
+}
+std::vector<std::size_t> MissionRunner::vehiclePassengerIds(std::size_t vehicleIdx) const {
+    std::lock_guard lock(mutex_);
+    return units_.vehiclePassengerIds(vehicleIdx);
+}
+std::string MissionRunner::soldierUnitId(std::size_t soldierIdx) const {
+    std::lock_guard lock(mutex_);
+    return units_.soldierUnitId(soldierIdx);
+}
 bool MissionRunner::canCaptureVehicle(size_t vehicleIdx) {
     std::lock_guard lock(mutex_);
     return !modal_ && units_.canCaptureVehicle(vehicleIdx, units_.viewerOwner());
@@ -1412,6 +1440,20 @@ cmd::EvacuateBuilding::Result MissionRunner::applyLocked(const cmd::EvacuateBuil
     collectBuildingUpdates();
     if (auto snap = units_.takeFogSnapshot()) fog_ = std::move(snap);
     return count;
+}
+bool MissionRunner::evacuateSingleOccupant(std::size_t buildingIdx, std::size_t soldierIdx) {
+    return submit(cmd::EvacuateSingleSoldier{buildingIdx, soldierIdx});
+}
+cmd::EvacuateSingleSoldier::Result MissionRunner::applyLocked(const cmd::EvacuateSingleSoldier& c) {
+    if (modal_) return false;
+    std::vector<SoldierPose> outPoses;
+    const bool ok = units_.evacuateSingleOccupant(c.building, c.soldier, &outPoses);
+    if (ok) {
+        mergeSoldierPoses(outPoses);
+        collectBuildingUpdates();
+        if (auto snap = units_.takeFogSnapshot()) fog_ = std::move(snap);
+    }
+    return ok;
 }
 std::optional<bool> MissionRunner::toggleBuildingHoldFire(size_t buildingIdx) {
     return submit(cmd::ToggleBuildingHoldFire{buildingIdx});

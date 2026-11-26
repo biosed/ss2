@@ -741,6 +741,8 @@ void TutorialUnits::stepSoldierAttackVehicle(Soldier& s, size_t index, std::vect
         if (hitLanded) {
             const int dmg = scaleVehicleDamageForDifficulty(
                 tv.owner, applyVehicleDamage(tv.x, tv.y, tv.hullDir, tv.armor, tv.hasCatalogArmor, sx, sy, rawDmg, hitType));
+            const auto armorHit = computeArmorHitOutcome(
+                tv.x, tv.y, tv.hullDir, tv.armor, tv.hasCatalogArmor, sx, sy, rawDmg, hitType, dmg);
             const bool targetWasAlive = tv.alive && tv.hp > 0;
             tv.hp = std::max(0, tv.hp - dmg);
             if (dmg > 0 && tv.hp > 0 && tv.expaOnHit > 0) {
@@ -756,7 +758,8 @@ void TutorialUnits::stepSoldierAttackVehicle(Soldier& s, size_t index, std::vect
             }
             markVehicleCombat(tv);
             reactToAttack(tv.owner, tv.group, sx, sy, *targetVid);
-            emitVehiclePose(*targetVid);
+            emitVehiclePose(*targetVid, false, 0, 0, false, {}, false, false, false, false, false,
+                            false, false, false, armorHit.outcome, armorHit.impactDir32);
             if (!throwGrenade && s.isFlamer) {
                 applyFlameSplash(tv.x, tv.y, rawDmg, s.owner, static_cast<int>(index), -1, -1, changed,
                                  static_cast<int>(*targetVid));

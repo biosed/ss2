@@ -358,28 +358,32 @@ void TutorialSelection::release(const SDL_MouseButtonEvent& button) {
         if (pickedInf && alive(*pickedInf) && units_[*pickedInf].owner == localPlayer_) {
             const auto& u = units_[*pickedInf];
             infHits.insert(*pickedInf);
-            if (button.clicks >= 2) {
+            const bool ctrlSingle = (button.clicks == 1) && ((mods & SDL_KMOD_CTRL) != 0);
+            if (button.clicks >= 2 || ctrlSingle) {
                 int w{}, h{};
                 SDL_GetWindowSize(window_, &w, &h);
                 const auto visible = box({0, 0}, {float(w), float(h)});
+                const bool wholeMap = (button.clicks >= 2) && ((mods & SDL_KMOD_CTRL) != 0);
                 for (size_t j = 0; j < units_.size(); ++j) {
                     const auto& v = units_[j];
                     if (alive(j) && v.visible && v.owner == u.owner && v.id == u.id &&
-                        ((mods & SDL_KMOD_CTRL) || contains(visible, v.x, v.y)))
+                        (wholeMap || contains(visible, v.x, v.y)))
                         infHits.insert(j);
                 }
             }
         } else if (pickedVeh && vehicleAlive(*pickedVeh) && vehicles_[*pickedVeh].owner == localPlayer_) {
             const auto& u = vehicles_[*pickedVeh];
             vehHits.insert(*pickedVeh);
-            if (button.clicks >= 2) {
+            const bool ctrlSingle = (button.clicks == 1) && ((mods & SDL_KMOD_CTRL) != 0);
+            if (button.clicks >= 2 || ctrlSingle) {
                 int w{}, h{};
                 SDL_GetWindowSize(window_, &w, &h);
                 const auto visible = box({0, 0}, {float(w), float(h)});
+                const bool wholeMap = (button.clicks >= 2) && ((mods & SDL_KMOD_CTRL) != 0);
                 for (size_t j = 0; j < vehicles_.size(); ++j) {
                     const auto& v = vehicles_[j];
                     if (vehicleAlive(j) && v.visible && v.owner == u.owner && v.id == u.id &&
-                        ((mods & SDL_KMOD_CTRL) || contains(visible, v.x, v.y)))
+                        (wholeMap || contains(visible, v.x, v.y)))
                         vehHits.insert(j);
                 }
             }

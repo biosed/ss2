@@ -2,6 +2,7 @@
 #include "assets/sound_bank.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
 #include <cstdint>
@@ -322,6 +323,12 @@ public:
     void setSfxVolume(float volume);
     float sfxVolume() const { return sfxVolume_; }
 
+    // Continuous ambient/engine loop channels (up to 4 slots). Safe no-op when headless.
+    void setLoopChannel(unsigned slot, const std::string& group, float targetGain,
+                        float pan = 0.0f, float pitch = 1.0f);
+    void updateLoops();
+    void stopAllLoops();
+
     // Streaming background music (MUSIC/Track*.ogg or remastered tracks in audio-hd/music/).
     bool startMusic(const std::filesystem::path& musicDir, float gain = 0.28f);
     void updateMusic();
@@ -344,21 +351,39 @@ private:
         std::uint16_t channels{1};
         std::vector<std::uint8_t> pcm;
     };
+    struct LoopChannel {
+        SDL_AudioStream* stream{nullptr};
+        std::string group;
+        std::vector<std::uint8_t> pcm;
+        int baseFreq{22050};
+        int channels{1};
+        int appliedFreq{0};
+        std::size_t cursor{0};
+        float currentGain{0.0f};
+        float targetGain{0.0f};
+        float currentPan{0.0f};
+        float targetPan{0.0f};
+        float pitch{1.0f};
+        bool active{false};
+    };
     struct MusicState;
 
     assets::SoundBank bank_;
     SDL_AudioDeviceID device_{0};
     std::vector<Voice> voices_;
+    std::array<LoopChannel, 4> loopChannels_;
     std::size_t nextVoice_{0};
     std::uint64_t voiceSequence_{0};
     std::uint32_t pitchCounter_{0};
     VariantSelector variantSelector_;
     std::vector<std::uint8_t> pannedScratch_;
+    std::vector<std::uint8_t> loopChunkScratch_;
     std::map<std::string, std::vector<HdClip>> hdClips_;
     float sfxVolume_{1.0f};
     float musicGain_{0.28f};
     std::unique_ptr<MusicState> music_;
 
+    void pumpLoopChannel(LoopChannel& ch);
     bool openMusicTrack(std::size_t index);
 };
 

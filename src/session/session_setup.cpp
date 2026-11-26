@@ -227,9 +227,10 @@ void GameSession::initializeMission() {
             const bool hasGround = !groundPath.empty() && std::filesystem::is_regular_file(groundPath, hdEc);
             expectHd2xMap = hasGround || !hdIsDir || std::filesystem::is_regular_file(bakedPath, hdEc);
         }
+        (void)expectHd2xMap;
         destructibleTrees.clear();
         treeFallen.clear();
-        std::vector<ss2::assets::TreePlacement>* treeOut = expectHd2xMap ? nullptr : &destructibleTrees;
+        std::vector<ss2::assets::TreePlacement>* treeOut = &destructibleTrees;
         const auto objects = isTutorial1
             ? ss2::assets::drawTutorialScenery(map, gameDir, &depth, 0, &missionBuildings, &missionBridges, treeOut)
             : ss2::assets::drawMissionScenery(map, gameDir, missionPath, &depth, &missionBuildings, &missionBridges, treeOut);
@@ -376,12 +377,7 @@ void GameSession::initializeMission() {
         }
         scene.emplace(std::move(map), gameDir, placements, originalInfantry, std::move(hdImage), infantryArt,
                       cleanGround, std::move(depth), &gpuAtlasSlots, data.width, data.height);
-        if (mapScale != 1) {
-            destructibleTrees.clear();
-            treeFallen.clear();
-        } else {
-            treeFallen.assign(destructibleTrees.size(), false);
-        }
+        treeFallen.assign(destructibleTrees.size(), false);
         if (mapScale == 1) {
             scene->setVehicleLayer([&](ss2::assets::MapImage& patch, int px, int py, const ss2::assets::SceneryDepth* d) {
                 if (vehicleScene) vehicleScene->drawRegion(patch, px, py, d);
@@ -828,6 +824,10 @@ void GameSession::initializeMission() {
             }
         }
         reportLoadProgress(1.00f);
+        if (!multiplayer.enabled && !limit && !timing && !replayFile && nextMissionOut &&
+            loadSavePath.empty() && simulation) {
+            doSaveSlot(-2, true);
+        }
     }
 }
 
@@ -873,6 +873,7 @@ int GameSession::run() {
         if (updateViewTooltipAndPresent()) break;
     }
     resetCursor();
+    if (audio) audio->stopAllLoops();
     if (multiplayer.enabled && mpTransport && mpTransport->isActive()) {
         (void)mpTransport->sendBye(ss2::ByePacket{static_cast<std::uint8_t>(localOwner()), "Session ended"});
     }
@@ -1782,7 +1783,7 @@ void GameSession::applyBridgeStage(std::size_t brIdx, int stage) {
 }
 
 bool GameSession::crushOrBlastTreesAt(int simX, int simY, int radiusPx, bool spawnDust) {
-    if (mapScale != 1 || !scene || destructibleTrees.empty() ||
+    if (!scene || destructibleTrees.empty() ||
         treeFallen.size() != destructibleTrees.size() || radiusPx <= 0) {
         return false;
     }

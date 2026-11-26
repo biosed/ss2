@@ -232,6 +232,10 @@ struct GoldPostMissionScreen::Assets {
     std::vector<std::filesystem::path> menuArchives;
     std::filesystem::path menuSuePath;
     Surface mainBg = makeNullSurface();
+    Surface renderCanvas = makeNullSurface();
+    int renderCanvasW{0};
+    int renderCanvasH{0};
+    Surface cachedBackdrop = makeNullSurface();
     PckSurface winRusBg;
     PckSurface winJapBg;
     std::array<PckSurface, 9> statPics;       // stat_pic.pck[0..8]
@@ -456,7 +460,7 @@ void GoldPostMissionScreen::loadAssets(std::optional<int> fixedBgIndex) {
     static constexpr std::array<std::string_view, 3> kPostUiSfxNames{{"choose", "push", "pull"}};
     gold_ui::loadUiSfxClips(gameDir_, kPostUiSfxNames, assets_->uiSfxClips);
     if (window_ != nullptr) {
-        assets_->menuCursor.load(gameDir_);
+        assets_->menuCursor.load(gameDir_, window_);
     }
 }
 
@@ -822,45 +826,85 @@ GoldPostMissionResult GoldPostMissionScreen::handleEvent(const SDL_Event& event)
 void GoldPostMissionScreen::renderToBuffer(int pixelW, int pixelH, std::vector<std::uint8_t>& outRgba) {
     const int pw = std::max(1, pixelW);
     const int ph = std::max(1, pixelH);
+    const GoldStageRect stage = GoldFrontEnd::computeStage(pw, ph);
 
-    Surface canvas(cairo_image_surface_create(CAIRO_FORMAT_ARGB32, pw, ph), cairo_surface_destroy);
-    Context crGuard(cairo_create(canvas.get()), cairo_destroy);
+    auto* canvasPtr = assets_->renderCanvas.get();
+    if (!canvasPtr || assets_->renderCanvasW != pw || assets_->renderCanvasH != ph) {
+        assets_->renderCanvas.reset(cairo_image_surface_create(CAIRO_FORMAT_ARGB32, pw, ph));
+        assets_->renderCanvasW = pw;
+        assets_->renderCanvasH = ph;
+        canvasPtr = assets_->renderCanvas.get();
+    }
+    if (!canvasPtr || cairo_surface_status(canvasPtr) != CAIRO_STATUS_SUCCESS) {
+        throw std::runtime_error("Failed to allocate GoldPostMissionScreen Cairo surface");
+    }
+
+    // 1. 800x600 Backdrop cached at physical (pw, ph) so 4K hover/focus redraws are instant.
+    const int bgVariant = (stats_.victory && stats_.isRussianCampaign && assets_->winRusBg.surface) ? 1
+        : (stats_.victory && stats_.isJapaneseCampaign && assets_->winJapBg.surface) ? 2
+        : (assets_->mainBg ? (stats_.victory ? 3 : 4) : (stats_.victory ? 5 : 6));
+    if (!assets_->cachedBackdrop || lastBgW_ != pw || lastBgH_ != ph || lastBgVariant_ != bgVariant) {
+        assets_->cachedBackdrop.reset(cairo_image_surface_create(CAIRO_FORMAT_ARGB32, pw, ph));
+        lastBgW_ = pw;
+        lastBgH_ = ph;
+        lastBgVariant_ = bgVariant;
+        Context bcrGuard(cairo_create(assets_->cachedBackdrop.get()), cairo_destroy);
+        cairo_t* bcr = bcrGuard.get();
+        cairo_set_source_rgb(bcr, 0.0, 0.0, 0.0);
+        cairo_paint(bcr);
+        cairo_translate(bcr, stage.x, stage.y);
+        cairo_scale(bcr, stage.scale, stage.scale);
+        cairo_rectangle(bcr, 0.0, 0.0, kStageW, kStageH);
+        cairo_clip(bcr);
+        if (bgVariant == 1) {
+            drawSurfaceStretched(bcr, assets_->winRusBg.surface.get(), 0.0, 0.0, kStageW, kStageH);
+            cairo_set_source_rgba(bcr, 0.0, 0.0, 0.0, 0.30);
+            cairo_rectangle(bcr, 0.0, 0.0, kStageW, kStageH);
+            cairo_fill(bcr);
+        } else if (bgVariant == 2) {
+            drawSurfaceStretched(bcr, assets_->winJapBg.surface.get(), 0.0, 0.0, kStageW, kStageH);
+            cairo_set_source_rgba(bcr, 0.0, 0.0, 0.0, 0.30);
+            cairo_rectangle(bcr, 0.0, 0.0, kStageW, kStageH);
+            cairo_fill(bcr);
+        } else if (bgVariant == 3 || bgVariant == 4) {
+            drawSurfaceStretched(bcr, assets_->mainBg.get(), 0.0, 0.0, kStageW, kStageH);
+            if (bgVariant == 4) {
+                cairo_set_source_rgba(bcr, 18.0 / 255.0, 10.0 / 255.0, 10.0 / 255.0, 0.34);
+                cairo_rectangle(bcr, 0.0, 0.0, kStageW, kStageH);
+                cairo_fill(bcr);
+            }
+        } else {
+            drawFallbackBackdrop(bcr, !stats_.victory);
+        }
+        cairo_surface_flush(assets_->cachedBackdrop.get());
+    }
+    {
+        const int srcStride = cairo_image_surface_get_stride(assets_->cachedBackdrop.get());
+        const int dstStride = cairo_image_surface_get_stride(canvasPtr);
+        const auto* srcBytes = cairo_image_surface_get_data(assets_->cachedBackdrop.get());
+        auto* dstBytes = cairo_image_surface_get_data(canvasPtr);
+        if (srcStride == dstStride) {
+            std::memcpy(dstBytes, srcBytes, std::size_t(dstStride) * std::size_t(ph));
+        } else {
+            const int rowBytes = std::min(srcStride, dstStride);
+            for (int y = 0; y < ph; ++y) {
+                std::memcpy(dstBytes + std::size_t(y) * std::size_t(dstStride),
+                            srcBytes + std::size_t(y) * std::size_t(srcStride),
+                            std::size_t(rowBytes));
+            }
+        }
+        cairo_surface_mark_dirty(canvasPtr);
+    }
+
+    Context crGuard(cairo_create(canvasPtr), cairo_destroy);
     cairo_t* cr = crGuard.get();
     PangoContext* pangoCtx = assets_->fontCtx.get();
 
-    // Pure black letterbox surround on widescreen swapchains.
-    cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
-    cairo_paint(cr);
-
-    const GoldStageRect stage = GoldFrontEnd::computeStage(pw, ph);
     cairo_save(cr);
     cairo_translate(cr, stage.x, stage.y);
     cairo_scale(cr, stage.scale, stage.scale);
     cairo_rectangle(cr, 0.0, 0.0, kStageW, kStageH);
     cairo_clip(cr);
-
-    // 1. 800x600 Backdrop: campaign-specific win_rus.pck / win_jap.pck on victory, else mainbk*.jpg.
-    if (stats_.victory && stats_.isRussianCampaign && assets_->winRusBg.surface) {
-        drawSurfaceStretched(cr, assets_->winRusBg.surface.get(), 0.0, 0.0, kStageW, kStageH);
-        cairo_set_source_rgba(cr, 0.0, 0.0, 0.0, 0.30);
-        cairo_rectangle(cr, 0.0, 0.0, kStageW, kStageH);
-        cairo_fill(cr);
-    } else if (stats_.victory && stats_.isJapaneseCampaign && assets_->winJapBg.surface) {
-        drawSurfaceStretched(cr, assets_->winJapBg.surface.get(), 0.0, 0.0, kStageW, kStageH);
-        cairo_set_source_rgba(cr, 0.0, 0.0, 0.0, 0.30);
-        cairo_rectangle(cr, 0.0, 0.0, kStageW, kStageH);
-        cairo_fill(cr);
-    } else if (assets_->mainBg) {
-        drawSurfaceStretched(cr, assets_->mainBg.get(), 0.0, 0.0, kStageW, kStageH);
-        if (!stats_.victory) {
-            // Subtle cool dusk wash on Defeat to distinguish from Victory at a glance.
-            cairo_set_source_rgba(cr, 18.0 / 255.0, 10.0 / 255.0, 10.0 / 255.0, 0.34);
-            cairo_rectangle(cr, 0.0, 0.0, kStageW, kStageH);
-            cairo_fill(cr);
-        }
-    } else {
-        drawFallbackBackdrop(cr, !stats_.victory);
-    }
 
     // 2. Victory / Defeat Banner Plaque (y = 14..52).
     {
@@ -1045,24 +1089,33 @@ void GoldPostMissionScreen::renderToBuffer(int pixelW, int pixelH, std::vector<s
             {tr("Battle time"), timeFormatted, false},
         }};
 
+        const unsigned armorLost = stats_.friendlyTanksLost + stats_.friendlyVehiclesLost;
+        const bool hasLossBreakdown =
+            (stats_.friendlyInfantryLost + armorLost + stats_.friendlyGunsLost) > 0u;
+        const bool hasMvp = stats_.mvpKills > 0u;
+        const double rowStep = (hasLossBreakdown || hasMvp) ? 22.5 : 26.5;
+        const double rowH = (hasLossBreakdown || hasMvp) ? 20.5 : 24.0;
+        const double rowLblPt = (hasLossBreakdown || hasMvp) ? 11.5 : 12.5;
+        const double rowValPt = (hasLossBreakdown || hasMvp) ? 12.0 : 13.0;
+
         for (std::size_t i = 0; i < rows.size(); ++i) {
-            const double ry = kLeftY + 36.0 + double(i) * 26.5;
+            const double ry = kLeftY + 35.0 + double(i) * rowStep;
             if (rows[i].lossHighlight) {
                 cairo_set_source_rgba(cr, 112.0 / 255.0, 48.0 / 255.0, 38.0 / 255.0, 0.28);
-                cairo_rectangle(cr, kLeftX + 8.0, ry, kLeftW - 16.0, 24.0);
+                cairo_rectangle(cr, kLeftX + 8.0, ry, kLeftW - 16.0, rowH);
                 cairo_fill(cr);
             } else if ((i % 2u) == 1u) {
                 cairo_set_source_rgba(cr, 44.0 / 255.0, 52.0 / 255.0, 36.0 / 255.0, 0.28);
-                cairo_rectangle(cr, kLeftX + 8.0, ry, kLeftW - 16.0, 24.0);
+                cairo_rectangle(cr, kLeftX + 8.0, ry, kLeftW - 16.0, rowH);
                 cairo_fill(cr);
             }
 
-            auto lLayout = makeTextLayout(pangoCtx, rows[i].label, 12.5, rows[i].lossHighlight);
+            auto lLayout = makeTextLayout(pangoCtx, rows[i].label, rowLblPt, rows[i].lossHighlight);
             pango_layout_set_width(lLayout.get(), int(278.0 * PANGO_SCALE));
             pango_layout_set_ellipsize(lLayout.get(), PANGO_ELLIPSIZE_END);
             int lw = 0, lh = 0;
             pango_layout_get_pixel_size(lLayout.get(), &lw, &lh);
-            cairo_move_to(cr, kLeftX + 14.0, ry + (24.0 - double(lh)) * 0.5);
+            cairo_move_to(cr, kLeftX + 14.0, ry + (rowH - double(lh)) * 0.5);
             if (rows[i].lossHighlight) {
                 cairo_set_source_rgb(cr, 246.0 / 255.0, 196.0 / 255.0, 178.0 / 255.0);
             } else {
@@ -1070,16 +1123,46 @@ void GoldPostMissionScreen::renderToBuffer(int pixelW, int pixelH, std::vector<s
             }
             pango_cairo_show_layout(cr, lLayout.get());
 
-            auto rLayout = makeTextLayout(pangoCtx, rows[i].value, 13.0, true, 96.0, PANGO_ALIGN_RIGHT);
+            auto rLayout = makeTextLayout(pangoCtx, rows[i].value, rowValPt, true, 96.0, PANGO_ALIGN_RIGHT);
             int rw = 0, rh = 0;
             pango_layout_get_pixel_size(rLayout.get(), &rw, &rh);
-            cairo_move_to(cr, kLeftX + kLeftW - 14.0 - 96.0, ry + (24.0 - double(rh)) * 0.5);
+            cairo_move_to(cr, kLeftX + kLeftW - 14.0 - 96.0, ry + (rowH - double(rh)) * 0.5);
             if (rows[i].lossHighlight) {
                 cairo_set_source_rgb(cr, 248.0 / 255.0, 152.0 / 255.0, 128.0 / 255.0);
             } else {
                 cairo_set_source_rgb(cr, 246.0 / 255.0, 218.0 / 255.0, 132.0 / 255.0);
             }
             pango_cairo_show_layout(cr, rLayout.get());
+        }
+
+        if (hasLossBreakdown) {
+            const std::string lossLine =
+                "Inf " + std::to_string(stats_.friendlyInfantryLost) +
+                "  Armor " + std::to_string(armorLost) +
+                "  Guns " + std::to_string(stats_.friendlyGunsLost);
+            auto bdLayout = makeTextLayout(pangoCtx, lossLine, 10.5, false, kLeftW - 28.0);
+            pango_layout_set_ellipsize(bdLayout.get(), PANGO_ELLIPSIZE_END);
+            cairo_move_to(cr, kLeftX + 14.0, hasMvp ? (kLeftY + 216.0) : (kLeftY + 224.0));
+            cairo_set_source_rgb(cr, 236.0 / 255.0, 182.0 / 255.0, 162.0 / 255.0);
+            pango_cairo_show_layout(cr, bdLayout.get());
+        }
+        if (hasMvp) {
+            const std::string mvpName = sanitizeUtf8(
+                stats_.mvpUnitName.empty() ? tr("Unit") : stats_.mvpUnitName);
+            const std::string mvpLine =
+                "MVP: " + mvpName + " (" + std::to_string(stats_.mvpKills) + " kills)";
+            const int starCount = std::clamp(stats_.mvpStars, 0, 5);
+            const double starReserve = starCount > 0 ? (double(starCount) * 13.0 + 6.0) : 0.0;
+            const double mvpY = hasLossBreakdown ? (kLeftY + 233.0) : (kLeftY + 224.0);
+            auto mvpLayout = makeTextLayout(pangoCtx, mvpLine, 11.5, true, kLeftW - 28.0 - starReserve);
+            pango_layout_set_ellipsize(mvpLayout.get(), PANGO_ELLIPSIZE_END);
+            cairo_move_to(cr, kLeftX + 14.0, mvpY);
+            cairo_set_source_rgb(cr, 252.0 / 255.0, 214.0 / 255.0, 92.0 / 255.0);
+            pango_cairo_show_layout(cr, mvpLayout.get());
+            for (int s = 0; s < starCount; ++s) {
+                const double sx = kLeftX + kLeftW - 18.0 - double(starCount - 1 - s) * 13.0;
+                drawStarPolygon(cr, sx, mvpY + 7.5, 5.2, 2.2, true, true);
+            }
         }
     }
 
@@ -1229,11 +1312,11 @@ void GoldPostMissionScreen::renderToBuffer(int pixelW, int pixelH, std::vector<s
     if (cairo_status(cr) != CAIRO_STATUS_SUCCESS) {
         throw std::runtime_error(cairo_status_to_string(cairo_status(cr)));
     }
-    cairo_surface_flush(canvas.get());
+    cairo_surface_flush(canvasPtr);
     outRgba.resize(std::size_t(pw) * std::size_t(ph) * 4u);
     if (!SDL_ConvertPixels(pw, ph, SDL_PIXELFORMAT_ARGB8888,
-                           cairo_image_surface_get_data(canvas.get()),
-                           cairo_image_surface_get_stride(canvas.get()),
+                           cairo_image_surface_get_data(canvasPtr),
+                           cairo_image_surface_get_stride(canvasPtr),
                            SDL_PIXELFORMAT_RGBA32, outRgba.data(), pw * 4)) {
         throw std::runtime_error(SDL_GetError());
     }
@@ -1257,22 +1340,15 @@ void GoldPostMissionScreen::draw(VulkanWindow& renderer) {
     pw = std::max(1, pw);
     ph = std::max(1, ph);
 
-    int rw = pw;
-    int rh = ph;
-    if (rh > 1080) {
-        rw = std::max(1, static_cast<int>(std::lround(static_cast<double>(pw) * 1080.0 / static_cast<double>(ph))));
-        rh = 1080;
-    }
-
     if (!dirty_ && pw == lastPixelW_ && ph == lastPixelH_ &&
-        rgba_.size() == std::size_t(rw) * std::size_t(rh) * 4u) {
+        rgba_.size() == std::size_t(pw) * std::size_t(ph) * 4u) {
         return;
     }
-    renderToBuffer(rw, rh, rgba_);
+    renderToBuffer(pw, ph, rgba_);
     lastPixelW_ = pw;
     lastPixelH_ = ph;
     dirty_ = false;
-    renderer.setOverlay(static_cast<unsigned>(rw), static_cast<unsigned>(rh), rgba_, OverlaySlot::panel, true);
+    renderer.setOverlay(static_cast<unsigned>(pw), static_cast<unsigned>(ph), rgba_, OverlaySlot::panel, true);
 }
 
 void GoldPostMissionScreen::clear(VulkanWindow& renderer) {

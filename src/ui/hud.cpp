@@ -1060,25 +1060,27 @@ void Hud::layout() {
 }
 
 namespace {
-void bevelFrame(cairo_t* cr, double x, double y, double w, double h, bool inset) {
+void bevelFrame(cairo_t* cr, double x, double y, double w, double h, bool inset, double scale = 1.0) {
     if (w <= 2 || h <= 2) return;
     // Crisp metallic highlight on top/left (raised) or bottom/right (inset)
-    cairo_set_line_width(cr, 1.5);
+    const double lw = 1.5 * scale;
+    const double half = 0.75 * scale;
+    cairo_set_line_width(cr, lw);
     if (!inset) colour(cr, 186, 194, 182); else colour(cr, 16, 20, 18);
-    cairo_move_to(cr, x + 0.75, y + h - 0.75);
-    cairo_line_to(cr, x + 0.75, y + 0.75);
-    cairo_line_to(cr, x + w - 0.75, y + 0.75);
+    cairo_move_to(cr, x + half, y + h - half);
+    cairo_line_to(cr, x + half, y + half);
+    cairo_line_to(cr, x + w - half, y + half);
     cairo_stroke(cr);
     if (!inset) colour(cr, 16, 20, 18); else colour(cr, 162, 170, 158);
-    cairo_move_to(cr, x + w - 0.75, y + 0.75);
-    cairo_line_to(cr, x + w - 0.75, y + h - 0.75);
-    cairo_line_to(cr, x + 0.75, y + h - 0.75);
+    cairo_move_to(cr, x + w - half, y + half);
+    cairo_line_to(cr, x + w - half, y + h - half);
+    cairo_line_to(cr, x + half, y + h - half);
     cairo_stroke(cr);
 }
 
-void drawRivet(cairo_t* cr, double cx, double cy, double r) {
+void drawRivet(cairo_t* cr, double cx, double cy, double r, double scale = 1.0) {
     colour(cr, 18, 22, 20);
-    cairo_arc(cr, cx + 0.6, cy + 0.6, r, 0, 2 * G_PI);
+    cairo_arc(cr, cx + 0.6 * scale, cy + 0.6 * scale, r, 0, 2 * G_PI);
     cairo_fill(cr);
     colour(cr, 128, 136, 124);
     cairo_arc(cr, cx, cy, r, 0, 2 * G_PI);
@@ -1088,12 +1090,12 @@ void drawRivet(cairo_t* cr, double cx, double cy, double r) {
     cairo_fill(cr);
 }
 
-void drawCompassRose(cairo_t* cr, double cx, double cy, double r) {
+void drawCompassRose(cairo_t* cr, double cx, double cy, double r, double scale = 1.0) {
     colour(cr, 16, 20, 16);
     cairo_arc(cr, cx, cy, r * 0.32, 0, 2 * G_PI);
     cairo_fill(cr);
     colour(cr, 214, 198, 130);
-    cairo_set_line_width(cr, 1.3);
+    cairo_set_line_width(cr, 1.3 * scale);
     cairo_move_to(cr, cx, cy - r); cairo_line_to(cr, cx, cy + r);
     cairo_move_to(cr, cx - r, cy); cairo_line_to(cr, cx + r, cy);
     cairo_stroke(cr);
@@ -1113,9 +1115,9 @@ void drawDiamondPath(cairo_t* cr, double x, double y, double w, double h) {
     cairo_close_path(cr);
 }
 
-void drawPowerSymbol(cairo_t* cr, double cx, double cy, double r) {
+void drawPowerSymbol(cairo_t* cr, double cx, double cy, double r, double scale = 1.0) {
     colour(cr, 188, 196, 184);
-    cairo_set_line_width(cr, 1.4);
+    cairo_set_line_width(cr, 1.4 * scale);
     cairo_new_sub_path(cr);
     cairo_arc(cr, cx, cy, r, -G_PI * 0.25, G_PI * 1.25);
     cairo_stroke(cr);
@@ -1456,9 +1458,10 @@ void Hud::render() {
             cairo_set_source(cr, gradient);
             cairo_paint(cr);
             cairo_pattern_destroy(gradient);
-            cairo_set_line_width(cr, 1.0);
-            for (int gy = ry + 2; gy < ry + rh; gy += 3) {
-                if ((gy % 6) == 0) colour(cr, 66, 72, 64);
+            cairo_set_line_width(cr, 1.0 * uiScale_);
+            const int grainStep = std::max(3, int(std::lround(3.0 * uiScale_)));
+            for (int gy = ry + 2; gy < ry + rh; gy += grainStep) {
+                if (((gy - ry) % (grainStep * 2)) < grainStep) colour(cr, 66, 72, 64);
                 else colour(cr, 26, 30, 27);
                 cairo_move_to(cr, rx, gy + 0.5);
                 cairo_line_to(cr, rx + rw, gy + 0.5);
@@ -1482,14 +1485,16 @@ void Hud::render() {
         }
 
         // Crisp 2px bright steel outer rim along the entire L-shaped top/step perimeter
+        const double rim = std::max(2.0, std::round(2.0 * uiScale_));
+        const double sh = std::max(1.0, std::round(1.0 * uiScale_));
         colour(cr, 198, 206, 192);
-        cairo_rectangle(cr, 0, 0, leftBlockW, 2);
-        cairo_rectangle(cr, leftBlockW - 2, 0, 2, trayTop + 2);
-        cairo_rectangle(cr, leftBlockW - 2, trayTop, w - leftBlockW + 2, 2);
+        cairo_rectangle(cr, 0, 0, leftBlockW, rim);
+        cairo_rectangle(cr, leftBlockW - rim, 0, rim, trayTop + rim);
+        cairo_rectangle(cr, leftBlockW - rim, trayTop, w - leftBlockW + rim, rim);
         cairo_fill(cr);
         colour(cr, 16, 20, 18);
-        cairo_rectangle(cr, 0, 2, leftBlockW - 2, 1);
-        cairo_rectangle(cr, leftBlockW, trayTop + 2, w - leftBlockW, 1);
+        cairo_rectangle(cr, 0, rim, leftBlockW - rim, sh);
+        cairo_rectangle(cr, leftBlockW, trayTop + rim, w - leftBlockW, sh);
         cairo_fill(cr);
     }
 
@@ -1499,7 +1504,7 @@ void Hud::render() {
         colour(cr, 16, 20, 17);
         cairo_rectangle(cr, m.x - 2, m.y - 2, m.width + 4, m.height + 4);
         cairo_fill(cr);
-        bevelFrame(cr, m.x - 3, m.y - 3, m.width + 6, m.height + 6, true);
+        bevelFrame(cr, m.x - 3, m.y - 3, m.width + 6, m.height + 6, true, uiScale_);
 
         // Dark charcoal diamond well
         colour(cr, 10, 13, 12);
@@ -1529,15 +1534,76 @@ void Hud::render() {
         drawDiamondPath(cr, m.x, m.y, m.width, m.height);
         cairo_clip(cr);
         const double radius = std::max(1.5, full / 75.0);
+        const auto setDotColour = [&](const HudDot& dot, bool hostile) {
+            if (hostile) colour(cr, 232, 72, 60);
+            else if (dot.allied) colour(cr, 240, 215, 75);
+            else if (dot.neutral) colour(cr, 130, 165, 225);
+            else colour(cr, 110, 224, 120);
+        };
         for (bool hostile : {false, true})
             for (const auto& dot : state_.dots) {
                 if (dot.hostile != hostile) continue;
-                if (hostile) colour(cr, 232, 72, 60);
-                else if (dot.allied) colour(cr, 240, 215, 75);
-                else if (dot.neutral) colour(cr, 130, 165, 225);
-                else colour(cr, 110, 224, 120);
-                cairo_arc(cr, m.x + dot.u * m.width, m.y + dot.v * m.height, radius, 0, 2 * G_PI);
-                cairo_fill(cr);
+                const double dx = m.x + dot.u * m.width;
+                const double dy = m.y + dot.v * m.height;
+                switch (dot.kind) {
+                case HudDotKind::Armor: {
+                    const double h = radius * 1.25;
+                    cairo_new_sub_path(cr);
+                    cairo_move_to(cr, dx, dy - h);
+                    cairo_line_to(cr, dx + h, dy);
+                    cairo_line_to(cr, dx, dy + h);
+                    cairo_line_to(cr, dx - h, dy);
+                    cairo_close_path(cr);
+                    colour(cr, 14, 18, 16);
+                    cairo_set_line_width(cr, 1.4 * uiScale_);
+                    cairo_stroke_preserve(cr);
+                    setDotColour(dot, hostile);
+                    cairo_fill(cr);
+                    break;
+                }
+                case HudDotKind::Structure: {
+                    const double h = std::max(1.6, radius * 0.95);
+                    cairo_rectangle(cr, dx - h, dy - h, h * 2.0, h * 2.0);
+                    colour(cr, 14, 18, 16);
+                    cairo_set_line_width(cr, 1.3 * uiScale_);
+                    cairo_stroke_preserve(cr);
+                    setDotColour(dot, hostile);
+                    cairo_fill(cr);
+                    break;
+                }
+                case HudDotKind::Zeppelin: {
+                    const double h = std::max(1.8, radius * 1.1);
+                    const double flagTop = dy - h - radius * 1.4;
+                    // Distinct flagged square silhouette
+                    auto buildZepp = [&]() {
+                        cairo_rectangle(cr, dx - h, dy - h, h * 2.0, h * 2.0);
+                        cairo_move_to(cr, dx - h * 0.4, dy - h);
+                        cairo_line_to(cr, dx - h * 0.4, flagTop);
+                        cairo_line_to(cr, dx + h * 0.9, flagTop + radius * 0.5);
+                        cairo_line_to(cr, dx - h * 0.4, flagTop + radius * 1.0);
+                    };
+                    cairo_new_path(cr);
+                    buildZepp();
+                    colour(cr, 14, 18, 16);
+                    cairo_set_line_width(cr, 1.5 * uiScale_);
+                    cairo_stroke(cr);
+                    cairo_new_path(cr);
+                    buildZepp();
+                    setDotColour(dot, hostile);
+                    cairo_fill(cr);
+                    break;
+                }
+                case HudDotKind::Infantry:
+                default: {
+                    colour(cr, 14, 18, 16);
+                    cairo_arc(cr, dx, dy, radius + 0.8 * uiScale_, 0, 2 * G_PI);
+                    cairo_fill(cr);
+                    setDotColour(dot, hostile);
+                    cairo_arc(cr, dx, dy, radius, 0, 2 * G_PI);
+                    cairo_fill(cr);
+                    break;
+                }
+                }
             }
         for (const auto& plane : state_.planes) {
             const double px = m.x + double(plane.u) * m.width;
@@ -1594,24 +1660,33 @@ void Hud::render() {
             colour(cr, 246, 216, 84);
             cairo_fill(cr);
         }
-        colour(cr, 245, 245, 240);
-        cairo_set_line_width(cr, std::max(1.0, std::round(full / 120.0)));
-        cairo_rectangle(cr, std::floor(m.x + state_.viewU * m.width) + .5, std::floor(m.y + state_.viewV * m.height) + .5,
-                        std::max(2.0, std::round(double(state_.viewW) * m.width)),
-                        std::max(2.0, std::round(double(state_.viewH) * m.height)));
-        cairo_stroke(cr);
+        {
+            const double vx = std::floor(m.x + state_.viewU * m.width) + .5;
+            const double vy = std::floor(m.y + state_.viewV * m.height) + .5;
+            const double vw = std::max(2.0, std::round(double(state_.viewW) * m.width));
+            const double vh = std::max(2.0, std::round(double(state_.viewH) * m.height));
+            const double viewLw = std::max(1.0, std::round(full / 120.0));
+            colour(cr, 14, 18, 16, 0.85);
+            cairo_set_line_width(cr, viewLw + 2.0 * uiScale_);
+            cairo_rectangle(cr, vx, vy, vw, vh);
+            cairo_stroke(cr);
+            colour(cr, 245, 245, 240);
+            cairo_set_line_width(cr, viewLw);
+            cairo_rectangle(cr, vx, vy, vw, vh);
+            cairo_stroke(cr);
+        }
         cairo_restore(cr);
 
         // Sharp light-steel diamond border matching the GOG SS2 minimap frame
         colour(cr, 178, 186, 172);
-        cairo_set_line_width(cr, 1.5);
+        cairo_set_line_width(cr, 1.5 * uiScale_);
         drawDiamondPath(cr, m.x, m.y, m.width, m.height);
         cairo_stroke(cr);
 
         // Brass compass rose on upper-right steel corner outside the diamond
         if (m.width >= 60 && m.height >= 40) {
             drawCompassRose(cr, m.x + m.width - 13.0 * uiScale_, m.y + 13.0 * uiScale_,
-                            std::clamp(m.height * 0.095, 5.5, 10.0 * uiScale_));
+                            std::clamp(m.height * 0.095, 5.5, 10.0 * uiScale_), uiScale_);
             // Classic power symbol tucked in lower-left corner outside the diamond (opens Pause Menu)
             const bool menuHover = hovered_ && *hovered_ == HudAction::menu;
             const bool menuDown = pressed_ && *pressed_ == HudAction::menu;
@@ -1626,7 +1701,7 @@ void Hud::render() {
                     cairo_arc(cr, m.x + 11.0 * uiScale_, m.y + m.height - 22.0 * uiScale_, 8.0 * uiScale_, 0, 2 * G_PI);
                     cairo_fill(cr);
                 }
-                drawPowerSymbol(cr, m.x + 11.0 * uiScale_, m.y + m.height - 22.0 * uiScale_, 5.0 * uiScale_);
+                drawPowerSymbol(cr, m.x + 11.0 * uiScale_, m.y + m.height - 22.0 * uiScale_, 5.0 * uiScale_, uiScale_);
             }
             // 3 tiny square utility pips along the bottom-left lip (speed down, speed up, pause)
             const std::array<std::pair<HudAction, Rect>, 3> pips{{
@@ -1653,11 +1728,12 @@ void Hud::render() {
                     }
                     if (pipSurf) {
                         drawSurfaceCrisp(cr, pipSurf, double(px), double(py), double(pip), double(pip));
-                        bevelFrame(cr, px, py, pip, pip, pipDown);
+                        bevelFrame(cr, px, py, pip, pip, pipDown, uiScale_);
                         if (pipHov && !pipDown) {
                             colour(cr, 206, 222, 130, 0.85);
-                            cairo_set_line_width(cr, 1.0);
-                            cairo_rectangle(cr, px + 0.5, py + 0.5, pip - 1.0, pip - 1.0);
+                            cairo_set_line_width(cr, 1.0 * uiScale_);
+                            cairo_rectangle(cr, px + 0.5 * uiScale_, py + 0.5 * uiScale_,
+                                            pip - 1.0 * uiScale_, pip - 1.0 * uiScale_);
                             cairo_stroke(cr);
                         }
                         continue;
@@ -1668,11 +1744,12 @@ void Hud::render() {
                 else colour(cr, 32, 37, 33);
                 cairo_rectangle(cr, px, py, pip, pip);
                 cairo_fill(cr);
-                bevelFrame(cr, px, py, pip, pip, pipDown);
+                bevelFrame(cr, px, py, pip, pip, pipDown, uiScale_);
                 if (pipHov) {
                     colour(cr, 206, 222, 130, 0.85);
-                    cairo_set_line_width(cr, 1.0);
-                    cairo_rectangle(cr, px + 0.5, py + 0.5, pip - 1.0, pip - 1.0);
+                    cairo_set_line_width(cr, 1.0 * uiScale_);
+                    cairo_rectangle(cr, px + 0.5 * uiScale_, py + 0.5 * uiScale_,
+                                    pip - 1.0 * uiScale_, pip - 1.0 * uiScale_);
                     cairo_stroke(cr);
                 }
                 colour(cr, 198, 204, 192);
@@ -1729,11 +1806,12 @@ void Hud::render() {
         cairo_rectangle(cr, r.x, r.y, r.width, r.height);
         cairo_fill(cr);
         cairo_pattern_destroy(bg);
-        bevelFrame(cr, r.x, r.y, r.width, r.height, down);
+        bevelFrame(cr, r.x, r.y, r.width, r.height, down, uiScale_);
         if (on) {
             colour(cr, 206, 222, 130);
-            cairo_set_line_width(cr, 1.5);
-            cairo_rectangle(cr, r.x + 1.5, r.y + 1.5, r.width - 3, r.height - 3);
+            cairo_set_line_width(cr, 1.5 * uiScale_);
+            cairo_rectangle(cr, r.x + 1.5 * uiScale_, r.y + 1.5 * uiScale_,
+                            r.width - 3.0 * uiScale_, r.height - 3.0 * uiScale_);
             cairo_stroke(cr);
         }
         const int labelSize = std::clamp(r.height / 5, 7, int(std::lround(13.0 * uiScale_)));
@@ -1767,8 +1845,9 @@ void Hud::render() {
             cairo_rectangle(cr, bx, by, badgeW, badgeH);
             cairo_fill(cr);
             colour(cr, on ? 168 : 96, on ? 182 : 104, on ? 104 : 92, 0.65);
-            cairo_set_line_width(cr, 0.8);
-            cairo_rectangle(cr, bx + 0.4, by + 0.4, badgeW - 0.8, badgeH - 0.8);
+            cairo_set_line_width(cr, 0.8 * uiScale_);
+            cairo_rectangle(cr, bx + 0.4 * uiScale_, by + 0.4 * uiScale_,
+                            badgeW - 0.8 * uiScale_, badgeH - 0.8 * uiScale_);
             cairo_stroke(cr);
             colour(cr, on ? 236 : 196, on ? 242 : 202, on ? 186 : 188);
             text(cr, fonts_.get(), key, keySize, true, bx, by + (badgeH - keySize * 1.2) * 0.5, badgeW, true);
@@ -1790,7 +1869,7 @@ void Hud::render() {
         colour(cr, 14, 17, 15);
         cairo_rectangle(cr, gx0 - 2, gy0 - 2, gridW + 4, gridH + 4);
         cairo_fill(cr);
-        bevelFrame(cr, gx0 - 3, gy0 - 3, gridW + 6, gridH + 6, true);
+        bevelFrame(cr, gx0 - 3, gy0 - 3, gridW + 6, gridH + 6, true, uiScale_);
 
         static constexpr std::pair<HudAction, std::pair<const char*, const char*>> kRow3Meta[] = {
             {HudAction::recon, {"Recon", "B"}},
@@ -1818,7 +1897,7 @@ void Hud::render() {
                 colour(cr, 22, 26, 23);
                 cairo_rectangle(cr, r.x, r.y, r.width, r.height);
                 cairo_fill(cr);
-                bevelFrame(cr, r.x, r.y, r.width, r.height, true);
+                bevelFrame(cr, r.x, r.y, r.width, r.height, true, uiScale_);
                 continue;
             }
             const int rx = r.x, ry = r.y;
@@ -1829,7 +1908,7 @@ void Hud::render() {
             cairo_rectangle(cr, rx, ry, bw, bh);
             cairo_fill(cr);
             cairo_pattern_destroy(bg);
-            bevelFrame(cr, rx, ry, bw, bh, false);
+            bevelFrame(cr, rx, ry, bw, bh, false, uiScale_);
 
             const int labelSize = std::clamp(bh / 5, 7, int(std::lround(13.0 * uiScale_)));
             const double captionY = ry + bh - labelSize * 1.35 - 2;
@@ -1880,7 +1959,7 @@ void Hud::render() {
             colour(cr, 22, 26, 23);
             cairo_rectangle(cr, r.x, r.y, r.width, r.height);
             cairo_fill(cr);
-            bevelFrame(cr, r.x, r.y, r.width, r.height, true);
+            bevelFrame(cr, r.x, r.y, r.width, r.height, true, uiScale_);
             continue;
         }
         drawCommandCell(r, b.action, b.label, b.key);
@@ -1897,7 +1976,7 @@ void Hud::render() {
             cairo_rectangle(cr, sx, trayTop + 3, sw, strip_ - 3);
             cairo_fill(cr);
             colour(cr, 130, 138, 126);
-            cairo_rectangle(cr, sx, trayTop + strip_, sw, 1);
+            cairo_rectangle(cr, sx, trayTop + strip_, sw, std::max(1.0, std::round(uiScale_)));
             cairo_fill(cr);
 
             int x = sx + 6;
@@ -1920,7 +1999,7 @@ void Hud::render() {
                 else colour(cr, 48, 56, 44);
                 cairo_rectangle(cr, gr.x, gr.y, gr.width, gr.height);
                 cairo_fill(cr);
-                bevelFrame(cr, gr.x, gr.y, gr.width, gr.height, down);
+                bevelFrame(cr, gr.x, gr.y, gr.width, gr.height, down, uiScale_);
                 colour(cr, 236, 238, 230);
                 text(cr, fonts_.get(), label, size, true, gr.x, y, gr.width, true);
                 chipX = std::max(chipX, gr.x + gr.width + 4);
@@ -1944,11 +2023,12 @@ void Hud::render() {
                     drawSurfaceCrisp(cr, retail_->pdropPlate.get(), ar.x, ar.y, ar.width, ar.height,
                                      armed ? 0.42 : 0.58);
                 }
-                bevelFrame(cr, ar.x, ar.y, ar.width, ar.height, down);
+                bevelFrame(cr, ar.x, ar.y, ar.width, ar.height, down, uiScale_);
                 if (armed) {
                     colour(cr, 235, 212, 118);
-                    cairo_set_line_width(cr, 1.2);
-                    cairo_rectangle(cr, ar.x + 1, ar.y + 1, ar.width - 2, ar.height - 2);
+                    cairo_set_line_width(cr, 1.2 * uiScale_);
+                    cairo_rectangle(cr, ar.x + 1.0 * uiScale_, ar.y + 1.0 * uiScale_,
+                                    ar.width - 2.0 * uiScale_, ar.height - 2.0 * uiScale_);
                     cairo_stroke(cr);
                 }
                 int textX = ar.x;
@@ -2036,10 +2116,10 @@ void Hud::render() {
         colour(cr, 18, 22, 19);
         cairo_rectangle(cr, r.x, r.y, r.width, r.height);
         cairo_fill(cr);
-        bevelFrame(cr, r.x - 1, r.y - 1, r.width + 2, r.height + 2, true);
+        bevelFrame(cr, r.x - 1, r.y - 1, r.width + 2, r.height + 2, true, uiScale_);
         if (r.width > 120 && r.height > 28) {
-            drawRivet(cr, r.x + 4, r.y + 4, 1.8);
-            drawRivet(cr, r.x + r.width - 4, r.y + 4, 1.8);
+            drawRivet(cr, r.x + 4.0 * uiScale_, r.y + 4.0 * uiScale_, 1.8 * uiScale_, uiScale_);
+            drawRivet(cr, r.x + r.width - 4.0 * uiScale_, r.y + 4.0 * uiScale_, 1.8 * uiScale_, uiScale_);
         }
         cairo_save(cr);
         cairo_rectangle(cr, r.x, r.y, r.width, r.height);
@@ -2047,9 +2127,16 @@ void Hud::render() {
         const int inX = r.x + 8;
         const int inW = std::max(1, r.width - 16);
         unsigned total = 0;
-        for (const auto& c : state_.selection) total += c.count;
-        const std::string title = total == 1 ? tr("1 soldier selected")
-                                : total ? trf("{0} soldiers selected", {std::to_string(total)}) : tr("No units selected");
+        for (const auto& c : state_.selection) {
+            if (c.label.rfind("[Cargo] ", 0) != 0) total += c.count;
+        }
+        const bool nonInfantrySelection = state_.hasSelection && !state_.hasInfantry;
+        const std::string title = total == 1
+            ? tr(nonInfantrySelection ? "1 unit selected" : "1 soldier selected")
+            : total
+                ? trf(nonInfantrySelection ? "{0} units selected" : "{0} soldiers selected",
+                      {std::to_string(total)})
+                : tr("No units selected");
         colour(cr, 214, 198, 130);
         const int titleW = text(cr, fonts_.get(), title, small, true, inX, r.y + 2, inW / 2);
 
@@ -2081,12 +2168,22 @@ void Hud::render() {
                 const bool last = i == fit - 1 && int(state_.selection.size()) > fit;
                 const bool cardDown = !last && pressedClass_ && *pressedClass_ == c.label;
                 const bool cardHov = !last && hoveredClass_ && *hoveredClass_ == c.label;
+                const bool isSubgroup = !last && !state_.activeSubgroup.empty() && c.label == state_.activeSubgroup;
                 if (cardDown) colour(cr, 56, 68, 52);
                 else if (cardHov) colour(cr, 42, 50, 42);
                 else colour(cr, 28, 33, 29);
                 cairo_rectangle(cr, x, cardsY, cardW, cardsH);
                 cairo_fill(cr);
-                bevelFrame(cr, x, cardsY, cardW, cardsH, cardDown);
+                bevelFrame(cr, x, cardsY, cardW, cardsH, cardDown, uiScale_);
+                if (isSubgroup) {
+                    colour(cr, 246, 214, 96);
+                    cairo_set_line_width(cr, 1.8 * uiScale_);
+                    const double inset = 0.9 * uiScale_;
+                    cairo_rectangle(cr, x + inset, cardsY + inset,
+                                    std::max(1.0, cardW - inset * 2.0),
+                                    std::max(1.0, cardsH - inset * 2.0));
+                    cairo_stroke(cr);
+                }
                 if (last) {
                     colour(cr, 178, 184, 174);
                     text(cr, fonts_.get(), "+" + std::to_string(state_.selection.size() - fit + 1) + " more", body, false,
@@ -2113,7 +2210,7 @@ void Hud::render() {
                     const int letter = std::max(9, portrait / 2);
                     text(cr, fonts_.get(), initial, letter, true, x + 2, cardsY + 2 + (portrait - letter * 1.25) / 2.0, portrait, true);
                 }
-                bevelFrame(cr, x + 2, cardsY + 2, portrait, portrait, true);
+                bevelFrame(cr, x + 2, cardsY + 2, portrait, portrait, true, uiScale_);
                 const int tx = x + portrait + 5, tw = std::max(8, cardW - portrait - 8);
                 colour(cr, 236, 238, 230);
                 {
@@ -2146,7 +2243,7 @@ void Hud::render() {
             colour(cr, 16, 19, 17);
             cairo_rectangle(cr, leftBlockW + 3, my, mw, mh);
             cairo_fill(cr);
-            bevelFrame(cr, leftBlockW + 2, my - 1, mw + 2, mh + 2, true);
+            bevelFrame(cr, leftBlockW + 2, my - 1, mw + 2, mh + 2, true, uiScale_);
             static const char* labels[5] = {"EX", "L", "M", "A", "R"};
             struct Rgb { int r, g, b; };
             const auto meterColour = [](int index, float v) -> Rgb {
@@ -2184,7 +2281,7 @@ void Hud::render() {
                         cairo_rectangle(cr, tx, ty, fillW, th);
                         cairo_fill(cr);
                         colour(cr, std::min(255, c.r + 36), std::min(255, c.g + 36), std::min(255, c.b + 36), 0.7);
-                        cairo_rectangle(cr, tx, ty, fillW, 1.5);
+                        cairo_rectangle(cr, tx, ty, fillW, std::min<double>(th, 1.5 * uiScale_));
                         cairo_fill(cr);
                     }
                 }
@@ -2474,6 +2571,13 @@ HudResult Hud::handle(const SDL_Event& event) {
         const auto overGroup = groupAt(p->x, p->y);
         const auto overClass = classAt(p->x, p->y);
         if (over != hovered_ || overAir != hoveredAir_ || overGroup != hoveredGroup_ || overClass != hoveredClass_) {
+            const bool enteredButton = over.has_value() && over != hovered_;
+            const bool enteredAir = overAir.has_value() && overAir != hoveredAir_;
+            const bool enteredGroup = overGroup.has_value() && overGroup != hoveredGroup_;
+            const bool enteredClass = overClass.has_value() && overClass != hoveredClass_;
+            if (enteredButton || enteredAir || enteredGroup || enteredClass) {
+                result.hoverEntered = true;
+            }
             hovered_ = over;
             hoveredAir_ = overAir;
             hoveredGroup_ = overGroup;
@@ -2535,187 +2639,18 @@ HudResult Hud::handle(const SDL_Event& event) {
     }
 }
 
-void Hud::composeWeatherOverlay() {
-    const int winW = std::max(1, int(width_));
-    const int winH = std::max(int(height_), top_ + int(height_));
-    composedRgba_.assign(std::size_t(winW) * std::size_t(winH) * 4u, 0u);
-
-    const auto blendWeatherPixel = [&](int px, int py, std::uint8_t r, std::uint8_t g, std::uint8_t b, std::uint8_t a) {
-        if (px < 0 || py < 0 || px >= winW || py >= winH || a == 0u) return;
-        if (py >= top_) {
-            const int by = py - top_;
-            if (by < int(height_)) {
-                const std::size_t bi = (std::size_t(by) * width_ + std::size_t(px)) * 4u;
-                if (bi + 3u < rgba_.size() && rgba_[bi + 3u] > 0u) return;
-            }
-        }
-        auto* dst = &composedRgba_[(std::size_t(py) * std::size_t(winW) + std::size_t(px)) * 4u];
-        if (dst[3] == 0u) {
-            dst[0] = r; dst[1] = g; dst[2] = b; dst[3] = a;
-            return;
-        }
-        // Straight-alpha 'over' blend: C_out = (C_src * a_src + C_dst * a_dst * (1 - a_src)) / a_out
-        const unsigned sa = a;
-        const unsigned da = dst[3];
-        const unsigned invSa = 255u - sa;
-        const unsigned outA = sa + (da * invSa + 127u) / 255u;
-        if (outA == 0u) return;
-        const auto mix = [&](unsigned sc, unsigned dc) -> std::uint8_t {
-            const unsigned num = sc * sa * 255u + dc * da * invSa;
-            return static_cast<std::uint8_t>(std::min(255u, (num + (outA * 255u) / 2u) / (outA * 255u)));
-        };
-        dst[0] = mix(r, dst[0]);
-        dst[1] = mix(g, dst[1]);
-        dst[2] = mix(b, dst[2]);
-        dst[3] = static_cast<std::uint8_t>(std::min(255u, outA));
-    };
-
-    // 1. Copy opaque/semi-opaque HUD bar rows into the bottom of the full-window overlay.
-    for (int by = 0; by < int(height_); ++by) {
-        const int wy = top_ + by;
-        if (wy < 0 || wy >= winH) continue;
-        const auto* srcRow = &rgba_[std::size_t(by) * width_ * 4u];
-        auto* dstRow = &composedRgba_[std::size_t(wy) * std::size_t(winW) * 4u];
-        std::copy_n(srcRow, std::size_t(winW) * 4u, dstRow);
-    }
-
-    // 2. Render deterministic atmospheric weather across all open viewport pixels (including L-cutout).
-    const int viewBottom = winH;
-    if (weather_ == assets::WeatherKind::Fog) {
-        const float cx = float(winW) * 0.5f;
-        const float cy = float(std::max(1, top_)) * 0.5f;
-        const float invRx = 1.0f / std::max(1.0f, cx);
-        const float invRy = 1.0f / std::max(1.0f, float(winH) * 0.5f);
-        const float drift = float(weatherPhase_) * 0.035f;
-        std::vector<float> sinX(static_cast<std::size_t>(winW));
-        std::vector<float> cosX(static_cast<std::size_t>(winW));
-        for (int x = 0; x < winW; ++x) {
-            const float a = float(x) * 0.014f + drift;
-            sinX[static_cast<std::size_t>(x)] = std::sin(a);
-            cosX[static_cast<std::size_t>(x)] = std::cos(a);
-        }
-        for (int y = 0; y < viewBottom; ++y) {
-            const float ny = (float(y) - cy) * invRy;
-            const float waveY = std::sin(float(y) * 0.022f + drift * 0.6f);
-            const float b = waveY * 1.4f;
-            const float sinB = std::sin(b);
-            const float cosB = std::cos(b);
-            for (int x = 0; x < winW; ++x) {
-                if (y >= top_) {
-                    const std::size_t bi = (std::size_t(y - top_) * width_ + std::size_t(x)) * 4u;
-                    if (bi + 3u < rgba_.size() && rgba_[bi + 3u] > 0u) continue;
-                }
-                const float nx = (float(x) - cx) * invRx;
-                const float r2 = std::min(1.8f, nx * nx + ny * ny);
-                const float bank = 0.5f + 0.5f * (sinX[static_cast<std::size_t>(x)] * cosB +
-                                                  cosX[static_cast<std::size_t>(x)] * sinB);
-                const float mist = std::clamp(0.05f + 0.19f * r2 + 0.05f * bank, 0.04f, 0.30f);
-                auto* dst = &composedRgba_[(std::size_t(y) * std::size_t(winW) + std::size_t(x)) * 4u];
-                dst[0] = 186u;
-                dst[1] = 200u;
-                dst[2] = 212u;
-                dst[3] = static_cast<std::uint8_t>(std::lround(mist * 255.0f));
-            }
-        }
-    } else if (weather_ == assets::WeatherKind::Rain) {
-        // Subtle wet-slate atmospheric overcast wash
-        for (int y = 0; y < viewBottom; ++y) {
-            for (int x = 0; x < winW; ++x) {
-                if (y >= top_) {
-                    const std::size_t bi = (std::size_t(y - top_) * width_ + std::size_t(x)) * 4u;
-                    if (bi + 3u < rgba_.size() && rgba_[bi + 3u] > 0u) continue;
-                }
-                auto* dst = &composedRgba_[(std::size_t(y) * std::size_t(winW) + std::size_t(x)) * 4u];
-                dst[0] = 94u;
-                dst[1] = 112u;
-                dst[2] = 132u;
-                dst[3] = 18u;
-            }
-        }
-        // Deterministic angled rain streaks + ground splash ripples
-        const int streakCount = std::clamp((winW * viewBottom) / 2600, 96, 420);
-        const int spanW = winW + 96;
-        const int spanH = viewBottom + 64;
-        for (int i = 0; i < streakCount; ++i) {
-            const std::uint32_t h0 = hashWeather(std::uint32_t(i) * 0x9e3779b9u ^ 0x51a7c3d1u);
-            const int speedY = 18 + int(h0 & 7u) * 2;
-            const int speedX = -(speedY * 2) / 5;
-            const int len = 14 + int((h0 >> 4u) & 7u) * 2;
-            const std::int64_t t = std::int64_t(weatherPhase_);
-            int headX = int(((std::int64_t(h0 >> 8u) % spanW) + t * speedX) % spanW);
-            if (headX < 0) headX += spanW;
-            headX -= 32;
-            int headY = int(((std::int64_t(h0 >> 18u) % spanH) + t * speedY) % spanH) - 24;
-            const std::uint8_t baseA = static_cast<std::uint8_t>(92u + ((h0 >> 12u) & 63u));
-            for (int step = 0; step < len; ++step) {
-                const int px = headX + (step * 2) / 5;
-                const int py = headY - step;
-                const unsigned fadeA = (unsigned(baseA) * unsigned(len - step)) / unsigned(len);
-                blendWeatherPixel(px, py, 198u, 218u, 240u, static_cast<std::uint8_t>(fadeA));
-            }
-            if (((h0 + weatherPhase_ * 5u) & 15u) == 0u) {
-                blendWeatherPixel(headX - 1, headY, 210u, 226u, 244u, 84u);
-                blendWeatherPixel(headX + 1, headY, 210u, 226u, 244u, 84u);
-            }
-        }
-    } else if (weather_ == assets::WeatherKind::Snow) {
-        // Subtle crisp winter frost wash
-        for (int y = 0; y < viewBottom; ++y) {
-            for (int x = 0; x < winW; ++x) {
-                if (y >= top_) {
-                    const std::size_t bi = (std::size_t(y - top_) * width_ + std::size_t(x)) * 4u;
-                    if (bi + 3u < rgba_.size() && rgba_[bi + 3u] > 0u) continue;
-                }
-                auto* dst = &composedRgba_[(std::size_t(y) * std::size_t(winW) + std::size_t(x)) * 4u];
-                dst[0] = 212u;
-                dst[1] = 224u;
-                dst[2] = 238u;
-                dst[3] = 14u;
-            }
-        }
-        // Deterministic multi-depth drifting snowflakes
-        const int flakeCount = std::clamp((winW * viewBottom) / 2800, 90, 380);
-        const int spanW = winW + 48;
-        const int spanH = viewBottom + 48;
-        for (int i = 0; i < flakeCount; ++i) {
-            const std::uint32_t h0 = hashWeather(std::uint32_t(i) * 0x85ebca6bu ^ 0xc2b2ae35u);
-            const bool foreground = (h0 & 3u) == 0u;
-            const int speedY = foreground ? 4 : (2 + int(h0 & 1u));
-            const int driftX = 1 + int((h0 >> 3u) & 1u);
-            const float sway = std::sin(float(weatherPhase_) * 0.08f + float(h0 & 0xFFu) * 0.05f) * (foreground ? 7.0f : 4.0f);
-            const std::int64_t t = std::int64_t(weatherPhase_);
-            int fx = int(((std::int64_t(h0 >> 8u) % spanW) + t * driftX + std::llround(sway)) % spanW);
-            if (fx < 0) fx += spanW;
-            fx -= 24;
-            const int fy = int(((std::int64_t(h0 >> 17u) % spanH) + t * speedY) % spanH) - 24;
-            const std::uint8_t coreA = foreground ? 204u : 148u;
-            blendWeatherPixel(fx, fy, 244u, 248u, 255u, coreA);
-            blendWeatherPixel(fx + 1, fy, 236u, 242u, 252u, static_cast<std::uint8_t>(coreA * 3u / 4u));
-            blendWeatherPixel(fx, fy + 1, 236u, 242u, 252u, static_cast<std::uint8_t>(coreA * 3u / 4u));
-            if (foreground) {
-                blendWeatherPixel(fx - 1, fy, 232u, 240u, 250u, static_cast<std::uint8_t>(coreA / 2u));
-                blendWeatherPixel(fx, fy - 1, 232u, 240u, 250u, static_cast<std::uint8_t>(coreA / 2u));
-            }
-        }
-    }
-}
-
 void Hud::draw(VulkanWindow& renderer) {
     refit();
-    if (weather_ == assets::WeatherKind::Clear) {
-        if (!overlayWasWeather_ && drawn_ == revision_) return;
+    const bool hudChanged = (drawn_ != revision_);
+    const bool weatherChanged = (weatherDrawn_ != weatherRevision_);
+    if (hudChanged) {
         renderer.setOverlay(width_, height_, rgba_, OverlaySlot::hud);
+        renderer.setHudBarHeight(height_);
         drawn_ = revision_;
-        weatherDrawn_ = weatherRevision_;
-        overlayWasWeather_ = false;
-        return;
     }
-    if (overlayWasWeather_ && drawn_ == revision_ && weatherDrawn_ == weatherRevision_) return;
-    composeWeatherOverlay();
-    const unsigned fullWinH = static_cast<unsigned>(std::max(int(height_), top_ + int(height_)));
-    renderer.setOverlay(width_, fullWinH, composedRgba_, OverlaySlot::hud);
-    drawn_ = revision_;
-    weatherDrawn_ = weatherRevision_;
-    overlayWasWeather_ = true;
+    if (weatherChanged || hudChanged) {
+        renderer.setWeatherEffect(static_cast<int>(weather_), static_cast<float>(weatherPhase_));
+        weatherDrawn_ = weatherRevision_;
+    }
 }
 }

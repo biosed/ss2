@@ -677,8 +677,18 @@ void GoldFrontEnd::loadAssets(std::optional<int> fixedBgIndex) {
 
     assets_->loadedMenuSue = assets_->mainBg != nullptr || assets_->briefingBg != nullptr;
     if (window_ != nullptr) {
-        assets_->menuCursor.load(gameDir_);
+        assets_->menuCursor.load(gameDir_, window_);
         assets_->menuCursor.apply();
+    }
+}
+
+std::string GoldFrontEnd::schemeLabel(unsigned scheme) {
+    switch (scheme) {
+        case 0u: return "Summer";
+        case 1u: return "Winter";
+        case 2u: return "Beach";
+        case 3u: return "Desert";
+        default: return "Scheme " + std::to_string(scheme + 1u);
     }
 }
 
@@ -926,6 +936,8 @@ void GoldFrontEnd::onScreenChanged(FrontEnd::Screen previous) {
             ensureSelectionVisible();
         } else if (fe_.screen() == FrontEnd::Screen::Multiplayer) {
             mpPortDraft_ = std::to_string(fe_.mpPort());
+            selectedLanIndex_ = 0;
+            lanPickedOnce_ = false;
             scrollOffset_ = 0;
             ensureSelectionVisible();
             if (const auto sel = fe_.selectedMultiplayerMission(); sel < mpMissions_.size()) {
@@ -1629,6 +1641,12 @@ void GoldFrontEnd::advance(std::chrono::nanoseconds dt) {
                 assets_->lanScanner.poll();
                 if (assets_->lanScanner.games().size() != assets_->lastLanCount) {
                     assets_->lastLanCount = assets_->lanScanner.games().size();
+                    if (assets_->lastLanCount == 0u) {
+                        selectedLanIndex_ = 0u;
+                        lanPickedOnce_ = false;
+                    } else if (selectedLanIndex_ >= assets_->lastLanCount) {
+                        selectedLanIndex_ = 0u;
+                    }
                     dirty_ = true;
                 }
             }
@@ -1971,14 +1989,8 @@ void GoldFrontEnd::draw(VulkanWindow& renderer) {
     lastPixelW_ = pw;
     lastPixelH_ = ph;
     dirty_ = false;
-    int rw = pw;
-    int rh = ph;
-    if (rh > 1080) {
-        rw = std::max(1, static_cast<int>(std::lround(static_cast<double>(pw) * 1080.0 / static_cast<double>(ph))));
-        rh = 1080;
-    }
-    renderToBuffer(rw, rh, rgba_);
-    renderer.setOverlay(unsigned(rw), unsigned(rh), rgba_, OverlaySlot::panel, true);
+    renderToBuffer(pw, ph, rgba_);
+    renderer.setOverlay(unsigned(pw), unsigned(ph), rgba_, OverlaySlot::panel, true);
 }
 
 }  // namespace ss2

@@ -30,11 +30,12 @@ struct MapPush {
     float grade[4];
     float extra[4];
     float worldAnim[4];
+    float weather[4];
 };
 constexpr auto transferStage = vk::PipelineStageFlagBits::eTransfer;
 constexpr std::uint64_t acquireTimeoutNs = 50'000'000;
 constexpr char validationLayer[] = "VK_LAYER_KHRONOS_validation";
-constexpr std::size_t outlineBand = 8192 * 4;
+constexpr std::size_t outlineBand = 65536 * 4;
 
 VKAPI_ATTR VkBool32 VKAPI_CALL onValidation(VkDebugUtilsMessageSeverityFlagBitsEXT,
     VkDebugUtilsMessageTypeFlagsEXT, const VkDebugUtilsMessengerCallbackDataEXT* message, void* data) {
@@ -121,6 +122,10 @@ struct VulkanWindow::Impl {
     bool preferSoftware = gPreferSoftwareRenderer;
     bool mapLinear = false;
     MapGrade mapGrade{};
+    int weatherKind = 0;
+    float weatherPhase = 0.0f;
+    float weatherFlash = 0.0f;
+    unsigned hudBarHeight = 0;
     bool canSampleMap = false;
     vk::Format mapFormat{};
     vk::UniqueDescriptorPool mapPool;
@@ -738,7 +743,7 @@ struct VulkanWindow::Impl {
         const int srcX1 = x + srcW, srcY1 = y + srcH;
         mapScreenRect = vk::Rect2D({left, top}, {unsigned(dstW), unsigned(dstH)});
 
-        if (mapGrade.enabled && canSampleMap && mapPipeline && unitQuadBuffer) {
+        if ((mapGrade.enabled || weatherKind > 0) && canSampleMap && mapPipeline && unitQuadBuffer) {
             std::vector<std::size_t> visibleTiles;
             visibleTiles.reserve(mapTiles.size());
             for (std::size_t ti = 0; ti < mapTiles.size(); ++ti) {
@@ -784,9 +789,18 @@ struct VulkanWindow::Impl {
             const float invExtH = 2.0f / float(activeExtent.height);
             const float viewInvW = 1.0f / float(std::max(1, dstW));
             const float viewInvH = 1.0f / float(std::max(1, dstH));
-            const float smoothMode = mapLinear ? 1.0f : 0.0f;
-            const float texelsPerScreenPx = float(1.0 / std::max(0.01, scaleX));
+            const bool gOn = mapGrade.enabled;
+            const float smoothMode = (gOn && mapLinear) ? 1.0f : 0.0f;
+            const float texelsPerScreenPx = gOn ? float(1.0 / std::max(0.01, scaleX)) : 1.0f;
             const float srgbFlag = srgbSurface() ? 1.0f : 0.0f;
+            const float sharpVal = gOn ? mapGrade.sharpness : 0.0f;
+            const float vigVal = gOn ? mapGrade.vignette : 0.0f;
+            const float rG = gOn ? mapGrade.rGain : 1.0f;
+            const float gG = gOn ? mapGrade.gGain : 1.0f;
+            const float bG = gOn ? mapGrade.bGain : 1.0f;
+            const float cVal = gOn ? mapGrade.contrast : 1.0f;
+            const float shimmerVal = gOn ? mapGrade.waterShimmer : 0.0f;
+            const float uiScale = std::max(1.0f, float(activeExtent.height) / 1080.0f);
             for (const std::size_t ti : visibleTiles) {
                 const auto& tile = mapTiles[ti];
                 const float tileDstX = float(screenLeft + double(tile.x) * scaleX);
@@ -796,10 +810,11 @@ struct VulkanWindow::Impl {
                 const MapPush push{
                     {tileDstW * invExtW, tileDstH * invExtH, tileDstX * invExtW - 1.0f, tileDstY * invExtH - 1.0f},
                     {float(tile.width), float(tile.height), float(left), float(top)},
-                    {viewInvW, viewInvH, smoothMode, mapGrade.sharpness},
-                    {mapGrade.rGain, mapGrade.gGain, mapGrade.bGain, mapGrade.vignette},
-                    {mapGrade.contrast, texelsPerScreenPx, srgbFlag, 0.0f},
-                    {float(tile.x), float(tile.y), mapGrade.timeSec, mapGrade.waterShimmer}
+                    {viewInvW, viewInvH, smoothMode, sharpVal},
+                    {rG, gG, bG, vigVal},
+                    {cVal, texelsPerScreenPx, srgbFlag, 0.0f},
+                    {float(tile.x), float(tile.y), mapGrade.timeSec, shimmerVal},
+                    {float(weatherKind), weatherPhase, weatherFlash, uiScale}
                 };
                 command.pushConstants(*mapPipelineLayout, vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
                                       0, sizeof(push), &push);
@@ -1394,7 +1409,7 @@ struct VulkanWindow::Impl {
         const auto line = [&](std::int64_t l, std::int64_t t, std::int64_t right, std::int64_t bottom) {
             l = std::max<std::int64_t>(0, l); t = std::max<std::int64_t>(0, t);
             right = std::min<std::int64_t>(screenW, right); bottom = std::min<std::int64_t>(screenH, bottom);
-            if (right <= l || bottom <= t || (right-l) * (bottom-t) > 8192) return;
+            if (right <= l || bottom <= t || (right-l) * (bottom-t) > 65536) return;
             // The four sides of one rectangle can touch at clipped corners.
             command.pipelineBarrier(transferStage, transferStage, {}, finished, {}, {});
             command.copyBufferToImage(*outline, destination, vk::ImageLayout::eTransferDstOptimal,
@@ -1499,7 +1514,7 @@ struct VulkanWindow::Impl {
         const int left = placed ? std::clamp(overlay.left, 0, std::max(0, screenW - w)) : (screenW - w) / 2;
         // The bar is flush with the bottom edge. The notice sits above a bottom margin,
         // and above the bar when one is shown, but never starts above the window.
-        const int bar = int(overlays[std::size_t(OverlaySlot::hud)].height);
+        const int bar = hudBarHeight > 0 ? int(hudBarHeight) : int(overlays[std::size_t(OverlaySlot::hud)].height);
         const int top = placed ? std::clamp(overlay.top, 0, std::max(0, screenH - h))
                       : slot == OverlaySlot::hud ? screenH - h
                       : slot == OverlaySlot::notice ? std::max(0, screenH - bar - std::max(8, screenH / 16) - h)
@@ -1858,6 +1873,14 @@ void VulkanWindow::setMapGrade(const MapGrade& grade) {
     clamped.waterShimmer = std::clamp(grade.waterShimmer, 0.f, 2.f);
     impl_->mapGrade = clamped;
 }
+void VulkanWindow::setWeatherEffect(int kind, float phase, float flash) {
+    impl_->weatherKind = std::clamp(kind, 0, 3);
+    impl_->weatherPhase = std::isfinite(phase) ? phase : 0.0f;
+    impl_->weatherFlash = std::isfinite(flash) ? std::clamp(flash, 0.0f, 1.0f) : 0.0f;
+}
+void VulkanWindow::setHudBarHeight(unsigned height) {
+    impl_->hudBarHeight = height;
+}
 void VulkanWindow::setPreferSoftwareRenderer(bool prefer) { impl_->preferSoftware = prefer; }
 void VulkanWindow::setPreferSoftwareRendererDefault(bool prefer) { gPreferSoftwareRenderer = prefer; }
 void VulkanWindow::setSpriteAtlas(unsigned slot, const assets::MapImage& atlas) { impl_->setSpriteAtlas(slot, atlas); }
@@ -1917,6 +1940,7 @@ void VulkanWindow::clearOverlay(OverlaySlot slot) {
     overlay.stale = false;
     overlay.hasAlpha = false;
     overlay.stretchFullscreen = false;
+    if (slot == OverlaySlot::hud) impl_->hudBarHeight = 0;
 }
 void VulkanWindow::moveOverlay(OverlaySlot slot, int left, int top) {
     auto& overlay = impl_->overlays.at(std::size_t(slot));

@@ -28,12 +28,16 @@ struct HudClass {
     bool operator==(const HudClass&) const = default;
 };
 
+// Unit classification for distinct minimap blip silhouettes.
+enum class HudDotKind : std::uint8_t { Infantry = 0, Armor = 1, Structure = 2, Zeppelin = 3 };
+
 // A unit on the minimap, as a 0..1 fraction of the map. The caller applies visibility rules.
 struct HudDot {
     float u = 0, v = 0;
     bool hostile = false;
     bool allied = false;
     bool neutral = false;
+    HudDotKind kind = HudDotKind::Infantry;
     bool operator==(const HudDot&) const = default;
 };
 
@@ -75,6 +79,7 @@ struct HudState {
     std::array<int, 5> airReady{};
     int armedAir = -1;
     std::vector<HudPlane> planes;
+    std::string activeSubgroup;
     bool operator==(const HudState&) const = default;
 };
 
@@ -92,6 +97,7 @@ struct HudResult {
     int groupDigit = -1;                // 0..9, for recallGroup
     std::string classLabel;             // HudClass::label, for selectClass
     bool shiftHeld = false;             // Shift modifier on click release
+    bool hoverEntered = false;
 };
 
 struct HudTip {
@@ -174,7 +180,6 @@ private:
     struct RetailAssets;
     void layout();
     void render();
-    void composeWeatherOverlay();
     void refit();   // lays the bar out again when the window's pixel size no longer matches
     Rect reconButtonRect() const;
     Rect row3Rect(int col) const;
@@ -208,12 +213,10 @@ private:
     int strip_ = 0;                      // height of the strip along the top of the bar
     bool draggingMinimap_ = false;
     std::vector<std::uint8_t> rgba_;
-    std::vector<std::uint8_t> composedRgba_;
     assets::WeatherKind weather_ = assets::WeatherKind::Clear;
     std::uint32_t weatherPhase_ = 0;
     std::unique_ptr<RetailAssets> retail_;
     std::uint64_t revision_ = 0, drawn_ = 0;
     std::uint64_t weatherRevision_ = 0, weatherDrawn_ = 0;
-    bool overlayWasWeather_ = false;
 };
 }

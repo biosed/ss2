@@ -915,8 +915,7 @@ void GoldFrontEnd::renderCampaigns(const RenderEnv& env) {
             drawDiamondOverview(cr, assets_->overviewOrPlate(overview), 482.0, 304.0, 224.0, 117.0, true);
 
             std::string sizeStr = tr("Size:") + "  " + std::to_string(pm.width) + "x" + std::to_string(pm.height);
-            if (pm.scheme == 2) sizeStr += "  (Beach)";
-            else if (pm.width > 0) sizeStr += "  (Summer)";
+            if (pm.width > 0) sizeStr += "  (" + schemeLabel(pm.scheme) + ")";
             drawHeading(cr, pangoCtx, sizeStr, {434, 430, 320, 20}, 13.5);
         }
 
@@ -1086,8 +1085,7 @@ void GoldFrontEnd::renderMissionBrowserScreen(const RenderEnv& env) {
             drawDiamondOverview(cr, assets_->overviewOrPlate(overview), 492.0, 338.0, 224.0, 117.0, true);
 
             std::string sizeStr = tr("Size:") + "  " + std::to_string(m.width) + "x" + std::to_string(m.height);
-            if (m.scheme == 2) sizeStr += "  (Beach)";
-            else if (m.width > 0) sizeStr += "  (Summer)";
+            if (m.width > 0) sizeStr += "  (" + schemeLabel(m.scheme) + ")";
             drawHeading(cr, pangoCtx, sizeStr, {464, 466, 280, 20}, 14.5);
             if (m.highScore > 0) {
                 drawHeading(cr, pangoCtx, "Score: " + std::to_string(m.highScore), {464, 486, 280, 18}, 12.5);

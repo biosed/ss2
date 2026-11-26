@@ -101,6 +101,8 @@ std::vector<cmd::Command> everyCommand() {
         cmd::TogglePause{},
         cmd::Resign{0},
         cmd::SupportBridge{b, 22},
+        cmd::UnloadSingleSoldier{52, 53},
+        cmd::EvacuateSingleSoldier{54, 55},
     };
 }
 

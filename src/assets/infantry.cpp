@@ -427,6 +427,26 @@ MapPatch InfantryScene::repaintRegion(int left, int top, int right, int bottom) 
 }
 
 MapPatch InfantryScene::blitGroundPatch(int x, int y, const MapImage& patch) {
+    if (resolution_ == 2 && patch.width > 0 && patch.height > 0 &&
+        patch.rgba.size() >= std::size_t(patch.width) * patch.height * 4u) {
+        const MapImage scaled = upscaleOverlay2xEpx(patch);
+        const int dstLeft = std::clamp(x * 2, 0, int(ground_.width));
+        const int dstTop = std::clamp(y * 2, 0, int(ground_.height));
+        const int dstRight = std::clamp(x * 2 + int(scaled.width), dstLeft, int(ground_.width));
+        const int dstBottom = std::clamp(y * 2 + int(scaled.height), dstTop, int(ground_.height));
+        for (int dy = dstTop; dy < dstBottom; ++dy) {
+            const int sy = dy - y * 2;
+            if (sy < 0 || sy >= int(scaled.height)) continue;
+            for (int dx = dstLeft; dx < dstRight; ++dx) {
+                const int sx = dx - x * 2;
+                if (sx < 0 || sx >= int(scaled.width)) continue;
+                const auto* src = scaled.rgba.data() + (std::size_t(sy) * scaled.width + static_cast<std::size_t>(sx)) * 4u;
+                auto* dst = ground_.rgba.data() + (std::size_t(dy) * ground_.width + static_cast<std::size_t>(dx)) * 4u;
+                std::copy_n(src, 4u, dst);
+            }
+        }
+        return repaint(dstLeft, dstTop, dstRight, dstBottom);
+    }
     const int dstLeft = std::clamp(x * resolution_, 0, int(ground_.width));
     const int dstTop = std::clamp(y * resolution_, 0, int(ground_.height));
     const int dstRight = std::clamp((x + int(patch.width)) * resolution_, dstLeft, int(ground_.width));

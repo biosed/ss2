@@ -97,6 +97,9 @@ public:
     std::optional<size_t> boardVehicle(std::span<const size_t> soldierIds, size_t vehicleIdx);
     bool embarkImmediate(size_t soldierIdx, size_t vehicleIdx);
     size_t unloadVehicles(std::span<const size_t> vehicleIds);
+    bool unloadSinglePassenger(std::size_t vehicleIdx, std::size_t soldierIdx);
+    std::vector<std::size_t> vehiclePassengerIds(std::size_t vehicleIdx) const;
+    std::string soldierUnitId(std::size_t soldierIdx) const;
     bool canCaptureVehicle(size_t vehicleIdx);
     std::optional<size_t> captureVehicle(std::span<const size_t> soldierIds, size_t vehicleIdx);
     std::vector<TacticalOrderLine> selectionOrderLines(std::span<const size_t> soldierIds,
@@ -124,6 +127,7 @@ public:
     bool canGarrisonBuilding(size_t buildingIdx);
     std::optional<size_t> garrisonBuilding(std::span<const size_t> soldierIds, size_t buildingIdx);
     size_t evacuateBuilding(size_t buildingIdx);
+    bool evacuateSingleOccupant(std::size_t buildingIdx, std::size_t soldierIdx);
     std::optional<bool> toggleBuildingHoldFire(size_t buildingIdx);
     std::optional<bool> toggleBuildingBinoculars(size_t buildingIdx);
     std::optional<size_t> orderBuildingAttack(size_t buildingIdx, bool targetIsVehicle, size_t targetIdx);
@@ -302,6 +306,8 @@ private:
     cmd::TogglePause::Result applyLocked(const cmd::TogglePause&);
     cmd::Resign::Result applyLocked(const cmd::Resign&);
     cmd::SupportBridge::Result applyLocked(const cmd::SupportBridge&);
+    cmd::UnloadSingleSoldier::Result applyLocked(const cmd::UnloadSingleSoldier&);
+    cmd::EvacuateSingleSoldier::Result applyLocked(const cmd::EvacuateSingleSoldier&);
     void stepGroupAiLocked(bool fastOnly = false);
     struct MpZeppelinWave {
         std::uint32_t packed4{0};

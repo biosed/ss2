@@ -143,7 +143,14 @@ bool GoldFrontEnd::activateMultiplayer(const std::string& id) {
     mpPortDraft_ = std::to_string(fe_.mpPort());
     if (id == "mp_lan_pick") {
         if (assets_ && !assets_->lanScanner.games().empty()) {
-            const auto& g = assets_->lanScanner.games().front();
+            const auto& games = assets_->lanScanner.games();
+            if (lanPickedOnce_ && games.size() > 1u) {
+                selectedLanIndex_ = (selectedLanIndex_ + 1u) % games.size();
+            } else if (selectedLanIndex_ >= games.size()) {
+                selectedLanIndex_ = 0u;
+            }
+            lanPickedOnce_ = true;
+            const auto& g = games[selectedLanIndex_];
             fe_.setMpHostAddress(g.hostAddress);
             fe_.setMpPort(g.tcpPort);
             mpPortDraft_ = std::to_string(g.tcpPort);
@@ -580,12 +587,17 @@ void GoldFrontEnd::renderMultiplayer(const RenderEnv& env) {
 
     drawFieldLabel(tr("Host Address") + ":", 182.0);
     if (assets_ && !fe_.mpIsHost() && !assets_->lanScanner.games().empty()) {
-        const auto& g = assets_->lanScanner.games().front();
+        const auto& games = assets_->lanScanner.games();
+        const std::size_t lanIdx = selectedLanIndex_ % games.size();
+        const auto& g = games[lanIdx];
         const bool lanHov = (hoveredId_ == "mp_lan_pick");
         drawBronzeBox(cr, kMpLanPillRect.x, kMpLanPillRect.y, kMpLanPillRect.w, kMpLanPillRect.h,
                       lanHov ? 0.95 : 0.85);
         const std::string hostLabel = g.hostName.empty() ? g.hostAddress : g.hostName;
-        const std::string pillText = "LAN: " + hostLabel + ":" + std::to_string(g.tcpPort);
+        std::string pillText = "LAN: " + hostLabel + ":" + std::to_string(g.tcpPort);
+        if (games.size() > 1u) {
+            pillText = "[" + std::to_string(lanIdx + 1u) + "/" + std::to_string(games.size()) + "] " + pillText;
+        }
         drawGoldStencilButton(cr, pangoCtx, kMpLanPillRect, pillText, '\0', lanHov, false, true, 11.5, true);
     }
     drawInputField(kMpHostFieldRect, fe_.mpHostAddress(), tr("Enter address"),
@@ -655,8 +667,7 @@ void GoldFrontEnd::renderMultiplayer(const RenderEnv& env) {
         }
         drawDiamondOverview(cr, assets_->overviewOrPlate(overview), 504.0, 344.0, 200.0, 104.0, true);
         std::string sizeStr = tr("Size:") + "  " + std::to_string(m.width) + "x" + std::to_string(m.height);
-        if (m.scheme == 2) sizeStr += "  (Beach)";
-        else if (m.width > 0) sizeStr += "  (Summer)";
+        if (m.width > 0) sizeStr += "  (" + schemeLabel(m.scheme) + ")";
         drawHeading(cr, pangoCtx, sizeStr, {464, 452, 280, 18}, 13.5);
         if (!m.description.empty()) {
             auto desc = makeTextLayout(pangoCtx, m.description, 12.0, false, 324.0, PANGO_ALIGN_CENTER);

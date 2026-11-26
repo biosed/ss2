@@ -93,12 +93,14 @@ public:
     // Replaces all light streaks and flashes; an empty list removes them. Drawn above
     // every sprite and below gauges and outlines, clipped to the map area. One list may
     // use at most maxBeamColours different colours. Replacing the map removes them.
-    static constexpr unsigned maxBeamColours = 16;
+    static constexpr unsigned maxBeamColours = 64;
     void setBeams(std::vector<MapBeam>);
     // Terrain scaling filter. Nearest (the default) keeps pixel art crisp; linear smooths
     // a high-resolution map when zoomed in. Takes effect on the next frame.
     void setMapFilterLinear(bool linear);
     void setMapGrade(const MapGrade& grade);
+    void setWeatherEffect(int kind, float phase, float flash = 0.0f);
+    void setHudBarHeight(unsigned height);
     void setPreferSoftwareRenderer(bool prefer);
     static void setPreferSoftwareRendererDefault(bool prefer);
     void setMarkers(std::vector<MapMarker>);

@@ -408,6 +408,7 @@ void GameSession::stepSimulationEvents() {
                     ++enemyInfKilled;
                     enemyScoreEarned += scoreValueForId(deadUnit.id, false);
                 } else if (pose.owner == localOwner()) {
+                    ++friendlyInfLost;
                     friendlyScoreLost += scoreValueForId(deadUnit.id, false);
                 }
                 if (pose.owner == localOwner()) {
@@ -480,6 +481,12 @@ void GameSession::stepSimulationEvents() {
                 if (vp.alive && vp.hp > 0 && vp.moving && smSpec && smSpec->isTracked()) {
                     if (crushOrBlastTreesAt(vp.x, vp.y, 16, combatEffects && vp.visible)) {
                         spritesDirty = true;
+                        const auto treeNow = std::chrono::steady_clock::now();
+                        if (vp.visible && audio && treeNow - lastWeaponAudio["tree_crush"] >= std::chrono::milliseconds(350)) {
+                            if (playWorldSound("fall_small", 0.38f, vp.x, vp.y, ss2::VoicePriority::Low)) {
+                                lastWeaponAudio["tree_crush"] = treeNow;
+                            }
+                        }
                     }
                 }
                 if (combatEffects && (!smSpec || (!smSpec->isTrain() && !smSpec->isSupplyCrate()))) {
@@ -727,6 +734,32 @@ void GameSession::stepSimulationEvents() {
                         }
                     }
                 }
+                if (vp.armorHitOutcome >= 2u && vp.visible) {
+                    const auto ricNow = std::chrono::steady_clock::now();
+                    if (combatEffects && activeVfx.size() < 64) {
+                        constexpr float kTwoPi = 6.28318530717958647692f;
+                        const float ang = (static_cast<float>((vp.hitImpactDir32 + 4u) & 31u) / 32.0f) * kTwoPi;
+                        const float hx = static_cast<float>(vp.x * mapScale);
+                        const float hy = static_cast<float>(vp.y * mapScale) - 10.0f * static_cast<float>(mapScale);
+                        const float len = (vp.armorHitOutcome == 3u ? 26.0f : 16.0f) * static_cast<float>(mapScale);
+                        activeVfx.push_back({
+                            ActiveVfx::Kind::Ricochet,
+                            hx, hy,
+                            hx + std::cos(ang) * len,
+                            hy + std::sin(ang) * len * 0.65f - 8.0f * static_cast<float>(mapScale),
+                            ricNow,
+                            std::chrono::milliseconds(vp.armorHitOutcome == 3u ? 220 : 150)
+                        });
+                        combatVfx.spawnDust(static_cast<float>(vp.x), static_cast<float>(vp.y), false);
+                        spritesDirty = true;
+                    }
+                    if (audio && ricNow - lastWeaponAudio["ricochet"] >= std::chrono::milliseconds(160)) {
+                        const bool played = playWorldSound("ricochet", vp.armorHitOutcome == 3u ? 0.52f : 0.34f,
+                                                           vp.x, vp.y, ss2::VoicePriority::Normal) ||
+                                            playWorldSound("gunshot", 0.24f, vp.x, vp.y, ss2::VoicePriority::Low);
+                        if (played) lastWeaponAudio["ricochet"] = ricNow;
+                    }
+                }
                 if (!vp.alive && prevVehHp > 0) {
                     vehicleHoldFireUnits.erase(vp.index);
                     const bool deadOnWater = isWaterPoint(vp.x, vp.y);
@@ -745,6 +778,9 @@ void GameSession::stepSimulationEvents() {
                         }
                     } else if (vp.owner == localOwner()) {
                         friendlyScoreLost += sval;
+                        if (deadSpec && deadSpec->scoreType == "tank") ++friendlyTanksLost;
+                        else if (deadSpec && (deadSpec->scoreType == "gun" || deadSpec->scoreType == "aa")) ++friendlyGunsLost;
+                        else if (deadSpec && !deadSpec->isSupplyCrate()) ++friendlyVehiclesLost;
                     }
                     if (vp.owner == localOwner()) {
                         recordEventPos(static_cast<double>(vp.x * mapScale), static_cast<double>(vp.y * mapScale));
@@ -767,7 +803,7 @@ void GameSession::stepSimulationEvents() {
                         }
                         spritesDirty = true;
                         if (!deadOnWater && (!deadSpec || !deadSpec->isSupplyCrate())) {
-                            if (burningWrecks.size() >= 8) burningWrecks.erase(burningWrecks.begin());
+                            if (burningWrecks.size() >= 24) burningWrecks.erase(burningWrecks.begin());
                             burningWrecks.push_back({wx, wy, now + std::chrono::seconds(18)});
                         }
                     }
@@ -868,7 +904,7 @@ void GameSession::stepSimulationEvents() {
                             combatVfx.spawnExplosion(static_cast<float>(bu.x), static_cast<float>(bu.y), 4, false);
                             spritesDirty = true;
                         }
-                        if (burningWrecks.size() >= 8) burningWrecks.erase(burningWrecks.begin());
+                        if (burningWrecks.size() >= 24) burningWrecks.erase(burningWrecks.begin());
                         burningWrecks.push_back({bx, by, now + std::chrono::seconds(20)});
                     }
                     (void)playWorldSound("defaultexplosion", 0.68f, bu.x, bu.y, ss2::VoicePriority::High);
@@ -884,7 +920,7 @@ void GameSession::stepSimulationEvents() {
                             spritesDirty = true;
                         }
                         if (newStage == 2 && combatEffects) {
-                            if (burningWrecks.size() >= 8) burningWrecks.erase(burningWrecks.begin());
+                            if (burningWrecks.size() >= 24) burningWrecks.erase(burningWrecks.begin());
                             burningWrecks.push_back({bx, by, now + std::chrono::seconds(8)});
                         }
                     }
@@ -921,11 +957,15 @@ void GameSession::stepSimulationEvents() {
                                              std::chrono::milliseconds(700)});
                     }
                     if (isBuildingPointVisible(bru.x, bru.y)) {
-                        combatVfx.spawnExplosion(static_cast<float>(bru.x), static_cast<float>(bru.y), 4, false);
-                        combatVfx.spawnWaterSplash(static_cast<float>(bru.x), static_cast<float>(bru.y), 3);
+                        const int span = std::max(32, lb.width - 24);
+                        for (int k = 0; k < 4; ++k) {
+                            const float sx = static_cast<float>(lb.left + 12 + (span * k) / 3);
+                            combatVfx.spawnExplosion(sx, static_cast<float>(bru.y), k == 1 ? 4 : 3, false);
+                            combatVfx.spawnWaterSplash(sx, static_cast<float>(bru.y + (k % 2 ? 12 : -8)), 3);
+                        }
                         spritesDirty = true;
                     }
-                    if (burningWrecks.size() >= 8) burningWrecks.erase(burningWrecks.begin());
+                    if (burningWrecks.size() >= 24) burningWrecks.erase(burningWrecks.begin());
                     burningWrecks.push_back({bx, by, now + std::chrono::seconds(20)});
                 }
                 (void)playWorldSound("defaultexplosion", 0.72f, bru.x, bru.y, ss2::VoicePriority::High);
@@ -955,24 +995,64 @@ void GameSession::stepSimulationEvents() {
                 }
             }
         }
-        if (!paused && audio) {
-            const auto now = std::chrono::steady_clock::now();
-            if (now >= nextAmbientAt) {
-                const ss2::assets::AmbientWoofer* best = nullptr;
-                double bestDist = 1e12;
-                double bestRad = 1.0;
-                double camX = 0.0;
-                double halfViewW = 640.0;
-                const auto& woofers = simulation->data().woofers;
-                if (!woofers.empty()) {
-                    int winW = 1280, winH = 720;
-                    if (!SDL_GetWindowSize(window, &winW, &winH)) { winW = 1280; winH = 720; }
-                    const auto [mx0, my0] = renderer.mapPosition(0.0f, 0.0f);
-                    const auto [mx1, my1] = renderer.mapPosition(static_cast<float>(winW), static_cast<float>(winH));
-                    const double s = static_cast<double>(std::max(1, mapScale));
-                    camX = 0.5 * (mx0 + mx1) / s;
-                    const double camY = 0.5 * (my0 + my1) / s;
-                    halfViewW = 0.5 * std::abs(mx1 - mx0) / s;
+        if (audio) {
+            if (paused || menu.active() || briefing.active()) {
+                audio->stopAllLoops();
+            } else {
+                const auto now = std::chrono::steady_clock::now();
+                int winW = 1280, winH = 720;
+                if (!SDL_GetWindowSize(window, &winW, &winH)) { winW = 1280; winH = 720; }
+                const auto [mx0, my0] = renderer.mapPosition(0.0f, 0.0f);
+                const auto [mx1, my1] = renderer.mapPosition(static_cast<float>(winW), static_cast<float>(winH));
+                const double s = static_cast<double>(std::max(1, mapScale));
+                const double camX = 0.5 * (mx0 + mx1) / s;
+                const double camY = 0.5 * (my0 + my1) / s;
+                const double halfDiag = 0.5 * std::hypot(mx1 - mx0, my1 - my0) / s;
+                const double halfViewW = 0.5 * std::abs(mx1 - mx0) / s;
+
+                // Continuous weather bed loop (slot 0)
+                if (missionWeather == assets::WeatherKind::Rain) {
+                    audio->setLoopChannel(0u, "@rain_loop", 0.14f, 0.0f, 1.0f);
+                } else {
+                    audio->setLoopChannel(0u, "", 0.0f);
+                }
+                // Continuous burning-wreck firebed loop (slot 1)
+                float fireGain = 0.0f, firePan = 0.0f;
+                for (const auto& bw : burningWrecks) {
+                    const double bwx = static_cast<double>(bw.x) / s;
+                    const double bwy = static_cast<double>(bw.y) / s;
+                    const float g = ss2::spatialGain(0.18f, bwx - camX, bwy - camY, halfDiag);
+                    if (g > fireGain) {
+                        fireGain = g;
+                        firePan = ss2::viewportStereoPan(bwx - camX, halfViewW, 0.55f);
+                    }
+                }
+                audio->setLoopChannel(1u, fireGain > 0.01f ? "@fire_loop" : "", fireGain, firePan, 1.0f);
+
+                // Continuous aircraft drone or moving armor rumble (slot 2)
+                float airGain = 0.0f, airPan = 0.0f, airPitch = 1.0f;
+                for (const auto& [sid, lp] : livePlanes) {
+                    (void)sid;
+                    if (!lp.pose.active || !lp.pose.alive) continue;
+                    const float g = ss2::spatialGain(0.20f, static_cast<double>(lp.pose.x) - camX,
+                                                     static_cast<double>(lp.pose.y) - camY, halfDiag * 1.4);
+                    if (g > airGain) {
+                        airGain = g;
+                        const double dx = static_cast<double>(lp.pose.x) - camX;
+                        airPan = ss2::viewportStereoPan(dx, halfViewW, 0.65f);
+                        const float ang = (static_cast<float>(lp.pose.dir32 & 31u) / 32.0f) * 6.2831853f;
+                        const double approach = ((dx >= 0.0 ? -1.0 : 1.0) * std::cos(ang));
+                        airPitch = std::clamp(1.0f + static_cast<float>(approach) * 0.045f, 0.94f, 1.05f);
+                    }
+                }
+                audio->setLoopChannel(2u, airGain > 0.01f ? "aircraft" : "", airGain, airPan, airPitch);
+                audio->updateLoops();
+
+                if (now >= nextAmbientAt) {
+                    const ss2::assets::AmbientWoofer* best = nullptr;
+                    double bestDist = 1e12;
+                    double bestRad = 1.0;
+                    const auto& woofers = simulation->data().woofers;
                     for (const auto& w : woofers) {
                         const double radPx = std::max(320.0, static_cast<double>(w.radiusTiles) * 32.0);
                         const double d = std::hypot(static_cast<double>(w.x) - camX,
@@ -983,37 +1063,39 @@ void GameSession::stepSimulationEvents() {
                             bestRad = radPx;
                         }
                     }
-                }
-                if (best) {
-                    const std::string ambSnd = ss2::assets::resolveAmbientWooferSound(best->sound);
-                    const float gain = std::clamp(
-                        best->volume * static_cast<float>(1.0 - 0.65 * (bestDist / bestRad)),
-                        0.05f, 0.35f);
-                    const float pan = ss2::viewportStereoPan(static_cast<double>(best->x) - camX, halfViewW, 0.55f);
-                    (void)audio->playGroup(ambSnd, gain, ss2::VoicePriority::Ambient, pan);
-                    const unsigned periodMs = (best->maxPeriodMs >= 500u)
-                        ? std::clamp<unsigned>(
-                              ((ambientPhase & 1u) != 0u && best->minPeriodMs >= 500u)
-                                  ? best->minPeriodMs : best->maxPeriodMs,
-                              1500u, 12000u)
-                        : 6000u;
-                    ++ambientPhase;
-                    nextAmbientAt = now + std::chrono::milliseconds(periodMs);
-                } else if (missionWeather == assets::WeatherKind::Rain) {
-                    (void)audio->playGroup("@rain_loop", 0.16f, ss2::VoicePriority::Ambient);
-                    if ((ambientPhase % 6u) == 0u) {
-                        const float thunderPan = ((ambientPhase & 2u) != 0u) ? 0.25f : -0.25f;
-                        (void)audio->playGroup("@groza", 0.22f, ss2::VoicePriority::Ambient, thunderPan);
+                    if (best) {
+                        const std::string ambSnd = ss2::assets::resolveAmbientWooferSound(best->sound);
+                        const float gain = std::clamp(
+                            best->volume * static_cast<float>(1.0 - 0.65 * (bestDist / bestRad)),
+                            0.05f, 0.35f);
+                        const float pan = ss2::viewportStereoPan(static_cast<double>(best->x) - camX, halfViewW, 0.55f);
+                        (void)audio->playGroup(ambSnd, gain, ss2::VoicePriority::Ambient, pan);
+                        const unsigned periodMs = (best->maxPeriodMs >= 500u)
+                            ? std::clamp<unsigned>(
+                                  ((ambientPhase & 1u) != 0u && best->minPeriodMs >= 500u)
+                                      ? best->minPeriodMs : best->maxPeriodMs,
+                                  1500u, 12000u)
+                            : 6000u;
+                        ++ambientPhase;
+                        nextAmbientAt = now + std::chrono::milliseconds(periodMs);
+                    } else if (missionWeather == assets::WeatherKind::Rain) {
+                        if ((ambientPhase % 5u) == 0u) {
+                            const float thunderPan = ((ambientPhase & 2u) != 0u) ? 0.25f : -0.25f;
+                            (void)audio->playGroup("@groza", 0.22f, ss2::VoicePriority::Ambient, thunderPan);
+                            lastWeatherLightningAt = now;
+                        }
+                        ++ambientPhase;
+                        nextAmbientAt = now + std::chrono::milliseconds(2200);
+                    } else if (missionWeather == assets::WeatherKind::Clear &&
+                               (mapScheme == 0u || mapScheme == 2u)) {
+                        const char* ambGroup = (mapScheme == 2u ? "@cicades_loop" : "@birds");
+                        (void)audio->playGroup(ambGroup, 0.14f, ss2::VoicePriority::Ambient);
+                        ++ambientPhase;
+                        nextAmbientAt = now + std::chrono::milliseconds(3800);
+                    } else {
+                        ++ambientPhase;
+                        nextAmbientAt = now + std::chrono::milliseconds(4000);
                     }
-                    ++ambientPhase;
-                    nextAmbientAt = now + std::chrono::milliseconds(1300);
-                } else {
-                    const char* ambGroup = (!burningWrecks.empty() && (ambientPhase & 1u) != 0u)
-                        ? "@fire_loop"
-                        : (mapScheme == 2 ? "@cicades_loop" : "@birds");
-                    (void)audio->playGroup(ambGroup, 0.14f, ss2::VoicePriority::Ambient);
-                    ++ambientPhase;
-                    nextAmbientAt = now + std::chrono::milliseconds(3800);
                 }
             }
         }
@@ -1257,7 +1339,7 @@ void GameSession::stepSimulationEvents() {
                         spritesDirty = true;
                     }
                     if (!crashWater) {
-                        if (burningWrecks.size() >= 8) burningWrecks.erase(burningWrecks.begin());
+                        if (burningWrecks.size() >= 24) burningWrecks.erase(burningWrecks.begin());
                         burningWrecks.push_back({ax, ay, now + std::chrono::seconds(14)});
                     }
                 }
@@ -1358,6 +1440,11 @@ void GameSession::stepSimulationEvents() {
                 logHud(message);
                 SDL_SetWindowTitle(window, message.c_str());
                 orderNotice.show(message, ss2::NoticeKind::accepted);
+                if (!multiplayer.enabled && !limit && !timing && !replayFile && nextMissionOut &&
+                    !paused && simulation->simTick() >= nextObjAutoSaveTick) {
+                    nextObjAutoSaveTick = simulation->simTick() + 1500u;
+                    doSaveSlot(-3, true);
+                }
             } else if (event.kind == ss2::MissionEvent::Marker && selection) {
                 const auto [x, y] = data.markers.at(event.index);
                 objectiveMarkerSim = {x, y};
@@ -1392,6 +1479,11 @@ void GameSession::stepSimulationEvents() {
                 if (!replayFile) {
                     spawnReinforcementWave(event);
                     spritesDirty = true;
+                    if (!multiplayer.enabled && !limit && !timing && nextMissionOut &&
+                        !paused && simulation->simTick() >= nextObjAutoSaveTick) {
+                        nextObjAutoSaveTick = simulation->simTick() + 1500u;
+                        doSaveSlot(-3, true);
+                    }
                 }
             }
         }

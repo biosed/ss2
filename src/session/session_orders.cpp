@@ -45,11 +45,72 @@ void GameSession::armAirSupportKind(assets::AirMissionKind kind) {
                      ss2::NoticeKind::accepted);
 }
 
+void GameSession::syncActiveSubgroup() {
+    if (activeSubgroupLabel.empty()) return;
+    const auto classes = selectionClassOrder();
+    if (classes.size() < 2u || std::ranges::find(classes, activeSubgroupLabel) == classes.end()) {
+        activeSubgroupLabel.clear();
+    }
+}
+
+std::vector<std::string> GameSession::selectionClassOrder() const {
+    std::set<std::string> names;
+    if (scene && selection) {
+        const auto& units = scene->units();
+        for (const size_t sid : selection->selected()) {
+            if (sid < units.size() && units[sid].hp > 0) {
+                names.insert(hudDisplayName(units[sid].id));
+            }
+        }
+    }
+    if (vehicleScene && selection) {
+        const auto& vehs = vehicleScene->vehicles();
+        for (const size_t vid : selection->selectedVehicles()) {
+            if (vid < vehs.size() && vehs[vid].alive && vehs[vid].hp > 0) {
+                names.insert(hudDisplayName(vehs[vid].id));
+            }
+        }
+    }
+    return {names.begin(), names.end()};
+}
+
+std::vector<std::size_t> GameSession::activeInfantrySelection() const {
+    if (!selection) return {};
+    const auto& sel = selection->selected();
+    if (activeSubgroupLabel.empty() || !scene) return {sel.begin(), sel.end()};
+    std::vector<std::size_t> out;
+    const auto& units = scene->units();
+    for (const size_t sid : sel) {
+        if (sid < units.size() && hudDisplayName(units[sid].id) == activeSubgroupLabel) {
+            out.push_back(sid);
+        }
+    }
+    return out.empty() && selection->selectedVehicles().empty() ? std::vector<std::size_t>(sel.begin(), sel.end()) : out;
+}
+
+std::vector<std::size_t> GameSession::activeVehicleSelection() const {
+    if (!selection) return {};
+    const auto& vsel = selection->selectedVehicles();
+    if (activeSubgroupLabel.empty() || !vehicleScene) return {vsel.begin(), vsel.end()};
+    std::vector<std::size_t> out;
+    const auto& vehs = vehicleScene->vehicles();
+    for (const size_t vid : vsel) {
+        if (vid < vehs.size() && hudDisplayName(vehs[vid].id) == activeSubgroupLabel) {
+            out.push_back(vid);
+        }
+    }
+    return out.empty() && selection->selected().empty() ? std::vector<std::size_t>(vsel.begin(), vsel.end()) : out;
+}
+
 void GameSession::doTogglePause() {
     if (!simulation) return;
     paused = simulation->togglePause();
-    if (paused) showPause();
-    else orderNotice.show(ss2::tr("Resumed."), ss2::NoticeKind::accepted);
+    if (paused) {
+        if (audio) audio->stopAllLoops();
+        showPause();
+    } else {
+        orderNotice.show(ss2::tr("Resumed."), ss2::NoticeKind::accepted);
+    }
     std::cout << (paused ? "Mission clock paused" : "Mission clock resumed") << '\n';
 }
 
@@ -88,16 +149,15 @@ void GameSession::pushOrderPulse(int dstSimX, int dstSimY, OrderPulse::Kind kind
 
 void GameSession::doStop() {
     if (!simulation || !selection) return;
-    const auto& sel = selection->selected();
-    const auto& vsel = selection->selectedVehicles();
-    if (sel.empty() && vsel.empty()) return;
+    syncActiveSubgroup();
+    const auto ids = activeInfantrySelection();
+    const auto vids = activeVehicleSelection();
+    if (ids.empty() && vids.empty()) return;
     size_t n = 0;
-    if (!sel.empty()) {
-        const std::vector<size_t> ids(sel.begin(), sel.end());
+    if (!ids.empty()) {
         n += simulation->stop(ids);
     }
-    if (!vsel.empty()) {
-        const std::vector<size_t> vids(vsel.begin(), vsel.end());
+    if (!vids.empty()) {
         n += simulation->stopVehicles(vids);
     }
     if (n) {
@@ -116,9 +176,10 @@ void GameSession::doStop() {
 
 void GameSession::doToggleHoldFire() {
     if (!simulation || !selection) return;
-    const auto& sel = selection->selected();
-    const auto& vsel = selection->selectedVehicles();
-    if (sel.empty() && vsel.empty()) {
+    syncActiveSubgroup();
+    const auto selIds = activeInfantrySelection();
+    const auto selVids = activeVehicleSelection();
+    if (selIds.empty() && selVids.empty()) {
         if (selectedBuilding && *selectedBuilding < liveBuildings.size()) {
             const auto& sb = liveBuildings[*selectedBuilding];
             if (!sb.destroyed && sb.owner == localOwner() && sb.occupantCount > 0) {
@@ -137,21 +198,19 @@ void GameSession::doToggleHoldFire() {
         return;
     }
     std::optional<bool> holdState;
-    if (!sel.empty()) {
-        const std::vector<size_t> ids(sel.begin(), sel.end());
-        if (const auto hold = simulation->toggleHoldFire(ids)) {
+    if (!selIds.empty()) {
+        if (const auto hold = simulation->toggleHoldFire(selIds)) {
             holdState = *hold;
-            for (const auto id : ids) {
+            for (const auto id : selIds) {
                 if (*hold) holdFireUnits.insert(id);
                 else holdFireUnits.erase(id);
             }
         }
     }
-    if (!vsel.empty()) {
-        const std::vector<size_t> vids(vsel.begin(), vsel.end());
-        if (const auto vhold = simulation->toggleVehicleHoldFire(vids)) {
+    if (!selVids.empty()) {
+        if (const auto vhold = simulation->toggleVehicleHoldFire(selVids)) {
             if (!holdState) holdState = *vhold;
-            for (const auto id : vids) {
+            for (const auto id : selVids) {
                 if (*vhold) vehicleHoldFireUnits.insert(id);
                 else vehicleHoldFireUnits.erase(id);
             }
@@ -161,14 +220,15 @@ void GameSession::doToggleHoldFire() {
         playSelectionVoice("hold");
         showNotice(ss2::tr(*holdState ? "Hold fire enabled." : "Fire at will enabled."), ss2::NoticeKind::accepted);
         std::cout << "Tutorial I tactical H (hold-fire=" << (*holdState ? "on" : "off") << "): "
-                  << (sel.size() + vsel.size()) << " units\n";
+                  << (selIds.size() + selVids.size()) << " units\n";
     }
 }
 
 void GameSession::doToggleCrouch() {
     if (!simulation || !selection || selection->selected().empty()) return;
-    const auto& sel = selection->selected();
-    const std::vector<size_t> ids(sel.begin(), sel.end());
+    syncActiveSubgroup();
+    const auto ids = activeInfantrySelection();
+    if (ids.empty()) return;
     if (const auto crouched = simulation->toggleCrouch(ids)) {
         for (const auto id : ids) {
             if (*crouched) crouchedUnits.insert(id);
@@ -217,8 +277,9 @@ void GameSession::doToggleBinoculars() {
         }
         return;
     }
-    const auto& sel = selection->selected();
-    const std::vector<size_t> ids(sel.begin(), sel.end());
+    syncActiveSubgroup();
+    const auto ids = activeInfantrySelection();
+    if (ids.empty()) return;
     if (const auto active = simulation->toggleBinoculars(ids)) {
         std::optional<size_t> binoSid;
         for (const auto id : ids) {
@@ -424,8 +485,9 @@ void GameSession::doUnloadOrUnhitch() {
 
 void GameSession::doLayMine() {
     if (!simulation || !selection || selection->selected().empty()) return;
-    const auto& sel = selection->selected();
-    const std::vector<size_t> ids(sel.begin(), sel.end());
+    syncActiveSubgroup();
+    const auto ids = activeInfantrySelection();
+    if (ids.empty()) return;
     const size_t laid = simulation->layMine(ids);
     if (laid > 0) {
         liveVisibleMines = simulation->visibleMines();
@@ -441,8 +503,9 @@ void GameSession::doLayMine() {
 
 void GameSession::doScatter() {
     if (!simulation || !selection || selection->selected().empty()) return;
-    const auto& sel = selection->selected();
-    const std::vector<size_t> ids(sel.begin(), sel.end());
+    syncActiveSubgroup();
+    const auto ids = activeInfantrySelection();
+    if (ids.empty()) return;
     const size_t n = simulation->scatter(ids);
     if (n > 0) {
         attackMoveArmed = false;

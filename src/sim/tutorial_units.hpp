@@ -80,6 +80,8 @@ struct VehiclePose {
     bool suppressed{false};
     std::uint8_t craterScale{0};
     bool hatchOpen{false};
+    std::uint8_t armorHitOutcome{0}; // 0=None, 1=Penetrated, 2=Glancing, 3=Ricochet
+    std::uint8_t hitImpactDir32{0};
 };
 
 struct BuildingSnapshot {
@@ -396,6 +398,10 @@ public:
     bool embarkImmediate(size_t soldierIdx, size_t vehicleIdx);
     size_t orderBoardVehicle(std::span<const size_t> soldierIds, size_t vehicleIdx);
     size_t unloadVehicles(std::span<const size_t> vehicleIds, std::vector<SoldierPose>* outPoses = nullptr);
+    bool unloadSinglePassenger(std::size_t vehicleIdx, std::size_t soldierIdx,
+                               std::vector<SoldierPose>* outPoses = nullptr);
+    std::vector<std::size_t> vehiclePassengerIds(std::size_t vehicleIdx) const;
+    std::string soldierUnitId(std::size_t soldierIdx) const;
 
     void setPlayerTeams(std::array<int, 4> teams);
     int playerTeam(int owner) const noexcept;
@@ -512,6 +518,8 @@ public:
     bool canGarrisonBuilding(size_t buildingIdx, int viewerOwner = 0) const;
     size_t orderGarrisonBuilding(std::span<const size_t> soldierIds, size_t buildingIdx);
     size_t evacuateBuilding(size_t buildingIdx, std::vector<SoldierPose>* outPoses = nullptr);
+    bool evacuateSingleOccupant(std::size_t buildingIdx, std::size_t soldierIdx,
+                                std::vector<SoldierPose>* outPoses = nullptr);
     std::optional<bool> toggleBuildingHoldFire(size_t buildingIdx);
     std::optional<bool> toggleBuildingBinoculars(size_t buildingIdx, std::vector<SoldierPose>* outPoses = nullptr);
     size_t orderBuildingAttack(size_t buildingIdx, bool targetIsVehicle, size_t targetIdx);
@@ -976,7 +984,10 @@ private:
                          bool heavyImpact = false, bool hitVehicle = false,
                          bool repaired = false, bool resupplied = false, bool captured = false,
                          bool firedRocket = false, bool firedFlamer = false,
-                         bool decrewed = false);
+                         bool decrewed = false,
+                         std::uint8_t armorHitOutcome = 0, std::uint8_t hitImpactDir32 = 0);
+    void populateSoldierPoseStats(std::vector<SoldierPose>* outPoses) const;
+    void placeDisembarkedSoldier(size_t soldierIdx, SubCell spot, bool vis, std::vector<SoldierPose>* outPoses);
     bool isSoldierCamouflaged(const Soldier& s) const;
     int officerAuraDecayAt(int owner, double x, double y) const;
     int officerAuraDecay(size_t soldierIdx) const;

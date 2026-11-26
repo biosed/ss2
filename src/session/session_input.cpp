@@ -467,18 +467,32 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
     }
     if (hud && !briefing.active()) {
         const auto hr = hud->handle(event);
+        if (hr.hoverEntered && audio) {
+            const auto hNow = std::chrono::steady_clock::now();
+            if (hNow - lastHoverChimeAt >= std::chrono::milliseconds(45)) {
+                (void)audio->playGroup("choose", 0.20f, ss2::VoicePriority::Low);
+                lastHoverChimeAt = hNow;
+            }
+        }
         if (hr.action == ss2::HudAction::moveCamera && hudMapW && hudMapH) {
-            if (multiplayer.enabled && simulation && event.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
+            if (simulation && event.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
                 event.button.button == SDL_BUTTON_LEFT && (SDL_GetModState() & SDL_KMOD_ALT) != 0) {
                 hud->cancelMinimapDrag();
                 const int simX = std::clamp(static_cast<int>(std::lround(hr.u * static_cast<float>(hudMapW))),
                                             0, static_cast<int>(hudMapW) - 1);
                 const int simY = std::clamp(static_cast<int>(std::lround(hr.v * static_cast<float>(hudMapH))),
                                             0, static_cast<int>(hudMapH) - 1);
-                placeMpBeacon(simX, simY);
+                if (multiplayer.enabled) {
+                    placeMpBeacon(simX, simY);
+                } else {
+                    pushMinimapPing(simX, simY, false);
+                    recordEventPos(static_cast<double>(simX * mapScale), static_cast<double>(simY * mapScale));
+                    if (audio) audio->playGroup("e_telegram", 0.42f, ss2::VoicePriority::Normal);
+                    orderNotice.show(ss2::tr("Tactical ping placed on map."), ss2::NoticeKind::accepted);
+                }
             } else if (simulation && event.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
                 event.button.button == SDL_BUTTON_LEFT &&
-                (armedAirSupport || attackMoveArmed || patrolArmed)) {
+                (armedAirSupport || attackMoveArmed || patrolArmed || attackGroundArmed)) {
                 hud->cancelMinimapDrag();
                 const int simX = std::clamp(static_cast<int>(std::lround(hr.u * static_cast<float>(hudMapW))),
                                             0, static_cast<int>(hudMapW) - 1);
@@ -487,6 +501,26 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
                 if (armedAirSupport) {
                     dispatchAirSupportAt(*armedAirSupport, simX, simY);
                     armedAirSupport.reset();
+                } else if (attackGroundArmed) {
+                    const auto vids = activeVehicleSelection();
+                    const auto sids = activeInfantrySelection();
+                    size_t totalBombard = 0;
+                    if (!vids.empty()) {
+                        if (const auto res = simulation->attackGroundVehicles(vids, simX, simY)) totalBombard += *res;
+                    }
+                    if (!sids.empty()) {
+                        if (const auto res = simulation->attackGroundSoldiers(sids, simX, simY)) totalBombard += *res;
+                    }
+                    if (totalBombard > 0) {
+                        pushOrderPulse(simX, simY, OrderPulse::Kind::Attack);
+                        pushMinimapPing(simX, simY, true);
+                        playSelectionVoice("attack");
+                        showNotice(ss2::trf("Attack ground ordered ({0} units).", {std::to_string(totalBombard)}),
+                                   ss2::NoticeKind::accepted);
+                    } else {
+                        orderNotice.show(ss2::tr("Selected units cannot bombard that location."), ss2::NoticeKind::blocked);
+                    }
+                    attackGroundArmed = false;
                 } else if (patrolArmed) {
                     dispatchPatrolAt(simX, simY);
                     patrolArmed = false;
@@ -524,12 +558,16 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
             }
             resetCursor();
         } else if (hr.action == ss2::HudAction::stop) {
+            if (audio) audio->playGroup("switch", 0.42f, ss2::VoicePriority::High);
             doStop();
         } else if (hr.action == ss2::HudAction::holdFire) {
+            if (audio) audio->playGroup("switch", 0.42f, ss2::VoicePriority::High);
             doToggleHoldFire();
         } else if (hr.action == ss2::HudAction::crouch) {
+            if (audio) audio->playGroup("switch", 0.42f, ss2::VoicePriority::High);
             doToggleCrouch();
         } else if (hr.action == ss2::HudAction::recon) {
+            if (audio) audio->playGroup("switch", 0.42f, ss2::VoicePriority::High);
             doToggleBinoculars();
         } else if (hr.action == ss2::HudAction::attackMove) {
             if (audio) audio->playGroup("switch", 0.42f, ss2::VoicePriority::High);
@@ -541,12 +579,16 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
             if (audio) audio->playGroup("switch", 0.42f, ss2::VoicePriority::High);
             doArmAttackGround();
         } else if (hr.action == ss2::HudAction::unload) {
+            if (audio) audio->playGroup("switch", 0.42f, ss2::VoicePriority::High);
             doUnloadOrUnhitch();
         } else if (hr.action == ss2::HudAction::mine) {
+            if (audio) audio->playGroup("switch", 0.42f, ss2::VoicePriority::High);
             doLayMine();
         } else if (hr.action == ss2::HudAction::scatter) {
+            if (audio) audio->playGroup("switch", 0.42f, ss2::VoicePriority::High);
             doScatter();
         } else if (hr.action == ss2::HudAction::recallGroup && hr.groupDigit >= 0 && hr.groupDigit < 10 && selection) {
+            if (audio) audio->playGroup("switch", 0.42f, ss2::VoicePriority::High);
             const auto beforeInf = selection->selected();
             const auto beforeVeh = selection->selectedVehicles();
             selection->recallControlGroup(static_cast<unsigned>(hr.groupDigit), hr.shiftHeld);
@@ -555,29 +597,60 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
             }
             if (!hr.shiftHeld && selection->selected() == beforeInf && selection->selectedVehicles() == beforeVeh) {
                 if (const auto ctr = selection->selectionCentroid()) {
-                    renderer.focusMap(ctr->first, ctr->second, true);
+                    renderer.smoothFocusMap(ctr->first, ctr->second);
                 }
             }
         } else if (hr.action == ss2::HudAction::selectClass && !hr.classLabel.empty() && selection && scene) {
             if (audio) audio->playGroup("switch", 0.42f, ss2::VoicePriority::High);
-            std::set<size_t> newInf, newVeh;
-            const auto& units = scene->units();
-            for (const auto id : selection->selected()) {
-                if (id >= units.size()) continue;
-                const bool match = (hudDisplayName(units[id].id) == hr.classLabel);
-                if (hr.shiftHeld ? !match : match) newInf.insert(id);
-            }
-            if (vehicleScene) {
-                const auto& vehs = vehicleScene->vehicles();
-                for (const auto id : selection->selectedVehicles()) {
-                    if (id >= vehs.size()) continue;
-                    const bool match = (hudDisplayName(vehs[id].id) == hr.classLabel);
-                    if (hr.shiftHeld ? !match : match) newVeh.insert(id);
+            if (selection->selected().empty() && selection->selectedVehicles().empty() &&
+                selectedBuilding && *selectedBuilding < liveBuildings.size() && simulation) {
+                for (const size_t sid : liveBuildings[*selectedBuilding].occupantIds) {
+                    const std::string uid = simulation->soldierUnitId(sid);
+                    if (!uid.empty() && hudDisplayName(uid) == hr.classLabel) {
+                        if (simulation->evacuateSingleOccupant(*selectedBuilding, sid)) {
+                            playUnitVoiceForId("unload", uid, false);
+                            showNotice(ss2::trf("Evacuated 1 {0}.", {ss2::tr(hr.classLabel)}),
+                                       ss2::NoticeKind::accepted);
+                        }
+                        break;
+                    }
                 }
-            }
-            selection->setSelection(std::move(newInf), std::move(newVeh));
-            if (!selection->selected().empty() || !selection->selectedVehicles().empty()) {
-                selectedBuilding.reset();
+            } else if (selection->selected().empty() && selection->selectedVehicles().size() == 1u &&
+                       simulation && hr.classLabel.rfind("[Cargo] ", 0) == 0) {
+                const size_t vid = *selection->selectedVehicles().begin();
+                const std::string wantClass = hr.classLabel.substr(8);
+                for (const size_t sid : simulation->vehiclePassengerIds(vid)) {
+                    const std::string uid = simulation->soldierUnitId(sid);
+                    if (!uid.empty() && hudDisplayName(uid) == wantClass) {
+                        if (simulation->unloadSinglePassenger(vid, sid)) {
+                            playUnitVoiceForId("unload", uid, false);
+                            showNotice(ss2::trf("Unloaded 1 {0}.", {ss2::tr(wantClass)}),
+                                       ss2::NoticeKind::accepted);
+                        }
+                        break;
+                    }
+                }
+            } else {
+                std::set<size_t> newInf, newVeh;
+                const auto& units = scene->units();
+                for (const auto id : selection->selected()) {
+                    if (id >= units.size()) continue;
+                    const bool match = (hudDisplayName(units[id].id) == hr.classLabel);
+                    if (hr.shiftHeld ? !match : match) newInf.insert(id);
+                }
+                if (vehicleScene) {
+                    const auto& vehs = vehicleScene->vehicles();
+                    for (const auto id : selection->selectedVehicles()) {
+                        if (id >= vehs.size()) continue;
+                        const bool match = (hudDisplayName(vehs[id].id) == hr.classLabel);
+                        if (hr.shiftHeld ? !match : match) newVeh.insert(id);
+                    }
+                }
+                activeSubgroupLabel.clear();
+                selection->setSelection(std::move(newInf), std::move(newVeh));
+                if (!selection->selected().empty() || !selection->selectedVehicles().empty()) {
+                    selectedBuilding.reset();
+                }
             }
         } else if (hr.action == ss2::HudAction::airSupport && hr.airSlot >= 0 && hr.airSlot < 5 && simulation) {
             const auto kind = static_cast<ss2::assets::AirMissionKind>(hr.airSlot);
@@ -755,18 +828,20 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
             doAbandonVehicles();
             return;
         } else if (event.key.key == SDLK_X && !selection->selectedVehicles().empty()) {
-            const auto& vsel = selection->selectedVehicles();
-            const std::vector<size_t> vids(vsel.begin(), vsel.end());
-            if (const auto opened = simulation->toggleMarchMode(vids)) {
-                playSelectionVoice("select");
-                orderNotice.show(
-                    ss2::tr(*opened
-                                ? "Commander hatch opened (+sight, exposed to snipers — X to close)."
-                                : "Commander hatch closed (buttoned — protected from snipers)."),
-                    ss2::NoticeKind::accepted);
-            } else {
-                orderNotice.show(ss2::tr("Selected vehicles have no commander hatch."),
-                                 ss2::NoticeKind::unsupported);
+            syncActiveSubgroup();
+            const auto vids = activeVehicleSelection();
+            if (!vids.empty()) {
+                if (const auto opened = simulation->toggleMarchMode(vids)) {
+                    playSelectionVoice("select");
+                    orderNotice.show(
+                        ss2::tr(*opened
+                                    ? "Commander hatch opened (+sight, exposed to snipers — X to close)."
+                                    : "Commander hatch closed (buttoned — protected from snipers)."),
+                        ss2::NoticeKind::accepted);
+                } else {
+                    orderNotice.show(ss2::tr("Selected vehicles have no commander hatch."),
+                                     ss2::NoticeKind::unsupported);
+                }
             }
             return;
         } else if (event.key.key == SDLK_H) doToggleHoldFire();
@@ -774,6 +849,98 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
         else if (event.key.key == SDLK_B && (!selection->selected().empty() || selectedBuilding)) doToggleBinoculars();
     }
     if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat) {
+        if (!replayFile && simulation && selection && scene && vehicleScene && event.key.key == SDLK_TAB &&
+            !(event.key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT))) {
+            const auto classes = selectionClassOrder();
+            if (classes.size() >= 2u) {
+                const bool reverse = (event.key.mod & SDL_KMOD_SHIFT) != 0;
+                std::size_t nextPos = 0u;
+                if (activeSubgroupLabel.empty()) {
+                    nextPos = reverse ? (classes.size() - 1u) : 0u;
+                    activeSubgroupLabel = classes[nextPos];
+                } else {
+                    const auto it = std::ranges::find(classes, activeSubgroupLabel);
+                    if (it == classes.end()) {
+                        activeSubgroupLabel = classes.front();
+                    } else {
+                        const std::size_t idx = static_cast<std::size_t>(std::distance(classes.begin(), it));
+                        if (!reverse) {
+                            activeSubgroupLabel = (idx + 1u < classes.size()) ? classes[idx + 1u] : std::string{};
+                        } else {
+                            activeSubgroupLabel = (idx > 0u) ? classes[idx - 1u] : std::string{};
+                        }
+                    }
+                }
+                if (audio) audio->playGroup("switch", 0.35f, ss2::VoicePriority::Low);
+                orderNotice.show(
+                    activeSubgroupLabel.empty()
+                        ? ss2::tr("Active subgroup: All selected classes")
+                        : ss2::trf("Active subgroup: {0}", {ss2::tr(activeSubgroupLabel)}),
+                    ss2::NoticeKind::accepted);
+                return;
+            }
+        }
+        if (simulation && selection && scene && event.key.key == SDLK_HOME &&
+            !(event.key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT))) {
+            if (const auto ctr = selection->selectionCentroid()) {
+                renderer.smoothFocusMap(ctr->first, ctr->second);
+                return;
+            }
+        }
+        if (simulation && selection && scene && event.key.key == SDLK_COMMA &&
+            !(event.key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT))) {
+            struct SpecEntry { bool isVehicle{false}; size_t index{0}; };
+            std::vector<SpecEntry> specs;
+            const auto& units = scene->units();
+            for (size_t idx = 0; idx < units.size(); ++idx) {
+                const auto& u = units[idx];
+                if (u.owner != localOwner() || u.hp <= 0 || !u.visible) continue;
+                const auto* sp = unitCatalog ? unitCatalog->find(u.id) : nullptr;
+                const bool isSpec = soldierHasBinoculars(u.id) || (idx < unitMineAmmo.size() && unitMineAmmo[idx] > 0) ||
+                                    (sp && (sp->healDelay > 0 || sp->selType == "medic" || sp->selType == "sapper" ||
+                                            sp->selType == "sappers" || sp->selType == "officer"));
+                if (isSpec) specs.push_back({false, idx});
+            }
+            if (vehicleScene) {
+                const auto& vehs = vehicleScene->vehicles();
+                for (size_t idx = 0; idx < vehs.size(); ++idx) {
+                    const auto& v = vehs[idx];
+                    if (!v.alive || v.hp <= 0 || v.owner != localOwner() || !v.visible) continue;
+                    const auto* sp = unitCatalog ? unitCatalog->find(v.id) : nullptr;
+                    if (sp && (sp->isSupplyTruck() || sp->healDelay > 0 || sp->selType == "ambulance")) {
+                        specs.push_back({true, idx});
+                    }
+                }
+            }
+            if (specs.empty()) {
+                orderNotice.show(ss2::tr("No specialists or support vehicles active."), ss2::NoticeKind::unsupported);
+            } else {
+                specialistCursor %= specs.size();
+                const auto picked = specs[specialistCursor];
+                const std::size_t shownIdx = specialistCursor + 1u;
+                specialistCursor = (specialistCursor + 1u) % specs.size();
+                std::string unitName;
+                if (picked.isVehicle && vehicleScene && picked.index < vehicleScene->vehicles().size()) {
+                    selection->setSelection({}, {picked.index});
+                    unitName = hudDisplayName(vehicleScene->vehicles()[picked.index].id);
+                } else if (!picked.isVehicle && picked.index < units.size()) {
+                    selection->setSelection({picked.index}, {});
+                    unitName = hudDisplayName(units[picked.index].id);
+                }
+                selectedBuilding.reset();
+                activeSubgroupLabel.clear();
+                prevSelInf = selection->selected();
+                prevSelVeh = selection->selectedVehicles();
+                if (const auto ctr = selection->selectionCentroid()) {
+                    renderer.smoothFocusMap(ctr->first, ctr->second);
+                }
+                orderNotice.show(ss2::trf("Specialist {0}/{1}: {2} (, for next)",
+                                          {std::to_string(shownIdx), std::to_string(specs.size()),
+                                           ss2::tr(unitName)}),
+                                 ss2::NoticeKind::accepted);
+            }
+            return;
+        }
         if (simulation && selection && scene && event.key.key == SDLK_I &&
             !(event.key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT))) {
             const auto idle = simulation->idlePlayerUnits();
@@ -1082,14 +1249,21 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
         resetCursor();
         return;
     }
-    if (multiplayer.enabled && simulation && !menu.active() && !briefing.active() && !mpChatActive &&
+    if (simulation && !menu.active() && !briefing.active() && !mpChatActive &&
         event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_LEFT &&
         (SDL_GetModState() & SDL_KMOD_ALT) != 0) {
         (void)selection->cancelDrag();
         const auto [x, y] = renderer.mapPosition(event.button.x, event.button.y);
         const int simX = std::clamp(static_cast<int>(std::floor(x / mapScale)), 0, static_cast<int>(hudMapW > 0 ? hudMapW - 1 : 0));
         const int simY = std::clamp(static_cast<int>(std::floor(y / mapScale)), 0, static_cast<int>(hudMapH > 0 ? hudMapH - 1 : 0));
-        placeMpBeacon(simX, simY);
+        if (multiplayer.enabled) {
+            placeMpBeacon(simX, simY);
+        } else {
+            pushMinimapPing(simX, simY, false);
+            recordEventPos(static_cast<double>(simX * mapScale), static_cast<double>(simY * mapScale));
+            if (audio) audio->playGroup("e_telegram", 0.42f, ss2::VoicePriority::Normal);
+            orderNotice.show(ss2::tr("Tactical ping placed on map."), ss2::NoticeKind::accepted);
+        }
         return;
     }
     if (simulation && event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_RIGHT) {
@@ -1543,7 +1717,56 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
             }
         }
         const bool append = (SDL_GetModState() & SDL_KMOD_SHIFT) != 0;
-        (void)issueGroundOrder(simX, simY, false, append);
+        if (issueGroundOrder(simX, simY, false, append) && (!ids.empty() || !vids.empty()) && !append) {
+            rightDragActive = true;
+            rightDragStartScreenX = rightDragCurScreenX = event.button.x;
+            rightDragStartScreenY = rightDragCurScreenY = event.button.y;
+        }
+    }
+    if (rightDragActive && event.type == SDL_EVENT_MOUSE_MOTION && (event.motion.state & SDL_BUTTON_RMASK)) {
+        rightDragCurScreenX = event.motion.x;
+        rightDragCurScreenY = event.motion.y;
+        return;
+    }
+    if (rightDragActive && event.type == SDL_EVENT_MOUSE_BUTTON_UP && event.button.button == SDL_BUTTON_RIGHT) {
+        rightDragActive = false;
+        const float dragDist = std::hypot(event.button.x - rightDragStartScreenX, event.button.y - rightDragStartScreenY);
+        if (simulation && selection && dragDist >= 28.0f &&
+            (!selection->selected().empty() || !selection->selectedVehicles().empty())) {
+            const auto [p0x, p0y] = renderer.mapPosition(rightDragStartScreenX, rightDragStartScreenY);
+            const auto [p1x, p1y] = renderer.mapPosition(event.button.x, event.button.y);
+            const int x0 = int(std::floor(p0x / mapScale)), y0 = int(std::floor(p0y / mapScale));
+            const int x1 = int(std::floor(p1x / mapScale)), y1 = int(std::floor(p1y / mapScale));
+            const double dx = double(x1 - x0), dy = double(y1 - y0);
+            const std::size_t nInf = selection->selected().size();
+            const std::size_t nVeh = selection->selectedVehicles().size();
+            const std::size_t totalUnits = nInf + nVeh;
+            if (totalUnits > 0u) {
+                std::size_t slot = 0u;
+                const auto slotPos = [&](std::size_t k) {
+                    const double frac = totalUnits == 1u ? 0.5 : static_cast<double>(k) / static_cast<double>(totalUnits - 1u);
+                    return std::pair{
+                        std::clamp(static_cast<int>(std::lround(double(x0) + dx * frac)), 0, std::max(0, int(hudMapW) - 1)),
+                        std::clamp(static_cast<int>(std::lround(double(y0) + dy * frac)), 0, std::max(0, int(hudMapH) - 1))
+                    };
+                };
+                for (const size_t sid : selection->selected()) {
+                    const auto [tx, ty] = slotPos(slot++);
+                    (void)simulation->move(std::array<size_t, 1>{sid}, tx, ty, false);
+                }
+                const int fx = static_cast<int>(std::lround(dy));
+                const int fy = static_cast<int>(std::lround(-dx));
+                for (const size_t vid : selection->selectedVehicles()) {
+                    const auto [tx, ty] = slotPos(slot++);
+                    const std::array<size_t, 1> one{vid};
+                    (void)simulation->moveVehicles(one, tx, ty, false);
+                    (void)simulation->faceVehicles(one, tx + fx, ty + fy);
+                }
+                showNotice(ss2::trf("Battle line formation ({0} units).", {std::to_string(totalUnits)}),
+                           ss2::NoticeKind::accepted);
+            }
+            return;
+        }
     }
     if (simulation && event.type == SDL_EVENT_MOUSE_MOTION && !event.motion.state) {
         const auto [x,y] = renderer.mapPosition(event.motion.x,event.motion.y);
