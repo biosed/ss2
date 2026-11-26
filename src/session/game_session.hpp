@@ -281,6 +281,8 @@ struct GameSession {
     bool reverseMoveArmed = false;
     bool patrolArmed = false;
     bool faceArmed = false;
+    bool smokeArmed = false;
+    bool hudHidden = false;
     std::set<std::string> registeredPortraits;
     std::optional<assets::AirMissionKind> armedAirSupport;
     std::array<int, 4> missionPlayerTeams{0, 1, 2, 3};

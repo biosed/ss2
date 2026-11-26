@@ -601,6 +601,10 @@ size_t TutorialUnits::appendSoldier(const assets::Infantry& unit, SubCell cell, 
         ? std::min(spec->getMineTimeMax, s.getMineTime)
         : s.getMineTime;
     if (!s.isAntiVehicle && !s.isMedic && !s.isOfficer && !s.isMortar && !s.isKamikaze) s.atGrenades = 2;
+    if (realismDoctrine_) {
+        s.desc.rangeBase = det::detRoundToInt(static_cast<double>(s.desc.rangeBase) * 1.25);
+        s.desc.rangeDelta = det::detRoundToInt(static_cast<double>(s.desc.rangeDelta) * 1.25);
+    }
     soldiers_.push_back(std::move(s));
     soldierIds_.push_back(unit.id);
     grid_.setOccupied(cell, true);
@@ -867,6 +871,15 @@ size_t TutorialUnits::appendVehicle(const assets::VehicleUnit& unit) {
                            lowId.find("52-k") != std::string::npos ||
                            lowId.find("type.88") != std::string::npos;
     }
+    if (realismDoctrine_) {
+        if (v.hasPrimary && !v.isArtillery && !v.isKamikaze && v.range > 0.0) {
+            v.range = std::min(780.0, v.range * 1.35);
+        }
+        if (v.hasSecondary && v.range2 > 0.0) {
+            v.range2 = std::min(650.0, v.range2 * 1.25);
+        }
+        v.sightTiles = std::min(38, det::detRoundToInt(static_cast<double>(v.sightTiles) * 1.25));
+    }
     if (v.alive) grid_.setOccupied(cell, true);
     vehicles_.push_back(std::move(v));
     const size_t idx = vehicles_.size() - 1;
@@ -922,6 +935,228 @@ void TutorialUnits::revealFogAt(int mapX, int mapY, int radiusTiles, int player)
     fog_->revealCircle(cell.x / 2, cell.y / 2, std::clamp(radiusTiles, 1, 32), player);
     fogDirty_ = true;
     refreshSpotting(nullptr, true);
+}
+
+void TutorialUnits::setRealismDoctrine(bool enabled) {
+    if (enabled == realismDoctrine_) return;
+    realismDoctrine_ = enabled;
+    if (enabled) {
+        for (auto& s : soldiers_) {
+            s.desc.rangeBase = det::detRoundToInt(static_cast<double>(s.desc.rangeBase) * 1.25);
+            s.desc.rangeDelta = det::detRoundToInt(static_cast<double>(s.desc.rangeDelta) * 1.25);
+        }
+        for (auto& v : vehicles_) {
+            if (v.hasPrimary && !v.isArtillery && !v.isKamikaze && v.range > 0.0) {
+                v.range = std::min(780.0, v.range * 1.35);
+            }
+            if (v.hasSecondary && v.range2 > 0.0) {
+                v.range2 = std::min(650.0, v.range2 * 1.25);
+            }
+            v.sightTiles = std::min(38, det::detRoundToInt(static_cast<double>(v.sightTiles) * 1.25));
+        }
+    }
+    if (fog_) {
+        fogDirty_ = true;
+        refreshSpotting(nullptr, true);
+    }
+}
+
+void TutorialUnits::syncSmokeFogFlags() {
+    if (!fog_) return;
+    const int w = fog_->width();
+    const int h = fog_->height();
+    for (int ty = 0; ty < h; ++ty) {
+        for (int tx = 0; tx < w; ++tx) {
+            if (fog_->hasSmokeOccluder(tx, ty)) fog_->setSmokeOccluder(tx, ty, false);
+        }
+    }
+    for (const auto& sc : smokeClouds_) {
+        const SubCell center = placementCell(sc.x, sc.y, originX_);
+        const int cx = center.x / 2;
+        const int cy = center.y / 2;
+        const int r2 = sc.radiusTiles * sc.radiusTiles;
+        for (int dy = -sc.radiusTiles; dy <= sc.radiusTiles; ++dy) {
+            for (int dx = -sc.radiusTiles; dx <= sc.radiusTiles; ++dx) {
+                if (dx * dx + dy * dy <= r2) {
+                    fog_->setSmokeOccluder(cx + dx, cy + dy, true);
+                }
+            }
+        }
+    }
+}
+
+void TutorialUnits::stepSmokeClouds() {
+    if (smokeClouds_.empty()) return;
+    bool changed = false;
+    for (auto it = smokeClouds_.begin(); it != smokeClouds_.end();) {
+        --it->ticksRemaining;
+        if (it->ticksRemaining <= 0) {
+            it = smokeClouds_.erase(it);
+            changed = true;
+        } else {
+            ++it;
+        }
+    }
+    if (changed) {
+        syncSmokeFogFlags();
+        fogDirty_ = true;
+    }
+}
+
+std::vector<SmokeCloudView> TutorialUnits::activeSmokeClouds() const {
+    std::vector<SmokeCloudView> out;
+    out.reserve(smokeClouds_.size());
+    for (const auto& sc : smokeClouds_) {
+        out.push_back({sc.x, sc.y, sc.radiusTiles * 32, sc.ticksRemaining});
+    }
+    return out;
+}
+
+bool TutorialUnits::canDeploySmoke(std::span<const size_t> soldierIds,
+                                   std::span<const size_t> vehicleIds) const {
+    const int actor = effectiveQueryOwner();
+    for (const size_t id : soldierIds) {
+        if (id >= soldiers_.size()) continue;
+        const auto& s = soldiers_[id];
+        if (s.owner == actor && s.hp > 0 && !s.embarked && !s.garrisonBuilding &&
+            ((s.isOfficer && s.ammo >= 4) || (s.isMortar && s.ammo >= 2))) {
+            return true;
+        }
+    }
+    for (const size_t vid : vehicleIds) {
+        if (vid >= vehicles_.size()) continue;
+        const auto& v = vehicles_[vid];
+        if (v.owner == actor && v.alive && v.hp > 0 && v.hasCrew && !v.towedBy &&
+            v.isArtillery && !v.isRocketArtillery && v.ammo >= 1) {
+            return true;
+        }
+    }
+    return false;
+}
+
+size_t TutorialUnits::orderDeploySmoke(std::span<const size_t> soldierIds,
+                                       std::span<const size_t> vehicleIds,
+                                       int mapX, int mapY) {
+    const int actor = actorOwner();
+    const int clampedX = std::clamp(mapX, 0, std::max(0, mapPixelW_ - 1));
+    const int clampedY = std::clamp(mapY, 0, std::max(0, mapPixelH_ - 1));
+    size_t deployed = 0;
+
+    auto addCloud = [&](int cx, int cy, int rTiles, int duration) {
+        if (smokeClouds_.size() >= 24u) smokeClouds_.erase(smokeClouds_.begin());
+        smokeClouds_.push_back({cx, cy, rTiles, duration, actor});
+    };
+
+    for (const size_t vid : vehicleIds) {
+        if (vid >= vehicles_.size()) continue;
+        auto& v = vehicles_[vid];
+        if (v.owner != actor || !v.alive || v.hp <= 0 || !v.hasCrew || v.towedBy ||
+            !v.isArtillery || v.isRocketArtillery || v.ammo < 1 || v.fireCooldown > 0 ||
+            v.unlimberTicks > 0) {
+            continue;
+        }
+        const double dist = det::detHypot(static_cast<double>(clampedX) - v.fx,
+                                          static_cast<double>(clampedY) - v.fy);
+        if (dist < v.deadzone || dist > std::max(320.0, v.range)) continue;
+        const double dx = static_cast<double>(clampedX) - v.fx;
+        const double dy = static_cast<double>(clampedY) - v.fy;
+        if (dist >= 1.0) v.turretDir = vehicleDirFromMapDelta(dx, dy);
+        v.ammo = std::max(0, v.ammo - 1);
+        v.fireCooldown = std::max(35, v.cooldown);
+        markVehicleCombat(v);
+        emitVehiclePose(vid, true, clampedX, clampedY, false, v.sound1);
+        addCloud(clampedX, clampedY, 3, 350);
+        ++deployed;
+    }
+
+    for (const size_t id : soldierIds) {
+        if (id >= soldiers_.size()) continue;
+        auto& s = soldiers_[id];
+        if (s.owner != actor || s.hp <= 0 || s.embarked || s.garrisonBuilding) continue;
+        if (!(s.isOfficer || s.isMortar)) continue;
+        const auto [su, sv] = soldierWorld(s);
+        const int sx = originX_ + su - sv;
+        const int sy = (su + sv) / 2;
+        const double dist = det::detHypot(static_cast<double>(clampedX - sx),
+                                          static_cast<double>(clampedY - sy));
+        if (s.isOfficer && s.ammo >= 4 && dist <= 220.0) {
+            s.ammo -= 4;
+            addCloud(clampedX, clampedY, 2, 275);
+            ++deployed;
+        } else if (s.isMortar && s.ammo >= 2 && s.attackReload <= 0) {
+            const double minR = static_cast<double>(std::max(0, s.desc.deadzoneBase)) * 16.0;
+            const double maxR = std::max(280.0, static_cast<double>(s.desc.rangeBase));
+            if (dist >= minR && dist <= maxR) {
+                s.ammo -= 2;
+                s.attackReload = std::max<std::int16_t>(s.attackReload, 45);
+                addCloud(clampedX, clampedY, 2, 325);
+                ++deployed;
+            }
+        }
+    }
+
+    if (deployed > 0 && fog_) {
+        syncSmokeFogFlags();
+        fogDirty_ = true;
+        refreshSpotting(nullptr, true);
+    }
+    return deployed;
+}
+
+size_t TutorialUnits::orderConvoyMove(std::span<const size_t> soldierIds,
+                                      std::span<const size_t> vehicleIds,
+                                      int mapX, int mapY, bool append) {
+    const int actor = actorOwner();
+    int minSpeed256 = std::numeric_limits<int>::max();
+    for (const size_t sid : soldierIds) {
+        if (sid >= soldiers_.size()) continue;
+        const auto& s = soldiers_[sid];
+        if (s.owner == actor && s.hp > 0 && !s.embarked && !s.garrisonBuilding) {
+            // Standard marching infantry advances at ~1.45 px/tick (~372 / 256).
+            minSpeed256 = std::min(minSpeed256, 372);
+            break;
+        }
+    }
+    for (const size_t vid : vehicleIds) {
+        if (vid >= vehicles_.size()) continue;
+        const auto& v = vehicles_[vid];
+        if (!v.alive || v.hp <= 0 || v.owner != actor || v.speedPx <= 0.0 || v.towedBy) continue;
+        const double vetFrac = static_cast<double>(std::clamp(v.expa, 0, 0x8000)) / 32768.0;
+        const double fwdSpeed = (v.speedPxMax > v.speedPx)
+            ? (v.speedPx + (v.speedPxMax - v.speedPx) * vetFrac)
+            : v.speedPx;
+        const double baseSpeed = (v.moveDamageHp > 0 && v.hp < v.moveDamageHp)
+            ? std::max(0.45, fwdSpeed * 0.35)
+            : fwdSpeed;
+        double towMult = 1.0;
+        if (v.towedVehicle && *v.towedVehicle < vehicles_.size()) {
+            const auto& gun = vehicles_[*v.towedVehicle];
+            const int tIdx = assets::UnitSpec::towClassIndex(gun.towWeightClass);
+            if (tIdx >= 0 && v.towSpeedByClass[static_cast<std::size_t>(tIdx)] > 0.0) {
+                towMult = v.towSpeedByClass[static_cast<std::size_t>(tIdx)];
+            } else {
+                towMult = 0.6;
+            }
+        }
+        const double effSpeed = v.towedVehicle ? std::max(0.45, baseSpeed * towMult) : baseSpeed;
+        const int sp256 = std::clamp(det::detRoundToInt(effSpeed * 256.0), 115, 2560);
+        minSpeed256 = std::min(minSpeed256, sp256);
+    }
+    if (minSpeed256 == std::numeric_limits<int>::max()) return 0;
+
+    size_t accepted = 0;
+    if (!soldierIds.empty()) accepted += orderSelection(soldierIds, mapX, mapY, append);
+    if (!vehicleIds.empty()) {
+        accepted += moveVehicles(vehicleIds, mapX, mapY, append);
+        for (const size_t vid : vehicleIds) {
+            if (vid >= vehicles_.size()) continue;
+            auto& v = vehicles_[vid];
+            if (v.alive && v.hp > 0 && v.owner == actor && v.moveTarget) {
+                v.convoySpeedCap256 = minSpeed256;
+            }
+        }
+    }
+    return accepted;
 }
 
 void TutorialUnits::setPlayerTeams(std::array<int, 4> teams) {
@@ -1737,9 +1972,11 @@ void TutorialUnits::refreshSpotting(std::vector<SoldierPose>* changed, bool emit
             const int occSight = scaleByExpa(s.desc.sightBase, s.desc.sightDelta, s.expa);
             const int garBonus = b.sightBonus + (s.hasBinoculars && s.binoculars ? s.binoSightBonus : 0);
             const int preWeather = occSight + garBonus;
-            int r = std::clamp(visPct >= 100 ? preWeather : (preWeather * visPct) / 100, 1, 31);
+            const int maxSightCap = realismDoctrine_ ? 38 : 31;
+            int r = std::clamp(visPct >= 100 ? preWeather : (preWeather * visPct) / 100, 1, maxSightCap);
+            if (realismDoctrine_) r = std::clamp(det::detRoundToInt(static_cast<double>(r) * 1.25), 1, 38);
             if (difficulty_ <= 1 && s.owner == 0 && !multiplayerSymmetry_) {
-                r = std::clamp((r * 13) / 10, 1, 31);
+                r = std::clamp((r * 13) / 10, 1, maxSightCap);
             }
             revealWithAllies(b.entryCell.x / 2, b.entryCell.y / 2, r, s.owner);
             continue;
@@ -1755,26 +1992,30 @@ void TutorialUnits::refreshSpotting(std::vector<SoldierPose>* changed, bool emit
             if (s.crouched) sightDesc.crouchSightBase += 2;
             else sightDesc.sightBase += 2;
         }
-        const int r = effectiveSightRadius(sightDesc, s.expa, s.crouched, s.owner,
-                                           difficulty_, s.movingSightPenalty, visPct);
+        int r = effectiveSightRadius(sightDesc, s.expa, s.crouched, s.owner,
+                                     difficulty_, s.movingSightPenalty, visPct);
+        if (realismDoctrine_) {
+            r = std::clamp(det::detRoundToInt(static_cast<double>(r) * 1.25), 1, 38);
+        }
         revealWithAllies(s.cell.x / 2, s.cell.y / 2, r, s.owner);
     }
     const auto applyWeatherSight = [visPct](int r) {
         return visPct >= 100 ? r : std::max(1, (r * visPct) / 100);
     };
+    const int vehSightCap = realismDoctrine_ ? 38 : 31;
     for (const auto& v : vehicles_) {
         if (!v.alive || v.hp <= 0 || !v.hasCrew) continue;
         const bool buttonedUp = !v.hatchOpen || v.suppressionTicks > 0 ||
                                 (v.lastCombatTick != 0u && tick_ < v.lastCombatTick + 125u);
         const int marchBonus = buttonedUp ? 0 : v.marchSightBonus;
         const int elevBonus = fog_->isElevated(v.cell.x / 2, v.cell.y / 2) ? 2 : 0;
-        const int vr = std::min(31, v.sightTiles + elevBonus + (v.expa >= 16384 ? 2 : (v.expa >= 8192 ? 1 : 0)));
+        const int vr = std::min(vehSightCap, v.sightTiles + elevBonus + (v.expa >= 16384 ? 2 : (v.expa >= 8192 ? 1 : 0)));
         int effVr = applyWeatherSight(vr);
         if (v.bonusSight != 0) {
-            effVr = std::clamp(effVr + (v.bonusSight * visPct) / 100, 1, 31);
+            effVr = std::clamp(effVr + (v.bonusSight * visPct) / 100, 1, vehSightCap);
         }
         if (difficulty_ <= 1 && v.owner == 0 && !multiplayerSymmetry_) {
-            effVr = std::clamp((effVr * 13) / 10, 1, 31);
+            effVr = std::clamp((effVr * 13) / 10, 1, vehSightCap);
         }
         if (marchBonus > 0) {
             // Gold 0x1001d3e0..0x1001d46f adds (marchsightbonus * visPct) / 100 after base vehicle sight,
@@ -1783,7 +2024,7 @@ void TutorialUnits::refreshSpotting(std::vector<SoldierPose>* changed, bool emit
             if (difficulty_ <= 1 && v.owner == 0 && !multiplayerSymmetry_) {
                 withMarch = (withMarch * 13) / 10;
             }
-            effVr = std::max(effVr, std::min(31, withMarch));
+            effVr = std::max(effVr, std::min(vehSightCap, withMarch));
         }
         revealWithAllies(v.cell.x / 2, v.cell.y / 2, effVr, v.owner);
     }
@@ -2239,6 +2480,7 @@ std::vector<SoldierPose> TutorialUnits::step() {
             }
         }
     }
+    stepSmokeClouds();
     if (fog_ && fogDirty_) refreshSpotting(&changed);
     if (tick_ % 25 == 0) {
         stepMedicHeal(changed);

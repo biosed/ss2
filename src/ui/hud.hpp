@@ -160,6 +160,7 @@ public:
     HudResult handle(const SDL_Event&);
 
     void draw(VulkanWindow&);                            // once per frame; uploads only after a change
+    void forceRedraw() noexcept { drawn_ = revision_ - 1u; }
 
     unsigned width() const { return width_; }
     unsigned height() const { return height_; }          // window pixels

@@ -625,6 +625,29 @@ void TutorialUnits::stepMedicHeal(std::vector<SoldierPose>& changed) {
     }
 }
 
+bool TutorialUnits::isPointUnderHostileThreat(int friendlyOwner, double tx, double ty) const {
+    if (!catalog_ || !catalog_->hasRetailCatalog()) return false;
+    const std::uint8_t friendlyBit = (friendlyOwner >= 0 && friendlyOwner < 4)
+        ? static_cast<std::uint8_t>(1u << friendlyOwner)
+        : 0u;
+    for (const auto& ov : vehicles_) {
+        if (!ov.alive || ov.hp <= 0 || !ov.armed || !isHostile(friendlyOwner, ov.owner)) continue;
+        if (fog_ && friendlyBit != 0u && (ov.spottedMask & friendlyBit) == 0u) continue;
+        if (det::detHypot(ov.fx - tx, ov.fy - ty) <= 260.0) return true;
+    }
+    for (const auto& os : soldiers_) {
+        if (os.hp <= 0 || os.embarked || !isHostile(friendlyOwner, os.owner)) continue;
+        if (fog_ && friendlyBit != 0u && !os.garrisonBuilding && (os.spottedMask & friendlyBit) == 0u) continue;
+        const auto [su, sv] = os.garrisonBuilding
+            ? tutorialFootWorld(buildings_[*os.garrisonBuilding].x, buildings_[*os.garrisonBuilding].y, originX_)
+            : soldierWorld(os);
+        const double sx = static_cast<double>(originX_ + su - sv);
+        const double sy = static_cast<double>(su + sv) * 0.5;
+        if (det::detHypot(sx - tx, sy - ty) <= 240.0) return true;
+    }
+    return false;
+}
+
 void TutorialUnits::stepSupplyAndRepair(std::vector<SoldierPose>& changed) {
     constexpr double kSupportRadius = 140.0;
     const auto pushHealed = [&](size_t idx, const Soldier& s) {
@@ -928,6 +951,11 @@ void TutorialUnits::stepSupplyAndRepair(std::vector<SoldierPose>& changed) {
                     if (!canFixOther && !canFeedOther) {
                         continue;
                     }
+                    if (catalog_ && catalog_->hasRetailCatalog() &&
+                        ((other.lastCombatTick != 0u && tick_ < other.lastCombatTick + 60u) ||
+                         isPointUnderHostileThreat(v.owner, other.fx, other.fy))) {
+                        continue;
+                    }
                     const double d = det::detHypot(other.fx - v.fx, other.fy - v.fy);
                     if (d <= kAutoSupportRadius && d < bestDist) {
                         bestDist = d;
@@ -945,6 +973,9 @@ void TutorialUnits::stepSupplyAndRepair(std::vector<SoldierPose>& changed) {
                     for (size_t bi = 0; bi < bridges_.size(); ++bi) {
                         const auto& br = bridges_[bi];
                         if (br.hp >= br.maxHp) continue;
+                        if (isPointUnderHostileThreat(v.owner, static_cast<double>(br.x), static_cast<double>(br.y))) {
+                            continue;
+                        }
                         const double d = distanceToBridge(br, v.fx, v.fy);
                         if (d <= kAutoSupportRadius && d < bestBrDist) {
                             bestBrDist = d;
@@ -1028,6 +1059,10 @@ void TutorialUnits::stepSupplyAndRepair(std::vector<SoldierPose>& changed) {
                     const auto [su, sv] = soldierWorld(s);
                     const double sx = static_cast<double>(originX_ + su - sv);
                     const double sy = static_cast<double>(su + sv) * 0.5;
+                    if (catalog_ && catalog_->hasRetailCatalog() &&
+                        (s.isSuppressed() || isPointUnderHostileThreat(v.owner, sx, sy))) {
+                        continue;
+                    }
                     const double d = det::detHypot(sx - v.fx, sy - v.fy);
                     if (d <= kAutoSupportRadius && d < bestDist) {
                         bestDist = d;

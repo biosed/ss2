@@ -16,8 +16,21 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#ifdef _WIN32
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
 
 namespace {
+
+std::string testPidSuffix() {
+#ifdef _WIN32
+    return std::to_string(_getpid());
+#else
+    return std::to_string(getpid());
+#endif
+}
 
 void check(bool cond, const char* msg) {
     if (!cond) throw std::runtime_error(msg);
@@ -735,7 +748,7 @@ std::filesystem::path writeSyntheticMenuDir(const std::filesystem::path& dir) {
 }
 
 void testSyntheticMenuSueWidgets() {
-    const auto synDir = std::filesystem::temp_directory_path() / "ss2_gold_fe_syn_widgets";
+    const auto synDir = std::filesystem::temp_directory_path() / ("ss2_gold_fe_syn_widgets_" + testPidSuffix());
     writeSyntheticMenuDir(synDir);
 
     const auto menuSue = synDir / "menu_common.sue";
@@ -1424,7 +1437,7 @@ void testVulkanWindowOverlay(bool validate, const std::filesystem::path& gameDir
 
     // Asset-free windowed test of MENU_CUR.ANI/.COL cursor + backwav/briefing streaming over Vulkan.
     {
-        const auto synDir = std::filesystem::temp_directory_path() / "ss2_gold_fe_syn_vulkan";
+        const auto synDir = std::filesystem::temp_directory_path() / ("ss2_gold_fe_syn_vulkan_" + testPidSuffix());
         writeSyntheticMenuDir(synDir);
         {
             ss2::GoldFrontEnd synFe(win, synDir, 0);

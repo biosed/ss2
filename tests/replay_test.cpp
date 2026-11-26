@@ -105,6 +105,8 @@ std::vector<cmd::Command> everyCommand() {
         cmd::EvacuateSingleSoldier{54, 55},
         cmd::QueueSoldierOrder{a, 6, 420, 310, 7},
         cmd::QueueVehicleOrder{b, 2, -220, 180, 15u},
+        cmd::ConvoyMove{a, b, 61, 62, true},
+        cmd::DeploySmoke{b, a, 71, 72},
     };
 }
 
@@ -137,6 +139,7 @@ void testSerialization() {
     repFile.mission = "maps/single/--- TUTORIAL I ---.SSM";
     repFile.difficulty = 3;
     repFile.autoEngage = false;
+    repFile.realismDoctrine = true;
     repFile.endTick = 0xffffffffu;
     repFile.endStateHash = 0xdeadbeefcafef00dull;
     repFile.initialSavedPools[0u] = {

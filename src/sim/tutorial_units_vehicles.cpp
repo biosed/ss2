@@ -102,6 +102,8 @@ void TutorialUnits::moveVehicleInternal(Vehicle& v, int mapX, int mapY) {
     const int clampedY = std::clamp(mapY, 0, std::max(0, mapPixelH_ - 1));
     v.moveTarget = std::pair{clampedX, clampedY};
     v.waypoints.clear();
+    v.stuckTicks = 0;
+    v.convoySpeedCap256 = 0;
     v.attackTarget.reset();
     v.attackGround.reset();
     v.attackBuildingTarget.reset();
@@ -410,6 +412,8 @@ size_t TutorialUnits::stopVehicles(std::span<const size_t> indices) {
         v.supportTargetSoldier.reset();
         v.escortVehicleTarget.reset();
         v.escortSoldierTarget.reset();
+        v.stuckTicks = 0;
+        v.convoySpeedCap256 = 0;
         v.wasMoving = false;
         if (wasMoving) emitVehiclePose(id);
         ++stopped;
@@ -890,18 +894,19 @@ std::vector<VehicleRangePreview> TutorialUnits::selectionRangePreviews(std::span
                                 (v.lastCombatTick != 0u && tick_ < v.lastCombatTick + 125u);
         const int marchBonus = buttonedUp ? 0 : v.marchSightBonus;
         const int elevBonus = (fog_ && fog_->isElevated(v.cell.x / 2, v.cell.y / 2)) ? 2 : 0;
-        const int vr = std::min(31, v.sightTiles + elevBonus + (v.expa >= 16384 ? 2 : (v.expa >= 8192 ? 1 : 0)));
+        const int vehSightCap = realismDoctrine_ ? 38 : 31;
+        const int vr = std::min(vehSightCap, v.sightTiles + elevBonus + (v.expa >= 16384 ? 2 : (v.expa >= 8192 ? 1 : 0)));
         int effVr = (visPct >= 100) ? vr : std::max(1, (vr * visPct) / 100);
-        if (v.bonusSight != 0) effVr = std::clamp(effVr + (v.bonusSight * visPct) / 100, 1, 31);
+        if (v.bonusSight != 0) effVr = std::clamp(effVr + (v.bonusSight * visPct) / 100, 1, vehSightCap);
         if (difficulty_ <= 1 && v.owner == 0 && !multiplayerSymmetry_) {
-            effVr = std::clamp((effVr * 13) / 10, 1, 31);
+            effVr = std::clamp((effVr * 13) / 10, 1, vehSightCap);
         }
         if (marchBonus > 0) {
             int withMarch = effVr + (marchBonus * visPct) / 100;
             if (difficulty_ <= 1 && v.owner == 0 && !multiplayerSymmetry_) {
                 withMarch = (withMarch * 13) / 10;
             }
-            effVr = std::max(effVr, std::min(31, withMarch));
+            effVr = std::max(effVr, std::min(vehSightCap, withMarch));
         }
         const bool indirect = v.indirectArc1 || v.isArtillery || v.isRocketArtillery;
         out.push_back({v.x, v.y, static_cast<float>(v.range), static_cast<float>(v.deadzone),
@@ -933,8 +938,11 @@ std::vector<VehicleRangePreview> TutorialUnits::selectionRangePreviews(std::span
                 if (s.crouched) sightDesc.crouchSightBase += 2;
                 else sightDesc.sightBase += 2;
             }
-            const int r = effectiveSightRadius(sightDesc, s.expa, s.crouched, s.owner,
+            int r = effectiveSightRadius(sightDesc, s.expa, s.crouched, s.owner,
                                                difficulty_, s.movingSightPenalty, visPct);
+            if (realismDoctrine_) {
+                r = std::clamp(det::detRoundToInt(static_cast<double>(r) * 1.25), 1, 38);
+            }
             const auto [su, sv] = soldierWorld(s);
             out.push_back({
                 originX_ + su - sv, (su + sv) / 2,
@@ -997,6 +1005,8 @@ std::vector<assets::Placement> TutorialUnits::abandonVehicles(std::span<const si
         v.supportTargetSoldier.reset();
         v.escortVehicleTarget.reset();
         v.escortSoldierTarget.reset();
+        v.stuckTicks = 0;
+        v.convoySpeedCap256 = 0;
         v.wasMoving = false;
         fogDirty_ = true;
         emitVehiclePose(vid);
@@ -1075,6 +1085,18 @@ void TutorialUnits::detachTowedGun(size_t tractorIdx) {
 void TutorialUnits::destroyVehicle(size_t vehicleIdx, std::vector<SoldierPose>& changed) {
     if (vehicleIdx >= vehicles_.size()) return;
     auto& tv = vehicles_[vehicleIdx];
+    const bool hadLiveCrew = tv.hasCrew && tv.crewNumber > 0 && !tv.isCrate && !tv.isNaval && !tv.isKamikaze;
+    const int bailOwner = tv.owner;
+    const int bailGroup = tv.group;
+    const unsigned bailDir = tv.hullDir >> 2;
+    std::string bailCrewId = "dguner";
+    if (!tv.crewUnit.empty()) {
+        bailCrewId = tv.crewUnit;
+    } else if (const auto* spec = catalog_ ? catalog_->find(tv.id) : nullptr) {
+        if (spec->nation == "russian") bailCrewId = "rsmguner";
+        else if (spec->nation == "american" || spec->nation == "british") bailCrewId = "aguner";
+        else if (spec->nation == "japanese") bailCrewId = "jguner";
+    }
     if (tv.towedBy) {
         const size_t tractorIdx = *tv.towedBy;
         tv.towedBy.reset();
@@ -1211,6 +1233,36 @@ void TutorialUnits::destroyVehicle(size_t vehicleIdx, std::vector<SoldierPose>& 
         --cookOffDepth_;
     }
     bailoutPassengers(vehicleIdx, changed);
+    if (catalog_ && catalog_->hasRetailCatalog() && hadLiveCrew && cookDmg < 120 &&
+        grid_.walkable(cookCell) && nextCombatRandom(1u) == 0u) {
+        if (const auto spot = findDisembarkCellBounded(grid_, cookCell, 3)) {
+            const auto [wu, wv] = InfantryPathGrid::toWorldCenter(*spot);
+            const int sx = originX_ + wu - wv;
+            const int sy = (wu + wv) / 2;
+            assets::Infantry crewInf{};
+            crewInf.id = bailCrewId;
+            crewInf.owner = bailOwner;
+            crewInf.group = bailGroup;
+            crewInf.x = sx;
+            crewInf.y = sy;
+            crewInf.hp = 35;
+            crewInf.ammo = 8;
+            crewInf.direction = bailDir;
+            crewInf.visible = true;
+            const size_t newIdx = appendSoldier(crewInf, *spot, 0);
+            auto& bs = soldiers_[newIdx];
+            bs.hp = std::clamp((bs.maxHp * 35) / 100, 15, bs.maxHp);
+            bs.crouched = true;
+            bs.lastEmittedCrouch = true;
+            applySuppression(newIdx, 45);
+            bs.spottedMask = static_cast<std::uint8_t>(fog_ ? (fog_->tile(spot->x / 2, spot->y / 2) & ~(1u << bs.owner) & 0x0fu) : 0u);
+            const bool vis = isVisibleToViewer(bs.owner, bs.spottedMask);
+            SoldierPose bsp{newIdx, sx, sy, bs.direction, 0, false, bs.hp, true, bs.owner, bs.group, false, vis,
+                            1, 0, false, bs.expa, bs.kills, false, bs.atGrenades, false, isSoldierCamouflaged(bs),
+                            bs.mineAmmo, bs.ammo, false, true};
+            pushOrUpdateSoldierPose(changed, bsp);
+        }
+    }
     fogDirty_ = true;
 }
 
@@ -1749,6 +1801,9 @@ void TutorialUnits::stepVehicles(std::vector<SoldierPose>& changed) {
         if (shallowBog) {
             stepSpeed = std::max(0.35, stepSpeed * 0.70);
         }
+        if (v.convoySpeedCap256 > 0 && !v.reverseMove) {
+            stepSpeed = std::min(stepSpeed, static_cast<double>(v.convoySpeedCap256) / 256.0);
+        }
         const auto advanceNextOrderOrPatrol = [&](size_t idx, Vehicle& veh) -> bool {
             if (!veh.queuedOrders.empty()) {
                 const auto [nx, ny] = veh.queuedOrders.front();
@@ -1794,6 +1849,8 @@ void TutorialUnits::stepVehicles(std::vector<SoldierPose>& changed) {
                 const auto savedGround = v.attackGround;
                 v.moveTarget.reset();
                 v.waypoints.clear();
+                v.stuckTicks = 0;
+                v.convoySpeedCap256 = 0;
                 v.chasingAttackTarget = false;
                 if (!v.escortVehicleTarget && !v.escortSoldierTarget) {
                     v.attackMove = false;
@@ -1929,6 +1986,72 @@ void TutorialUnits::stepVehicles(std::vector<SoldierPose>& changed) {
         }
 
         if (!moved) {
+            ++v.stuckTicks;
+            if (v.stuckTicks <= 14) {
+                static constexpr std::array<double, 6> kWideSteer{
+                    0.7853981633974483, -0.7853981633974483,
+                    1.2217304763960306, -1.2217304763960306,
+                    1.6580627893946132, -1.6580627893946132
+                };
+                const double dx = static_cast<double>(stepTx) - v.fx;
+                const double dy = static_cast<double>(stepTy) - v.fy;
+                const double dist = det::detHypot(dx, dy);
+                if (dist > 1e-6) {
+                    const double stepLen = std::min(stepSpeed, dist);
+                    const double ux = dx / dist;
+                    const double uy = dy / dist;
+                    for (double ang : kWideSteer) {
+                        const auto sc = det::detSinCos(ang);
+                        const double candFx = v.fx + (ux * sc.c - uy * sc.s) * stepLen;
+                        const double candFy = v.fy + (ux * sc.s + uy * sc.c) * stepLen;
+                        SubCell candCell{};
+                        if (canVehicleStepTo(v, candFx, candFy, candCell) && !isDetectedAiMineCell(candCell)) {
+                            nextFx = candFx;
+                            nextFy = candFy;
+                            nextCell = candCell;
+                            moved = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (!moved && v.stuckTicks <= 14 && (v.stuckTicks == 1 || v.stuckTicks == 6 || v.stuckTicks == 11)) {
+                const SubCell destCell = pointerCell(tx, ty, originX_);
+                if (grid_.inBounds(destCell)) {
+                    const auto dirs = grid_.findTileDirectionsForMask(v.cell, destCell, v.forbiddenTerrainMask, 384);
+                    if (!dirs.empty()) {
+                        v.waypoints.clear();
+                        int curTx = v.cell.x / 2;
+                        int curTy = v.cell.y / 2;
+                        for (std::uint8_t d : dirs) {
+                            if (d >= 8u) break;
+                            curTx += kTileDx[d];
+                            curTy += kTileDy[d];
+                            const int wu = curTx * 32 + 16;
+                            const int wv = curTy * 32 + 16;
+                            v.waypoints.emplace_back(originX_ + wu - wv, (wu + wv) / 2);
+                        }
+                        if (!v.waypoints.empty()) {
+                            v.waypoints.back() = {tx, ty};
+                            stepTx = v.waypoints.front().first;
+                            stepTy = v.waypoints.front().second;
+                            moved = tryStepToward(stepTx, stepTy, true, nextFx, nextFy, nextCell);
+                        }
+                    }
+                }
+            }
+        }
+
+        if (!moved) {
+            if (v.stuckTicks <= 14) {
+                if (v.wasMoving) {
+                    v.wasMoving = false;
+                    emitVehiclePose(i);
+                }
+                continue;
+            }
+            v.stuckTicks = 0;
+            v.convoySpeedCap256 = 0;
             v.moveTarget.reset();
             v.waypoints.clear();
             v.queuedOrders.clear();
@@ -1946,6 +2069,7 @@ void TutorialUnits::stepVehicles(std::vector<SoldierPose>& changed) {
             emitVehiclePose(i);
             continue;
         }
+        v.stuckTicks = 0;
 
         const double prevFx = v.fx;
         const double prevFy = v.fy;
@@ -2088,6 +2212,8 @@ void TutorialUnits::stepVehicles(std::vector<SoldierPose>& changed) {
                 const auto savedGround = v.attackGround;
                 v.moveTarget.reset();
                 v.waypoints.clear();
+                v.stuckTicks = 0;
+                v.convoySpeedCap256 = 0;
                 v.chasingAttackTarget = false;
                 v.attackMove = false;
                 v.attackMoveEngaging = false;
@@ -2216,6 +2342,8 @@ void TutorialUnits::stepVehicleCombat(std::vector<SoldierPose>& changed) {
             if (v.chasingAttackTarget) {
                 v.moveTarget.reset();
                 v.waypoints.clear();
+                v.stuckTicks = 0;
+                v.convoySpeedCap256 = 0;
                 v.chasingAttackTarget = false;
                 if (v.wasMoving) {
                     v.wasMoving = false;
@@ -2519,6 +2647,8 @@ void TutorialUnits::stepVehicleCombat(std::vector<SoldierPose>& changed) {
             if (explicitBldOrder && v.chasingAttackTarget) {
                 v.moveTarget.reset();
                 v.waypoints.clear();
+                v.stuckTicks = 0;
+                v.convoySpeedCap256 = 0;
                 v.chasingAttackTarget = false;
                 v.wasMoving = false;
             }

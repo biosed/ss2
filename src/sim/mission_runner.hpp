@@ -103,6 +103,14 @@ public:
                              int targetX, int targetY, std::size_t targetIndex = 0);
     size_t queueVehicleOrder(std::span<const size_t> vehicleIds, QueuedVehicleOp op,
                              int targetX, int targetY, unsigned dir32 = 0);
+    void setRealismDoctrine(bool enabled);
+    bool realismDoctrine() const;
+    size_t convoyMove(std::span<const size_t> soldierIds, std::span<const size_t> vehicleIds,
+                      int mapX, int mapY, bool append = false);
+    bool canDeploySmoke(std::span<const size_t> soldierIds, std::span<const size_t> vehicleIds) const;
+    size_t deploySmoke(std::span<const size_t> soldierIds, std::span<const size_t> vehicleIds,
+                       int mapX, int mapY);
+    std::vector<SmokeCloudView> activeSmokeClouds() const;
     std::vector<std::size_t> vehiclePassengerIds(std::size_t vehicleIdx) const;
     std::string soldierUnitId(std::size_t soldierIdx) const;
     bool canCaptureVehicle(size_t vehicleIdx);
@@ -315,6 +323,8 @@ private:
     cmd::EvacuateSingleSoldier::Result applyLocked(const cmd::EvacuateSingleSoldier&);
     cmd::QueueSoldierOrder::Result applyLocked(const cmd::QueueSoldierOrder&);
     cmd::QueueVehicleOrder::Result applyLocked(const cmd::QueueVehicleOrder&);
+    cmd::ConvoyMove::Result applyLocked(const cmd::ConvoyMove&);
+    cmd::DeploySmoke::Result applyLocked(const cmd::DeploySmoke&);
     void stepGroupAiLocked(bool fastOnly = false);
     struct MpZeppelinWave {
         std::uint32_t packed4{0};

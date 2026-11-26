@@ -25,6 +25,7 @@ void GameSession::armAirSupportKind(assets::AirMissionKind kind) {
     reverseMoveArmed = false;
     patrolArmed = false;
     faceArmed = false;
+    smokeArmed = false;
     armedAirSupport = kind;
     if (audio) {
         const std::string& planeId = slots[idx].planeId;
@@ -167,6 +168,7 @@ void GameSession::doStop() {
         reverseMoveArmed = false;
         patrolArmed = false;
         faceArmed = false;
+        smokeArmed = false;
         armedAirSupport.reset();
         resetCursor();
         showNotice(ss2::trf("Stop order ({0} soldiers).", {std::to_string(n)}), ss2::NoticeKind::accepted);
@@ -218,7 +220,21 @@ void GameSession::doToggleHoldFire() {
     }
     if (holdState) {
         playSelectionVoice("hold");
-        showNotice(ss2::tr(*holdState ? "Hold fire enabled." : "Fire at will enabled."), ss2::NoticeKind::accepted);
+        bool logisticsOnly = selIds.empty() && !selVids.empty() && vehicleScene && unitCatalog;
+        if (logisticsOnly) {
+            for (const size_t vid : selVids) {
+                if (vid >= vehicleScene->vehicles().size()) { logisticsOnly = false; break; }
+                const auto* spec = unitCatalog->find(vehicleScene->vehicles()[vid].id);
+                if (!spec || (!spec->isSupplyTruck() && !spec->isAmbulance())) { logisticsOnly = false; break; }
+            }
+        }
+        if (logisticsOnly) {
+            showNotice(ss2::tr(*holdState ? "Depot mode: Holding position (services nearby units safely)."
+                                          : "Logistics auto-roam enabled."),
+                       ss2::NoticeKind::accepted);
+        } else {
+            showNotice(ss2::tr(*holdState ? "Hold fire enabled." : "Fire at will enabled."), ss2::NoticeKind::accepted);
+        }
         std::cout << "Tutorial I tactical H (hold-fire=" << (*holdState ? "on" : "off") << "): "
                   << (selIds.size() + selVids.size()) << " units\n";
     }
@@ -306,6 +322,7 @@ void GameSession::doArmAttackMove() {
     reverseMoveArmed = false;
     patrolArmed = false;
     faceArmed = false;
+    smokeArmed = false;
     armedAirSupport.reset();
     attackMoveArmed = !attackMoveArmed;
     if (attackMoveArmed) {
@@ -322,6 +339,7 @@ void GameSession::doArmPatrol() {
     attackGroundArmed = false;
     reverseMoveArmed = false;
     faceArmed = false;
+    smokeArmed = false;
     armedAirSupport.reset();
     patrolArmed = !patrolArmed;
     if (patrolArmed) {
@@ -343,6 +361,7 @@ void GameSession::doArmAttackGround() {
     reverseMoveArmed = false;
     patrolArmed = false;
     faceArmed = false;
+    smokeArmed = false;
     armedAirSupport.reset();
     attackGroundArmed = !attackGroundArmed;
     if (attackGroundArmed) {

@@ -2847,6 +2847,31 @@ void testModVfsAndAddons() {
     check(baseOff && baseOff->health == 100 && baseCat->buildingName(0u) == "Base Hut",
           "setActiveMod(\"vanilla\") restores base UnitCatalog stats");
 
+    // 4b. Standalone RWM/HS2 directory + .ini profile with [Data] Common=... redirection.
+    const auto rwmDir = gameDir / "RWM8_Test";
+    std::filesystem::create_directories(rwmDir / "UNITS");
+    {
+        std::ofstream uo(rwmDir / "UNITS" / "officer", std::ios::binary | std::ios::trunc);
+        uo << "health 310\nsight 16\n";
+        std::ofstream ri(rwmDir / "sudtest.ini", std::ios::binary | std::ios::trunc);
+        ri << "[Data]\nCommon=rwm_desc.sue\n[Game]\nTurnDelay=40\n";
+    }
+    const auto rwmIni = gameDir / "Run" / "rwm_profile.ini";
+    {
+        std::ofstream ri(rwmIni, std::ios::binary | std::ios::trunc);
+        ri << "[Data]\nCommon=..\\desc_common.sue\n[Game]\nTurnDelay=36\n";
+    }
+    const auto modsExt = listInstalledMods(gameDir, tmp.path / "empty_user_mods");
+    check(modsExt.size() == 4u && resolveMod(gameDir, "RWM8_Test").has_value() &&
+              resolveMod(gameDir, "rwm_profile").has_value(),
+          "listInstalledMods discovers standalone RWM* dir and Run/*.ini profile");
+    setActiveMod("RWM8_Test");
+    const auto rwmCat = UnitCatalog::load(gameDir, 0u);
+    const auto* rwmOff = rwmCat->find("officer");
+    check(rwmOff && rwmOff->health == 310 && resolveIniTurnDelay(gameDir) == 40u,
+          "activeMod RWM8_Test loads loose UNITS/officer and TurnDelay=40");
+    setActiveMod("vanilla");
+
     // Verify retail GOG/CD Tutorial I fallback when maps.src/map.020 is absent.
     {
         const TempDir tutOnly("ss2_test_tut1_ssm_fallback");

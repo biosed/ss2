@@ -213,6 +213,12 @@ struct TacticalOrderLine {
     Kind kind{Kind::Move};
 };
 
+struct SmokeCloudView {
+    int x{}, y{};
+    int radiusPx{64};
+    int ticksRemaining{0};
+};
+
 class TutorialUnits {
 public:
     struct ReserveUnit {
@@ -537,6 +543,14 @@ public:
     void setWeather(WeatherKind w);
     WeatherKind weather() const noexcept { return weather_; }
     int weatherVisibilityPct() const noexcept;
+    void setRealismDoctrine(bool enabled);
+    bool realismDoctrine() const noexcept { return realismDoctrine_; }
+    size_t orderConvoyMove(std::span<const size_t> soldierIds, std::span<const size_t> vehicleIds,
+                           int mapX, int mapY, bool append = false);
+    bool canDeploySmoke(std::span<const size_t> soldierIds, std::span<const size_t> vehicleIds) const;
+    size_t orderDeploySmoke(std::span<const size_t> soldierIds, std::span<const size_t> vehicleIds,
+                            int mapX, int mapY);
+    std::vector<SmokeCloudView> activeSmokeClouds() const;
 
     bool canTowVehicle(size_t tractorIdx, size_t gunIdx, int viewerOwner = 0) const;
     size_t orderTowVehicle(size_t tractorIdx, size_t gunIdx);
@@ -881,6 +895,8 @@ private:
         std::vector<CrewMember> embarkedCrew;
         int unlimberTicks{0};
         std::deque<QueuedVehicleAction> pendingActions;
+        int stuckTicks{0};
+        int convoySpeedCap256{0};
 
         std::string_view effectiveTargetType() const {
             if (!targetType.empty()) return targetType;
@@ -1007,6 +1023,17 @@ private:
     bool commandActorActive_{false};
     bool multiplayerSymmetry_{false};
     std::vector<std::uint8_t> craterTiles_;
+    struct SmokeCloud {
+        int x{}, y{};
+        int radiusTiles{2};
+        int ticksRemaining{300};
+        int owner{0};
+    };
+    std::vector<SmokeCloud> smokeClouds_;
+    bool realismDoctrine_{false};
+    void stepSmokeClouds();
+    void syncSmokeFogFlags();
+    bool isPointUnderHostileThreat(int friendlyOwner, double tx, double ty) const;
     void clearPendingActions(Soldier& s) { s.pendingActions.clear(); }
     void clearPendingVehicleActions(Vehicle& v) { v.pendingActions.clear(); }
     bool executeQueuedSoldierAction(size_t id, const QueuedSoldierAction& act, std::vector<SoldierPose>* outPoses = nullptr);

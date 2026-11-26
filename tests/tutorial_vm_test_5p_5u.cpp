@@ -1830,6 +1830,165 @@ void runPhase5Pto5U() {
 
                                 std::cout << "Phase 5W universal Shift queues, shoot-and-scoot, CAP loiter, cancrouchexpa, forest/crater cover & combined-arms AI PASSED\n";
                             }
+
+                            // Phase 5X: Wave 3 (Smoke LOS occlusion, Bottleneck Anti-Freeze, Convoy Pace, Safe Depot Logistics, Realism Doctrine).
+                            {
+                                ss2::assets::UnitSpec obsSpec5x{};
+                                obsSpec5x.id = "officer_5x";
+                                obsSpec5x.isVehicle = false;
+                                obsSpec5x.health = 100;
+                                obsSpec5x.sight = 14;
+                                obsSpec5x.moveSpeed = 0.5;
+                                obsSpec5x.ammo1 = 30;
+                                obsSpec5x.selType = "officer";
+                                obsSpec5x.shot1.damage = 10;
+                                obsSpec5x.shot1.range = 180;
+                                obsSpec5x.shot1.reloadTicks = 25;
+
+                                ss2::assets::UnitSpec fastTank5x{};
+                                fastTank5x.id = "tank_5x";
+                                fastTank5x.isVehicle = true;
+                                fastTank5x.health = 400;
+                                fastTank5x.sight = 12;
+                                fastTank5x.moveSpeed = 1.8;
+                                fastTank5x.moveSpeedMax = 1.8;
+                                fastTank5x.selType = "tank";
+                                fastTank5x.crewNumber = 3;
+                                fastTank5x.crewUnit = "officer_5x";
+                                fastTank5x.ammo1 = 40;
+                                fastTank5x.shot1.damage = 120;
+                                fastTank5x.shot1.range = 400;
+                                fastTank5x.shot1.reloadTicks = 30;
+                                fastTank5x.shot1.hitType = ss2::assets::HitType::Pierce;
+
+                                ss2::assets::UnitSpec supSpec5x{};
+                                supSpec5x.id = "sup_5x";
+                                supSpec5x.isVehicle = true;
+                                supSpec5x.health = 180;
+                                supSpec5x.sight = 10;
+                                supSpec5x.moveSpeed = 1.1;
+                                supSpec5x.moveSpeedMax = 1.1;
+                                supSpec5x.selType = "sappers";
+                                supSpec5x.ammo1 = 600;
+                                supSpec5x.ammo2 = 400;
+                                supSpec5x.ammoRegenDelay = 25;
+
+                                auto cat5x = ss2::assets::UnitCatalog::fromSpecs(
+                                    {obsSpec5x, fastTank5x, supSpec5x}, {}, /*retailCatalog=*/true);
+
+                                auto tc5x = [&](int tx, int ty) -> std::pair<int, int> {
+                                    const int wu = tx * 32 + 16;
+                                    const int wv = ty * 32 + 16;
+                                    return {2048 + wu - wv, (wu + wv) / 2};
+                                };
+                                std::vector<std::uint32_t> flags5x(64u * 64u, 0u);
+                                std::vector<std::uint16_t> obst5x(64u * 64u, 0u);
+
+                                // 1) Smoke screen LOS occlusion & expiration restore.
+                                {
+                                    const auto [ox, oy] = tc5x(20, 20);
+                                    const auto [sx, sy] = tc5x(23, 20);
+                                    const auto [ex, ey] = tc5x(26, 20);
+                                    std::vector<ss2::assets::Infantry> infSmk{
+                                        {"officer_5x", ox, oy, 100, 20, 1, 0},
+                                        {"officer_5x", ex, ey, 100, 20, 2, 1},
+                                    };
+                                    ss2::TutorialUnits simSmk(
+                                        ss2::InfantryPathGrid::fromSubCellMasks(64, 64, flags5x, obst5x),
+                                        infSmk, {}, ss2::FogGrid(64, 64, flags5x), 2, false, {}, cat5x);
+                                    (void)simSmk.step();
+                                    if (!simSmk.isValidAttackTarget(1u, 0)) {
+                                        throw std::runtime_error("Phase 5X baseline expected clear LOS before smoke");
+                                    }
+                                    if (simSmk.orderDeploySmoke(std::array<size_t, 1>{0u}, {}, sx, sy) != 1u) {
+                                        throw std::runtime_error("Phase 5X officer deploy smoke failed");
+                                    }
+                                    if (simSmk.isValidAttackTarget(1u, 0)) {
+                                        throw std::runtime_error("Phase 5X active smoke cloud failed to block LOS");
+                                    }
+                                    for (int t = 0; t < 290; ++t) (void)simSmk.step();
+                                    if (!simSmk.activeSmokeClouds().empty() || !simSmk.isValidAttackTarget(1u, 0)) {
+                                        throw std::runtime_error("Phase 5X expired smoke cloud failed to restore LOS");
+                                    }
+                                }
+
+                                // 2) Vehicle bottleneck anti-freeze + Convoy Pace Move.
+                                {
+                                    const auto [tx, ty] = tc5x(15, 20);
+                                    const auto [bx, by] = tc5x(16, 20);
+                                    const auto [dx, dy] = tc5x(22, 20);
+                                    std::vector<ss2::assets::Infantry> infConv{
+                                        {"officer_5x", tx, ty - 32, 100, 20, 1, 0},
+                                    };
+                                    std::vector<ss2::assets::Placement> vehConv{
+                                        {"tank_5x", tx, ty, 0, 100, 100, 1, 0},
+                                        {"tank_5x", bx, by, 0, 100, 100, 1, 0},
+                                    };
+                                    ss2::TutorialUnits simConv(
+                                        ss2::InfantryPathGrid::fromSubCellMasks(64, 64, flags5x, obst5x),
+                                        infConv, vehConv, ss2::FogGrid(64, 64, flags5x), 2, false, {}, cat5x);
+                                    if (simConv.orderConvoyMove(std::array<size_t, 1>{0u}, std::array<size_t, 1>{0u},
+                                                                dx, dy, false) != 2u) {
+                                        throw std::runtime_error("Phase 5X convoy move setup failed");
+                                    }
+                                    const int startX = simConv.takeSnapshot().vehicles[0].x;
+                                    // Temporary blocker sits ahead for 4 ticks, then moves out of the way.
+                                    for (int t = 0; t < 4; ++t) (void)simConv.step();
+                                    const int midX = simConv.takeSnapshot().vehicles[0].x;
+                                    if (midX - startX > 22) {
+                                        throw std::runtime_error("Phase 5X convoy speed cap exceeded infantry convoy pace");
+                                    }
+                                    const auto [clearX, clearY] = tc5x(16, 26);
+                                    (void)simConv.moveVehicles(std::array<size_t, 1>{1u}, clearX, clearY, false);
+                                    for (int t = 0; t < 240; ++t) (void)simConv.step();
+                                    const int endX = simConv.takeSnapshot().vehicles[0].x;
+                                    if (std::abs(endX - dx) > 48) {
+                                        throw std::runtime_error("Phase 5X tank dropped order or stalled at temporary bottleneck");
+                                    }
+                                }
+
+                                // 3) Safe logistics threat filter + Stationary Depot Mode + Realism Doctrine.
+                                {
+                                    const auto [sx, sy] = tc5x(12, 20);
+                                    const auto [vx, vy] = tc5x(18, 20);
+                                    const auto [ex, ey] = tc5x(20, 20);
+                                    const auto [adjX, adjY] = tc5x(13, 20);
+                                    std::vector<ss2::assets::Placement> vehLog{
+                                        {"sup_5x", sx, sy, 0, 100, 100, 1, 0},
+                                        {"tank_5x", vx, vy, 0, 85, 100, 1, 0},
+                                        {"tank_5x", ex, ey, 0, 100, 100, 2, 1},
+                                        {"tank_5x", adjX, adjY, 0, 60, 100, 1, 0},
+                                    };
+                                    ss2::TutorialUnits simLog(
+                                        ss2::InfantryPathGrid::fromSubCellMasks(64, 64, flags5x, obst5x),
+                                        {}, vehLog, ss2::FogGrid(64, 64, flags5x), 2, true, {}, cat5x);
+                                    (void)simLog.toggleVehicleHoldFire(std::array<size_t, 1>{0u});
+                                    const int adjPreHp = simLog.takeSnapshot().vehicles[3].hp;
+                                    for (int t = 0; t < 35; ++t) (void)simLog.step();
+                                    const auto snapDepot = simLog.takeSnapshot();
+                                    if (snapDepot.vehicles[0].x != sx || snapDepot.vehicles[0].y != sy ||
+                                        snapDepot.vehicles[3].hp <= adjPreHp) {
+                                        throw std::runtime_error("Phase 5X Depot Mode failed to stay put & repair adjacent ally");
+                                    }
+                                    (void)simLog.toggleVehicleHoldFire(std::array<size_t, 1>{0u});
+                                    for (int t = 0; t < 35; ++t) (void)simLog.step();
+                                    const auto snapSafe = simLog.takeSnapshot();
+                                    if (snapSafe.vehicles[0].x != sx || snapSafe.vehicles[0].y != sy) {
+                                        throw std::runtime_error("Phase 5X supply truck suicided toward tank next to spotted enemy");
+                                    }
+                                    // Verify Realism Doctrine increases tank engagement range & sight radius.
+                                    const auto prevBefore = simLog.selectionRangePreviews(std::array<size_t, 1>{3u});
+                                    simLog.setRealismDoctrine(true);
+                                    const auto prevAfter = simLog.selectionRangePreviews(std::array<size_t, 1>{3u});
+                                    if (prevBefore.empty() || prevAfter.empty() ||
+                                        prevAfter.front().rangePx <= prevBefore.front().rangePx + 40.0f ||
+                                        prevAfter.front().sightPx <= prevBefore.front().sightPx + 32.0f) {
+                                        throw std::runtime_error("Phase 5X Realism Doctrine failed to expand standoff range & sight");
+                                    }
+                                }
+
+                                std::cout << "Phase 5X Smoke LOS, Bottleneck Repath, Convoy Pace, Safe Logistics & Realism Doctrine PASSED\n";
+                            }
                         }
                     }
 }

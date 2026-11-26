@@ -98,7 +98,7 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
                     break;
                 }
             }
-            if (hud) {
+            if (hud && !hudHidden) {
                 const auto hr = hud->handle(event);
                 if (hr.action == ss2::HudAction::moveCamera && hudMapW && hudMapH) {
                     const double targetX = hr.u * static_cast<double>(hudMapW * mapScale);
@@ -277,6 +277,18 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
             }
             std::cout << "Tutorial I combat effects " << (combatEffects ? "on" : "off") << '\n';
             menu.setItems(buildPauseItems());
+        } else if (mr.activated == "doctrine" && !multiplayer.enabled && !replayFile) {
+            settings.realismDoctrine = !settings.realismDoctrine;
+            persistNow();
+            if (settings.realismDoctrine && simulation) {
+                simulation->setRealismDoctrine(true);
+            }
+            menu.setItems(buildPauseItems());
+            orderNotice.show(
+                ss2::tr(settings.realismDoctrine
+                            ? "Realism Doctrine (RWM/LRM) enabled (+sight & standoff range)."
+                            : "Classic Gold Doctrine selected (applies on next mission)."),
+                ss2::NoticeKind::accepted);
         } else if (mr.activated == "speed" && simulation) {
             const int cur = simulation->speedPercent();
             const int next = cur == 50 ? 100 : cur == 100 ? 200 : cur == 200 ? 300 : 50;
@@ -465,7 +477,7 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
         }
         if (mr.consumed) return;
     }
-    if (hud && !briefing.active()) {
+    if (hud && !hudHidden && !briefing.active()) {
         const auto hr = hud->handle(event);
         if (hr.hoverEntered && audio) {
             const auto hNow = std::chrono::steady_clock::now();
@@ -492,7 +504,7 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
                 }
             } else if (simulation && event.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
                 event.button.button == SDL_BUTTON_LEFT &&
-                (armedAirSupport || attackMoveArmed || patrolArmed || attackGroundArmed)) {
+                (armedAirSupport || attackMoveArmed || patrolArmed || attackGroundArmed || smokeArmed)) {
                 hud->cancelMinimapDrag();
                 const int simX = std::clamp(static_cast<int>(std::lround(hr.u * static_cast<float>(hudMapW))),
                                             0, static_cast<int>(hudMapW) - 1);
@@ -501,6 +513,18 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
                 if (armedAirSupport) {
                     dispatchAirSupportAt(*armedAirSupport, simX, simY);
                     armedAirSupport.reset();
+                } else if (smokeArmed) {
+                    const auto vids = activeVehicleSelection();
+                    const auto sids = activeInfantrySelection();
+                    if (simulation->deploySmoke(sids, vids, simX, simY) > 0) {
+                        pushOrderPulse(simX, simY, OrderPulse::Kind::Support);
+                        if (audio) audio->playGroup("lightfire", 0.45f, ss2::VoicePriority::Normal);
+                        showNotice(ss2::tr("Tactical smoke screen deployed."), ss2::NoticeKind::accepted);
+                    } else {
+                        orderNotice.show(ss2::tr("Smoke screen out of range or out of smoke rounds."),
+                                         ss2::NoticeKind::blocked);
+                    }
+                    smokeArmed = false;
                 } else if (attackGroundArmed) {
                     const auto vids = activeVehicleSelection();
                     const auto sids = activeInfantrySelection();
@@ -738,6 +762,20 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
         openForceOverviewMenu(false);
         return;
     }
+    if (simulation && !menu.active() && !briefing.active() && event.type == SDL_EVENT_KEY_DOWN &&
+        !event.key.repeat && event.key.key == SDLK_Y && (event.key.mod & SDL_KMOD_ALT) != 0) {
+        hudHidden = !hudHidden;
+        if (hudHidden) {
+            if (hud) hud->cancelMinimapDrag();
+            renderer.clearOverlay(OverlaySlot::hud);
+            renderer.setHudBarHeight(0);
+            orderNotice.show(ss2::tr("HUD hidden (Alt+Y to restore)."), ss2::NoticeKind::accepted);
+        } else {
+            if (hud) hud->forceRedraw();
+            orderNotice.show(ss2::tr("HUD restored."), ss2::NoticeKind::accepted);
+        }
+        return;
+    }
     if (simulation && !menu.active() && event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat &&
         event.key.key == SDLK_J && !(event.key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT))) {
         openMissionBriefing();
@@ -777,6 +815,7 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
             reverseMoveArmed = false;
             patrolArmed = false;
             faceArmed = false;
+            smokeArmed = false;
             armedAirSupport.reset();
             doStop();
         } else if (event.key.key == SDLK_A) {
@@ -785,11 +824,35 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
         } else if (event.key.key == SDLK_Q) {
             doArmPatrol();
             return;
+        } else if (event.key.key == SDLK_Y && !(event.key.mod & SDL_KMOD_ALT)) {
+            syncActiveSubgroup();
+            const auto vids = activeVehicleSelection();
+            const auto sids = activeInfantrySelection();
+            if (smokeArmed) {
+                smokeArmed = false;
+                resetCursor();
+            } else if (simulation->canDeploySmoke(sids, vids)) {
+                attackMoveArmed = false;
+                attackGroundArmed = false;
+                reverseMoveArmed = false;
+                patrolArmed = false;
+                faceArmed = false;
+                armedAirSupport.reset();
+                smokeArmed = true;
+                applyTacticalCursor(window, TacticalCursorKind::AttackGround, moveCursor.get(), attackCursor.get());
+                orderNotice.show(ss2::tr("Smoke screen: left-click target area (blocks line of sight)."),
+                                 ss2::NoticeKind::accepted);
+            } else {
+                orderNotice.show(ss2::tr("No officer, mortar, or howitzer with smoke rounds selected."),
+                                 ss2::NoticeKind::unsupported);
+            }
+            return;
         } else if (event.key.key == SDLK_R && !selection->selectedVehicles().empty()) {
             attackMoveArmed = false;
             attackGroundArmed = false;
             patrolArmed = false;
             faceArmed = false;
+            smokeArmed = false;
             armedAirSupport.reset();
             reverseMoveArmed = !reverseMoveArmed;
             if (reverseMoveArmed) {
@@ -805,6 +868,7 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
             attackGroundArmed = false;
             reverseMoveArmed = false;
             patrolArmed = false;
+            smokeArmed = false;
             armedAirSupport.reset();
             faceArmed = !faceArmed;
             if (faceArmed) {
@@ -1157,7 +1221,7 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
             return;
         }
     }
-    if (simulation && (attackMoveArmed || attackGroundArmed || reverseMoveArmed || patrolArmed || faceArmed || armedAirSupport) &&
+    if (simulation && (attackMoveArmed || attackGroundArmed || reverseMoveArmed || patrolArmed || faceArmed || smokeArmed || armedAirSupport) &&
         event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_LEFT) {
         (void)selection->cancelDrag();
         const auto [x, y] = renderer.mapPosition(event.button.x, event.button.y);
@@ -1266,6 +1330,32 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
         } else if (patrolArmed) {
             dispatchPatrolAt(simX, simY);
             patrolArmed = false;
+        } else if (smokeArmed) {
+            const auto vids = activeVehicleSelection();
+            const auto sids = activeInfantrySelection();
+            if (simulation->deploySmoke(sids, vids, simX, simY) > 0) {
+                std::erase_if(activeMarkers, [](const TimedMarker& m) { return m.isOrder; });
+                activeMarkers.push_back({
+                    {{(simX - 10) * mapScale, (simY - 10) * mapScale, 20 * mapScale, 20 * mapScale},
+                     ss2::MarkerKind::move},
+                    std::chrono::steady_clock::now() + std::chrono::milliseconds(700),
+                    std::nullopt,
+                    true
+                });
+                syncMarkers();
+                pushOrderPulse(simX, simY, OrderPulse::Kind::Support);
+                if (combatEffects && combatVfx.atlasSlot().has_value()) {
+                    combatVfx.spawnClip(CombatVfxClip::BoxDust, static_cast<float>(simX), static_cast<float>(simY),
+                                        0u, 1.0f, 1.35f, 0.72f, 200050);
+                    syncGpuSprites();
+                }
+                if (audio) audio->playGroup("lightfire", 0.48f, ss2::VoicePriority::Normal);
+                showNotice(ss2::tr("Tactical smoke screen deployed."), ss2::NoticeKind::accepted);
+            } else {
+                orderNotice.show(ss2::tr("Smoke screen out of range or out of smoke rounds."),
+                                 ss2::NoticeKind::blocked);
+            }
+            smokeArmed = false;
         } else {
             const bool append = (SDL_GetModState() & SDL_KMOD_SHIFT) != 0;
             (void)issueGroundOrder(simX, simY, true, append);
@@ -1292,12 +1382,13 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
         return;
     }
     if (simulation && event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_RIGHT) {
-        if (attackMoveArmed || attackGroundArmed || reverseMoveArmed || patrolArmed || faceArmed || armedAirSupport) {
+        if (attackMoveArmed || attackGroundArmed || reverseMoveArmed || patrolArmed || faceArmed || smokeArmed || armedAirSupport) {
             attackMoveArmed = false;
             attackGroundArmed = false;
             reverseMoveArmed = false;
             patrolArmed = false;
             faceArmed = false;
+            smokeArmed = false;
             armedAirSupport.reset();
             resetCursor();
             return;
@@ -1759,6 +1850,28 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
             }
         }
         const bool append = (SDL_GetModState() & SDL_KMOD_SHIFT) != 0;
+        const bool convoyMod = (SDL_GetModState() & SDL_KMOD_CTRL) != 0;
+        if (convoyMod && !vids.empty() && (ids.size() + vids.size()) >= 2u) {
+            const size_t moved = simulation->convoyMove(ids, vids, simX, simY, append);
+            if (moved > 0u) {
+                std::erase_if(activeMarkers, [](const TimedMarker& m) { return m.isOrder; });
+                activeMarkers.push_back({
+                    {{(simX - 8) * mapScale, (simY - 8) * mapScale, 16 * mapScale, 16 * mapScale},
+                     ss2::MarkerKind::move},
+                    std::chrono::steady_clock::now() + std::chrono::milliseconds(700),
+                    std::nullopt,
+                    true
+                });
+                syncMarkers();
+                pushOrderPulse(simX, simY, OrderPulse::Kind::Move);
+                playSelectionVoice("move");
+                showNotice(ss2::trf("Convoy move ({0} units matching slowest speed).", {std::to_string(moved)}),
+                           ss2::NoticeKind::accepted);
+            } else {
+                orderNotice.show(ss2::tr("Convoy move unavailable for that destination."), ss2::NoticeKind::blocked);
+            }
+            return;
+        }
         if (issueGroundOrder(simX, simY, false, append) && (!ids.empty() || !vids.empty()) && !append) {
             rightDragActive = true;
             rightDragStartScreenX = rightDragCurScreenX = event.button.x;
@@ -1895,6 +2008,8 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
                                             : anyHowitzer ? TacticalCursorKind::HowitzerFire
                                                           : TacticalCursorKind::AttackGround;
             applyTacticalCursor(window, gndCur, moveCursor.get(), attackCursor.get());
+        } else if (smokeArmed) {
+            applyTacticalCursor(window, TacticalCursorKind::AttackGround, moveCursor.get(), attackCursor.get());
         } else if (attackMoveArmed || patrolArmed) {
             applyTacticalCursor(window, TacticalCursorKind::AttackMove, moveCursor.get(), attackCursor.get());
         } else if (validInfTarget || validVehTarget || validBldTarget) {
@@ -1979,12 +2094,13 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
                    (event.key.key >= SDLK_0 && event.key.key <= SDLK_9 && !(event.key.mod & SDL_KMOD_CTRL)))))) {
                 playSelectionVoice("select");
             }
-            if (!grewOrChanged && (attackMoveArmed || attackGroundArmed || reverseMoveArmed || patrolArmed || faceArmed)) {
+            if (!grewOrChanged && (attackMoveArmed || attackGroundArmed || reverseMoveArmed || patrolArmed || faceArmed || smokeArmed)) {
                 attackMoveArmed = false;
                 attackGroundArmed = false;
                 reverseMoveArmed = false;
                 patrolArmed = false;
                 faceArmed = false;
+                smokeArmed = false;
                 resetCursor();
             }
         }

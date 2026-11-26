@@ -86,7 +86,7 @@ bool GameSession::updateViewTooltipAndPresent() {
                     renderer.panMap(dx * panSpeedPtsPerSec * frameDt, dy * panSpeedPtsPerSec * frameDt);
                 }
             }
-            if (!hud || !hud->opaqueAtWindow(mx, my)) {
+            if (!hud || hudHidden || !hud->opaqueAtWindow(mx, my)) {
                 const auto [mapX, mapY] = renderer.mapPosition(mx, my);
                 const auto hitTypeLabel = [](ss2::assets::HitType ht) -> const char* {
                     switch (ht) {
@@ -133,6 +133,10 @@ bool GameSession::updateViewTooltipAndPresent() {
                         const char* lbl1 = hitTypeLabel(ht1);
                         std::string wStr = std::to_string(spec->shot1.damage);
                         if (*lbl1) { wStr += ' '; wStr += lbl1; }
+                        if (spec->shot1.reloadTicks > 0) {
+                            const int reloadTenths = static_cast<int>(std::lround((spec->shot1.reloadTicks / 25.0) * 10.0));
+                            wStr += " (" + std::to_string(reloadTenths / 10) + "." + std::to_string(reloadTenths % 10) + "s)";
+                        }
                         if (spec->isVehicle && spec->shot2.damage > 0) {
                             const auto ht2 = spec->shot2.hitType != ss2::assets::HitType::None
                                 ? spec->shot2.hitType : ss2::assets::HitType::Machine;
@@ -150,10 +154,15 @@ bool GameSession::updateViewTooltipAndPresent() {
                         if (*lbl2) { wStr += ' '; wStr += lbl2; }
                         tip.lines.push_back(ss2::trf("Weapon: {0}", {wStr}));
                     }
+                    if (spec->isVehicle && spec->crewNumber > 0) {
+                        tip.lines.push_back(ss2::trf("Crew: {0}", {std::to_string(spec->crewNumber)}));
+                    }
                 };
-                const auto appendArmorPenLine = [&](ss2::TooltipContent& tip, const ss2::assets::UnitSpec* targetSpec) {
+                const auto appendArmorPenLine = [&](ss2::TooltipContent& tip, const ss2::assets::UnitSpec* targetSpec,
+                                                    int tgtX = -1, int tgtY = -1) {
                     if (!targetSpec || !unitCatalog || !selection) return;
                     const ss2::assets::UnitSpec* bestAtt = nullptr;
+                    int attX = -1, attY = -1;
                     if (vehicleScene) {
                         const auto& vehs = vehicleScene->vehicles();
                         for (const size_t vid : selection->selectedVehicles()) {
@@ -161,6 +170,8 @@ bool GameSession::updateViewTooltipAndPresent() {
                             const auto* sp = unitCatalog->find(vehs[vid].id);
                             if (sp && sp->shot1.damage > 0 && (!bestAtt || sp->shot1.damage > bestAtt->shot1.damage)) {
                                 bestAtt = sp;
+                                attX = vehs[vid].x;
+                                attY = vehs[vid].y;
                             }
                         }
                     }
@@ -171,6 +182,8 @@ bool GameSession::updateViewTooltipAndPresent() {
                             const auto* sp = unitCatalog->find(units[sid].id);
                             if (sp && sp->shot1.damage > 0 && (!bestAtt || sp->shot1.damage > bestAtt->shot1.damage)) {
                                 bestAtt = sp;
+                                attX = units[sid].x;
+                                attY = units[sid].y;
                             }
                         }
                     }
@@ -189,9 +202,18 @@ bool GameSession::updateViewTooltipAndPresent() {
                     const std::string dmgDesc = *htName
                         ? (std::to_string(dmg) + " " + htName)
                         : std::to_string(dmg);
+                    std::string rangeTag;
+                    if (tgtX >= 0 && attX >= 0) {
+                        const int attRange = effectiveRangePx(bestAtt);
+                        if (attRange > 0) {
+                            const double dist = std::hypot(double(tgtX - attX), double(tgtY - attY));
+                            rangeTag = (dist <= double(attRange) * (settings.realismDoctrine ? 1.35 : 1.0))
+                                ? " [In range]" : " [Out of range]";
+                        }
+                    }
                     tip.lines.push_back(ss2::trf("Pen vs F/S/R ({0}): {1} / {2} / {3}",
                                                  {dmgDesc, ss2::tr(penLabel(arm.front)),
-                                                  ss2::tr(penLabel(arm.side)), ss2::tr(penLabel(arm.rear))}));
+                                                  ss2::tr(penLabel(arm.side)), ss2::tr(penLabel(arm.rear))}) + rangeTag);
                 };
                 const auto appendArmorLine = [&](ss2::TooltipContent& tip, const ss2::assets::UnitSpec* spec) {
                     if (!spec) return;
@@ -505,7 +527,14 @@ bool GameSession::updateViewTooltipAndPresent() {
                                 if (simulation && simulation->canCaptureVehicle(*vHovered)) {
                                     tc.lines.push_back(ss2::tr("Under-crewed — right-click with infantry to re-crew"));
                                 }
-                                if (vehicleHoldFireUnits.contains(*vHovered)) tc.lines.push_back(ss2::tr("Holding fire"));
+                                if (vSpec && (vSpec->isSupplyTruck() || vSpec->isAmbulance())) {
+                                    tc.lines.push_back(ss2::tr(
+                                        vehicleHoldFireUnits.contains(*vHovered)
+                                            ? "Depot mode (H): Holding position, servicing nearby"
+                                            : "Auto-roam logistics (H for stationary depot)"));
+                                } else if (vehicleHoldFireUnits.contains(*vHovered)) {
+                                    tc.lines.push_back(ss2::tr("Holding fire"));
+                                }
                             } else if (isAllyOwner(v.owner)) {
                                 tc.lines.push_back(ss2::tr("Allied"));
                             } else if (v.owner == 3 && (!multiplayer.enabled || (simulation && simulation->canCaptureVehicle(*vHovered)))) {
@@ -519,7 +548,7 @@ bool GameSession::updateViewTooltipAndPresent() {
                                 appendArmorLine(tc, vSpec);
                                 if (vSpec) {
                                     appendCombatStats(tc, vSpec, vSpec->sight + vSpec->bonusSight);
-                                    appendArmorPenLine(tc, vSpec);
+                                    appendArmorPenLine(tc, vSpec, v.x, v.y);
                                 }
                             }
                             tooltip.show(tc, mx, my);

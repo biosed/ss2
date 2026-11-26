@@ -426,6 +426,25 @@ struct QueueVehicleOrder {
     bool operator==(const QueueVehicleOrder&) const = default;
 };
 
+struct ConvoyMove {
+    static constexpr std::string_view tag = "convoy-move";
+    using Result = std::size_t;
+    Ids soldiers;
+    Ids vehicles;
+    int x{}, y{};
+    bool append{};
+    bool operator==(const ConvoyMove&) const = default;
+};
+
+struct DeploySmoke {
+    static constexpr std::string_view tag = "deploy-smoke";
+    using Result = std::size_t;
+    Ids soldiers;
+    Ids vehicles;
+    int x{}, y{};
+    bool operator==(const DeploySmoke&) const = default;
+};
+
 using Command = std::variant<
     Move, AttackMove, Patrol, Scatter, Attack, Stop, ToggleHoldFire, ToggleCrouch, ToggleBinoculars, SpawnInfantry,
     MoveVehicles, ReverseMoveVehicles, FaceVehicles, AttackMoveVehicles, PatrolVehicles, AttackWithVehicles,
@@ -435,7 +454,7 @@ using Command = std::variant<
     AttackGroundVehicles, AttackGroundSoldiers, LayMine, DisarmMine, GroupMove, GarrisonBuilding, EvacuateBuilding,
     ToggleBuildingHoldFire, ToggleBuildingBinoculars, BuildingAttack, BuildingAttackBuilding, AttackBuilding,
     AttackBuildingWithVehicles, CallAirSupport, LoadSnapshot, Acknowledge, TogglePause, Resign, SupportBridge,
-    UnloadSingleSoldier, EvacuateSingleSoldier, QueueSoldierOrder, QueueVehicleOrder>;
+    UnloadSingleSoldier, EvacuateSingleSoldier, QueueSoldierOrder, QueueVehicleOrder, ConvoyMove, DeploySmoke>;
 
 // `tick` is the simulation tick at which the command was applied: after the
 // step that produced `tick` and before the next one.
@@ -469,6 +488,7 @@ struct ReplayFile {
     std::optional<std::uint64_t> endStateHash;
     std::map<unsigned, std::vector<assets::ReinforcementUnit>> initialSavedPools;
     std::vector<RecordedCommand> commands;
+    std::optional<bool> realismDoctrine;
     bool operator==(const ReplayFile&) const = default;
 };
 

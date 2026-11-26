@@ -1344,6 +1344,50 @@ cmd::QueueVehicleOrder::Result MissionRunner::applyLocked(const cmd::QueueVehicl
     }
     return res;
 }
+void MissionRunner::setRealismDoctrine(bool enabled) {
+    std::lock_guard lock(mutex_);
+    units_.setRealismDoctrine(enabled);
+    collectVehiclePoses();
+    if (auto snap = units_.takeFogSnapshot()) fog_ = std::move(snap);
+}
+bool MissionRunner::realismDoctrine() const {
+    std::lock_guard lock(mutex_);
+    return units_.realismDoctrine();
+}
+size_t MissionRunner::convoyMove(std::span<const size_t> soldierIds, std::span<const size_t> vehicleIds,
+                                 int mapX, int mapY, bool append) {
+    return submit(cmd::ConvoyMove{ids(soldierIds), ids(vehicleIds), mapX, mapY, append});
+}
+bool MissionRunner::canDeploySmoke(std::span<const size_t> soldierIds,
+                                   std::span<const size_t> vehicleIds) const {
+    std::lock_guard lock(mutex_);
+    return units_.canDeploySmoke(soldierIds, vehicleIds);
+}
+size_t MissionRunner::deploySmoke(std::span<const size_t> soldierIds, std::span<const size_t> vehicleIds,
+                                  int mapX, int mapY) {
+    return submit(cmd::DeploySmoke{ids(soldierIds), ids(vehicleIds), mapX, mapY});
+}
+std::vector<SmokeCloudView> MissionRunner::activeSmokeClouds() const {
+    std::lock_guard lock(mutex_);
+    return units_.activeSmokeClouds();
+}
+cmd::ConvoyMove::Result MissionRunner::applyLocked(const cmd::ConvoyMove& c) {
+    if (modal_) return 0;
+    const size_t res = units_.orderConvoyMove(c.soldiers, c.vehicles, c.x, c.y, c.append);
+    if (res > 0) {
+        collectVehiclePoses();
+    }
+    return res;
+}
+cmd::DeploySmoke::Result MissionRunner::applyLocked(const cmd::DeploySmoke& c) {
+    if (modal_) return 0;
+    const size_t res = units_.orderDeploySmoke(c.soldiers, c.vehicles, c.x, c.y);
+    if (res > 0) {
+        collectVehiclePoses();
+        if (auto snap = units_.takeFogSnapshot()) fog_ = std::move(snap);
+    }
+    return res;
+}
 cmd::UnloadSingleSoldier::Result MissionRunner::applyLocked(const cmd::UnloadSingleSoldier& c) {
     if (modal_) return false;
     std::vector<SoldierPose> outPoses;

@@ -909,28 +909,74 @@ std::vector<ModInfo> listInstalledMods(const std::filesystem::path& gameDir,
     };
 
     if (!gameDir.empty()) {
-        for (const char* sub : {"mods", "Run", "switcher"}) {
+        for (const char* sub : {"mods", "Run", "switcher", "MultiMod"}) {
             const auto dir = resolveCaseInsensitivePath(gameDir, sub);
             scanParentDir(dir);
         }
         std::error_code ec;
-        std::vector<std::filesystem::path> iniProfiles;
+        static constexpr std::array<std::string_view, 7> kModPrefixes{
+            "rwm", "hs2", "aprm", "lrm", "pwm", "liberation", "fusion"
+        };
+        auto hasKnownModPrefix = [&](std::string_view low) {
+            return std::ranges::any_of(kModPrefixes, [&](std::string_view p) { return low.starts_with(p); });
+        };
+
+        std::vector<std::filesystem::path> standaloneDirs;
         for (std::filesystem::directory_iterator it(gameDir, std::filesystem::directory_options::skip_permission_denied, ec), end;
              !ec && it != end; it.increment(ec)) {
-            std::error_code fEc;
-            if (!it->is_regular_file(fEc)) continue;
-            const std::string fn = it->path().filename().string();
-            const std::string low = toLowerAsciiStr(fn);
-            if (low.starts_with("sudtest_") && low.ends_with(".ini") && fn.size() > 12) {
-                iniProfiles.push_back(it->path());
+            std::error_code dEc;
+            if (!it->is_directory(dEc)) continue;
+            const std::string name = it->path().filename().string();
+            if (name.empty() || name.front() == '.') continue;
+            const std::string low = toLowerAsciiStr(name);
+            if (hasKnownModPrefix(low) && isValidModDirectory(it->path())) {
+                standaloneDirs.push_back(it->path());
             }
         }
-        std::ranges::sort(iniProfiles);
-        for (const auto& ip : iniProfiles) {
-            const std::string fn = ip.stem().string();
-            const std::string id = fn.substr(8);
-            pushUniqueMod(ModInfo{id, id, gameDir, ip});
+        std::ranges::sort(standaloneDirs);
+        for (const auto& d : standaloneDirs) {
+            const auto ini = resolveCaseInsensitivePath(d, "sudtest.ini");
+            std::error_code fEc;
+            std::filesystem::path foundIni = std::filesystem::is_regular_file(ini, fEc) ? ini : std::filesystem::path{};
+            const std::string nm = d.filename().string();
+            pushUniqueMod(ModInfo{nm, nm, d, std::move(foundIni)});
         }
+
+        auto scanIniDir = [&](const std::filesystem::path& iniDir, bool requireKnownPrefix) {
+            std::error_code dirEc;
+            if (iniDir.empty() || !std::filesystem::is_directory(iniDir, dirEc) || dirEc) return;
+            std::vector<std::filesystem::path> iniProfiles;
+            for (std::filesystem::directory_iterator it(iniDir, std::filesystem::directory_options::skip_permission_denied, dirEc), end;
+                 !dirEc && it != end; it.increment(dirEc)) {
+                std::error_code fEc;
+                if (!it->is_regular_file(fEc)) continue;
+                const std::string fn = it->path().filename().string();
+                const std::string low = toLowerAsciiStr(fn);
+                if (!low.ends_with(".ini")) continue;
+                if (low.starts_with("sudtest_") && fn.size() > 12) {
+                    iniProfiles.push_back(it->path());
+                } else if (hasKnownModPrefix(low)) {
+                    const ParsedIni parsed = parseSudtestIni(it->path());
+                    if (!parsed.commonTokens.empty() || !parsed.gameTokens.empty() || !parsed.schemeTokens.empty()) {
+                        iniProfiles.push_back(it->path());
+                    }
+                } else if (!requireKnownPrefix && low != "sudtest.ini") {
+                    const ParsedIni parsed = parseSudtestIni(it->path());
+                    if (!parsed.commonTokens.empty() || !parsed.gameTokens.empty() || !parsed.schemeTokens.empty()) {
+                        iniProfiles.push_back(it->path());
+                    }
+                }
+            }
+            std::ranges::sort(iniProfiles);
+            for (const auto& ip : iniProfiles) {
+                const std::string fn = ip.stem().string();
+                const std::string lowStem = toLowerAsciiStr(fn);
+                const std::string id = (lowStem.starts_with("sudtest_") && fn.size() > 8) ? fn.substr(8) : fn;
+                pushUniqueMod(ModInfo{id, id, iniDir, ip});
+            }
+        };
+        scanIniDir(gameDir, true);
+        scanIniDir(resolveCaseInsensitivePath(gameDir, "Run"), false);
     }
 
     const auto uRoot = userModsDir.empty() ? defaultUserModsRoot() : userModsDir;
@@ -989,6 +1035,14 @@ std::optional<ModInfo> resolveMod(const std::filesystem::path& gameDir,
 }
 
 namespace {
+
+bool isGameArchiveFromCommonToken(const std::filesystem::path& p) {
+    if (!equalsIgnoreCaseAscii(p.extension().string(), ".sue")) return false;
+    const std::string low = toLowerAsciiStr(p.filename().string());
+    return low.find("desc") == std::string::npos && low.find("lang") == std::string::npos &&
+           low.find("lng") == std::string::npos && low.find("menu") == std::string::npos &&
+           low.find("edit") == std::string::npos && low.find("scheme") == std::string::npos;
+}
 
 bool isDescArchiveToken(const std::filesystem::path& p) {
     const std::string low = toLowerAsciiStr(p.filename().string());
@@ -1177,9 +1231,13 @@ std::vector<std::filesystem::path> resolveGameArchives(const std::filesystem::pa
 
     if (ctx.mod) {
         appendTokensWithFilter(out, seen, ctx.modIni.gameTokens, ctx.mod->rootDir, ctx.gameDir, nullptr);
+        appendTokensWithFilter(out, seen, ctx.modIni.commonTokens, ctx.mod->rootDir, ctx.gameDir,
+                               isGameArchiveFromCommonToken);
         collectDropInModArchives(ctx.mod->rootDir, ctx.gameDir, out, seen, 0);
     }
     appendTokensWithFilter(out, seen, ctx.baseIni.gameTokens, ctx.gameDir, ctx.gameDir, nullptr);
+    appendTokensWithFilter(out, seen, ctx.baseIni.commonTokens, ctx.gameDir, ctx.gameDir,
+                           isGameArchiveFromCommonToken);
     appendUniqueExistingPath(out, seen, ctx.gameDir / "game_common.sue");
     return out;
 }
@@ -1200,6 +1258,7 @@ std::vector<std::filesystem::path> resolveDescArchives(const std::filesystem::pa
                 appendTokensWithFilter(out, seen, it1->second, ctx.mod->rootDir, ctx.gameDir, isDescArchiveToken);
             }
         }
+        appendTokensWithFilter(out, seen, ctx.modIni.commonTokens, ctx.mod->rootDir, ctx.gameDir, isDescArchiveToken);
         collectDropInModArchives(ctx.mod->rootDir, ctx.gameDir, out, seen, 1, scheme);
     }
     if (const auto it = ctx.baseIni.schemeTokens.find(schemeKey); it != ctx.baseIni.schemeTokens.end()) {
@@ -1210,6 +1269,7 @@ std::vector<std::filesystem::path> resolveDescArchives(const std::filesystem::pa
             appendTokensWithFilter(out, seen, it1->second, ctx.gameDir, ctx.gameDir, isDescArchiveToken);
         }
     }
+    appendTokensWithFilter(out, seen, ctx.baseIni.commonTokens, ctx.gameDir, ctx.gameDir, isDescArchiveToken);
     if (scheme > 0u) {
         appendUniqueExistingPath(out, seen, ctx.gameDir / ("desc_scheme" + std::to_string(schemeKey) + ".sue"));
     }

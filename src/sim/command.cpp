@@ -38,6 +38,12 @@ auto fields(const QueueSoldierOrder& c) {
 auto fields(const QueueVehicleOrder& c) {
     return std::tie(c.vehicles, c.op, c.targetX, c.targetY, c.dir32);
 }
+auto fields(const ConvoyMove& c) {
+    return std::tie(c.soldiers, c.vehicles, c.x, c.y, c.append);
+}
+auto fields(const DeploySmoke& c) {
+    return std::tie(c.soldiers, c.vehicles, c.x, c.y);
+}
 auto fields(const TutorialUnits::Snapshot::VehicleState& v) {
     return std::tie(v.x, v.y, v.hullDir, v.turretDir, v.hp, v.maxHp, v.ammo, v.ammo2, v.expa, v.kills, v.owner,
                     v.group, v.alive, v.holdFire, v.passengers, v.towedVehicle, v.towedBy, v.hasCrew, v.crewHp);
@@ -356,6 +362,7 @@ std::string toReplayFileText(const ReplayFile& file) {
     }
     if (file.difficulty) out += "# difficulty: " + std::to_string(*file.difficulty) + '\n';
     if (file.autoEngage) out += std::string("# auto_engage: ") + (*file.autoEngage ? "1\n" : "0\n");
+    if (file.realismDoctrine) out += std::string("# realism_doctrine: ") + (*file.realismDoctrine ? "1\n" : "0\n");
     out += "# end_tick: " + std::to_string(file.endTick) + '\n';
     if (file.endStateHash) out += "# end_state_hash: " + formatHex64(*file.endStateHash) + '\n';
     for (const auto& [poolIdx, wave] : file.initialSavedPools) {
@@ -392,6 +399,11 @@ std::optional<ReplayFile> fromReplayFileText(std::string_view text) {
                 const auto val = trimAsciiSpace(meta.substr(12));
                 if (val == "1") out.autoEngage = true;
                 else if (val == "0") out.autoEngage = false;
+                else return std::nullopt;
+            } else if (meta.starts_with("realism_doctrine:")) {
+                const auto val = trimAsciiSpace(meta.substr(17));
+                if (val == "1") out.realismDoctrine = true;
+                else if (val == "0") out.realismDoctrine = false;
                 else return std::nullopt;
             } else if (meta.starts_with("end_tick:")) {
                 const auto val = trimAsciiSpace(meta.substr(9));

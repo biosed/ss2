@@ -232,16 +232,19 @@ void GameSession::stepSimulationEvents() {
             }
         }
         for (const auto& pose : simulation->pollPoses()) {
-            if (pose.index >= scene->units().size() && replayFile && liveReplay) {
-                std::string wantId = "dguner";
-                std::size_t seenSpawns = 0;
-                const std::size_t baseCount = scene->units().size();
-                for (std::size_t ci = 0; ci < replayTransport.cursor && ci < replayFile->commands.size(); ++ci) {
-                    if (const auto* sp = std::get_if<cmd::SpawnInfantry>(&replayFile->commands[ci].command)) {
-                        if (baseCount + seenSpawns == pose.index) { wantId = sp->unit.id; break; }
-                        ++seenSpawns;
+            if (pose.index >= scene->units().size()) {
+                std::string wantId = simulation->soldierUnitId(pose.index);
+                if (wantId.empty() && replayFile && liveReplay) {
+                    std::size_t seenSpawns = 0;
+                    const std::size_t baseCount = scene->units().size();
+                    for (std::size_t ci = 0; ci < replayTransport.cursor && ci < replayFile->commands.size(); ++ci) {
+                        if (const auto* sp = std::get_if<cmd::SpawnInfantry>(&replayFile->commands[ci].command)) {
+                            if (baseCount + seenSpawns == pose.index) { wantId = sp->unit.id; break; }
+                            ++seenSpawns;
+                        }
                     }
                 }
+                if (wantId.empty()) wantId = "dguner";
                 registerSimSpawnedSoldier(pose.index, wantId, pose.x, pose.y, pose.owner, pose.group);
             }
             if (pose.index >= scene->units().size()) continue;
@@ -1374,6 +1377,25 @@ void GameSession::stepSimulationEvents() {
                 (void)playWorldSound(fallSnd, 0.58f, ae.x, ae.y, ss2::VoicePriority::High);
                 (void)playWorldSound("defaultexplosion", 0.68f, ae.x, ae.y, ss2::VoicePriority::High);
                 showNotice(ss2::tr("Aircraft shot down by AA flak!"), ss2::NoticeKind::blocked);
+            }
+        }
+        if (combatEffects && combatVfx.atlasSlot().has_value() && simulation &&
+            (simulation->simTick() % 8u) == 0u) {
+            const auto smokeClouds = simulation->activeSmokeClouds();
+            const unsigned phase = (simulation->simTick() / 8u) & 3u;
+            static constexpr std::array<std::pair<float, float>, 4> kSmokeOffsets{{
+                {-14.0f, -8.0f}, {16.0f, -6.0f}, {-10.0f, 10.0f}, {12.0f, 12.0f}
+            }};
+            for (std::size_t sci = 0; sci < smokeClouds.size(); ++sci) {
+                const auto& sc = smokeClouds[sci];
+                if (!isBuildingPointVisible(sc.x, sc.y)) continue;
+                const auto& off = kSmokeOffsets[(phase + sci) & 3u];
+                const float puffScale = (sc.radiusPx >= 90) ? 1.45f : 1.15f;
+                combatVfx.spawnClip(CombatVfxClip::BoxDust,
+                                    static_cast<float>(sc.x) + off.first,
+                                    static_cast<float>(sc.y) + off.second,
+                                    0u, 0.95f, puffScale, 0.56f, 200050);
+                spritesDirty = true;
             }
         }
         if (!paused && (!gpuAtlasSlots.empty() || !gpuVehicleIds.empty())) {

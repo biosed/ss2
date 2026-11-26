@@ -744,6 +744,14 @@ void GameSession::initializeMission() {
                                !recordPath.empty(), initialSavedPools);
             if (settings.speedPercent != 100) simulation->setSpeedPercent(settings.speedPercent);
         }
+        if (simulation) {
+            const bool useRealism = (replayFile && replayFile->realismDoctrine)
+                ? *replayFile->realismDoctrine
+                : (!multiplayer.enabled && !replayFile && settings.realismDoctrine);
+            if (useRealism) {
+                simulation->setRealismDoctrine(true);
+            }
+        }
         liveVisibleMines = simulation->visibleMines();
         selection.emplace(window, renderer, std::move(viewInfantry), std::move(viewVehicles), mapScale, selOriginX, selTitle);
         selection->setVehicles(std::move(viewVehicleUnits));
@@ -845,6 +853,7 @@ void GameSession::writeRecordingIfRequested() {
         }
         recorded.difficulty = std::clamp(settings.difficulty, 1, 3);
         recorded.autoEngage = autoEngage;
+        if (simulation->realismDoctrine()) recorded.realismDoctrine = true;
         recorded.endTick = simulation->simTick();
         recorded.endStateHash = simulation->stateHash();
         recorded.initialSavedPools = initialSavedPools;

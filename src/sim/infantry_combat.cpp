@@ -203,14 +203,15 @@ void FogGrid::castRay(int startX, int startY, int dx, int dy, std::uint8_t mask)
         const std::size_t idx = idxOf(curX, curY);
         fog_[idx] |= mask;
         const std::uint32_t f = flags_[idx];
+        const bool smokeBlocked = (f & kSmokeLosFlag) != 0;
         if (!elevated) {
-            if ((f & 0x1800u) != 0) return;
+            if ((f & 0x1800u) != 0 || smokeBlocked) return;
             if ((f & 0x2000u) != 0) {
                 elevated = true;
-                if ((f & 0x0800u) != 0) return;
+                if ((f & 0x0800u) != 0 || smokeBlocked) return;
             }
         } else {
-            if ((f & 0x0800u) != 0) return;
+            if ((f & 0x0800u) != 0 || smokeBlocked) return;
         }
         curX += majorDx;
         curY += majorDy;
@@ -231,6 +232,21 @@ void FogGrid::revealCircle(int tileX, int tileY, int radius, int side) {
     for (const auto& [dx, dy] : circ64_[r]) {
         castRay(tileX, tileY, dx, dy, mask);
     }
+}
+
+void FogGrid::setSmokeOccluder(int tileX, int tileY, bool blocked) {
+    if (tileX < 0 || tileY < 0 || tileX >= tileWidth_ || tileY >= tileHeight_) return;
+    const std::size_t idx = static_cast<std::size_t>(tileY) * static_cast<std::size_t>(tileWidth_) +
+                            static_cast<std::size_t>(tileX);
+    if (blocked) flags_[idx] |= kSmokeLosFlag;
+    else flags_[idx] &= ~kSmokeLosFlag;
+}
+
+bool FogGrid::hasSmokeOccluder(int tileX, int tileY) const {
+    if (tileX < 0 || tileY < 0 || tileX >= tileWidth_ || tileY >= tileHeight_) return false;
+    const std::size_t idx = static_cast<std::size_t>(tileY) * static_cast<std::size_t>(tileWidth_) +
+                            static_cast<std::size_t>(tileX);
+    return (flags_[idx] & kSmokeLosFlag) != 0;
 }
 
 std::uint8_t FogGrid::tile(int tileX, int tileY) const {

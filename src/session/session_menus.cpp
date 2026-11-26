@@ -97,6 +97,10 @@ std::vector<MenuItem> GameSession::buildPauseItems() {
         items.push_back({"next_track", ss2::tr("Next soundtrack track"), "N", true});
     }
     items.push_back({"effects", ss2::tr("Tracers and flashes"), ss2::tr(combatEffects ? "On" : "Off"), true});
+    if (!multiplayer.enabled && !replayFile) {
+        items.push_back({"doctrine", ss2::tr("Tactical Doctrine"),
+                         ss2::tr(settings.realismDoctrine ? "Realism (RWM/LRM)" : "Classic Gold"), true});
+    }
     if (!multiplayer.enabled && simulation) {
         const int sp = simulation->speedPercent();
         const std::string spStr = sp == 50 ? "0.5x" : sp == 200 ? "2x" : sp == 300 ? "3x" : "1x";
@@ -161,6 +165,7 @@ void GameSession::openPauseMenu() {
     reverseMoveArmed = false;
     patrolArmed = false;
     faceArmed = false;
+    smokeArmed = false;
     armedAirSupport.reset();
     resetCursor();
     if (simulation && !paused && !multiplayer.enabled) {
@@ -298,19 +303,22 @@ void GameSession::openControlsMenu() {
         {"", ss2::tr("Disarm minefield (Sapper)"), ss2::tr("Right click mine"), false},
         {"", ss2::tr("Scatter / disperse infantry"), "D", false},
         {"", ss2::tr("Queue waypoints"), ss2::tr("Shift + Right click"), false},
+        {"", ss2::tr("Convoy move (match slowest)"), ss2::tr("Ctrl + Right click"), false},
         {"", ss2::tr("Order via minimap"), ss2::tr("Right-click / Armed click"), false},
         {"", ss2::tr("Unload / unhitch / evacuate"), "U", false},
         {"", ss2::tr("Abandon vehicle (bail out crew)"), "K", false},
+        {"", ss2::tr("Deploy tactical smoke screen"), "Y + click", false},
         {"", ss2::tr("Game speed (- / +)"), "[ / ]", false},
         {"", ss2::tr("Quick Save / Quick Load"), "F9 / F10 (Ctrl+S / L)", false},
         {"", ss2::tr("Assign / recall / focus group"), "Ctrl+0..9 / 0..9 / 2x 0..9", false},
         {"", ss2::tr("Tactical Stance"), "", false},
         {"", ss2::tr("Stop selected units"), "S", false},
-        {"", ss2::tr("Toggle hold fire"), "H", false},
+        {"", ss2::tr("Hold fire / Depot hold (trucks)"), "H", false},
         {"", ss2::tr("Toggle crouch stance"), "C", false},
         {"", ss2::tr("Officer binoculars"), "B", false},
         {"", ss2::tr("Camera & Interface"), "", false},
         {"", ss2::tr("Pan / Zoom"), ss2::tr("Edges / Arrows / Wheel"), false},
+        {"", ss2::tr("Hide / restore HUD"), "Alt+Y", false},
         {"", ss2::tr("Save / jump bookmark"), "Ctrl+F1..F8 / F1..F8", false},
         {"", ss2::tr("Jump to recent alert (cycle)"), "Space", false},
         {"", ss2::tr("Focus troops / marker"), "Tab / M", false},
@@ -894,6 +902,7 @@ bool GameSession::loadSaveFromPath(const std::filesystem::path& path, const std:
     reverseMoveArmed = false;
     patrolArmed = false;
     faceArmed = false;
+    smokeArmed = false;
     armedAirSupport.reset();
     resetCursor();
     crouchedUnits.clear();

@@ -21,11 +21,15 @@ public:
     void buildFallbackCirc64();
     void applyMapPerimeterFlags();
 
+    static constexpr std::uint32_t kSmokeLosFlag = 0x00100000u;
+
     void clearAll();
     void clearCurrentVisibility();
     bool setRaw(std::span<const std::uint8_t> raw);
     void revealCircle(int tileX, int tileY, int radius, int side);
     void castRay(int startX, int startY, int dx, int dy, std::uint8_t mask);
+    void setSmokeOccluder(int tileX, int tileY, bool blocked);
+    bool hasSmokeOccluder(int tileX, int tileY) const;
 
     std::uint8_t tile(int tileX, int tileY) const;
     bool isElevated(int tileX, int tileY) const;

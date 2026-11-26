@@ -63,13 +63,13 @@ static_assert(sizeof(FogGrid) == 1600, "update FogGrid::hashState");
 static_assert(sizeof(TutorialUnits::ReserveUnit) == 56, "update hashValue(ReserveUnit)");
 static_assert(sizeof(assets::AirSupportSlot) == 40, "update hashValue(AirSupportSlot)");
 static_assert(sizeof(assets::ParatrooperEntry) == 40, "update hashValue(ParatrooperEntry)");
-static_assert(sizeof(TutorialUnits) == 4064, "update TutorialUnits::stateHash for the new member");
+static_assert(sizeof(TutorialUnits) == 4096, "update TutorialUnits::stateHash for the new member");
 #endif
 
 std::uint64_t TutorialUnits::stateHash() const {
 #ifdef SS2_STATE_HASH_SIZE_GUARDS
     static_assert(sizeof(Soldier) == 848, "update the Soldier hash below for the new field");
-    static_assert(sizeof(Vehicle) == 1584, "update the Vehicle hash below for the new field");
+    static_assert(sizeof(Vehicle) == 1592, "update the Vehicle hash below for the new field");
     static_assert(sizeof(Building) == 80, "update the Building hash below for the new field");
     static_assert(sizeof(Bridge) == 64, "update the Bridge hash below for the new field");
     static_assert(sizeof(Projectile) == 32, "update the Projectile hash below for the new field");
@@ -245,6 +245,9 @@ std::uint64_t TutorialUnits::stateHash() const {
                 h.all(static_cast<std::uint8_t>(qv.op), qv.x, qv.y, qv.dir32);
             }
         }
+        if (v.stuckTicks != 0 || v.convoySpeedCap256 != 0) {
+            h.all(vi, v.stuckTicks, v.convoySpeedCap256);
+        }
     }
     for (size_t ai = 0; ai < sorties_.size(); ++ai) {
         const auto& st = sorties_[ai];
@@ -254,6 +257,15 @@ std::uint64_t TutorialUnits::stateHash() const {
     }
     if (!craterTiles_.empty()) {
         h.all(craterTiles_);
+    }
+    if (!smokeClouds_.empty()) {
+        h.add(smokeClouds_.size());
+        for (const auto& sc : smokeClouds_) {
+            h.all(sc.x, sc.y, sc.radiusTiles, sc.ticksRemaining, sc.owner);
+        }
+    }
+    if (realismDoctrine_) {
+        h.add(realismDoctrine_);
     }
     return h.value();
 }

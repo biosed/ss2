@@ -352,7 +352,8 @@ void GameSession::updateHudAndBeams() {
         int winW = 1, winH = 1, pixelH = 1;
         if (!SDL_GetWindowSize(window, &winW, &winH)) { winW = 1; winH = 1; }
         if (!SDL_GetWindowSizeInPixels(window, nullptr, &pixelH)) pixelH = winH;
-        const double mapViewH = ss2::hidpi::logicalMapViewHeight(winH, pixelH, static_cast<int>(hud->height()));
+        const unsigned effHudH = (hudHidden || !hud) ? 0u : hud->height();
+        const double mapViewH = ss2::hidpi::logicalMapViewHeight(winH, pixelH, static_cast<int>(effHudH));
         const auto [mx0, my0] = renderer.mapPosition(0.0f, 0.0f);
         const auto [mx1, my1] = renderer.mapPosition(static_cast<float>(winW), static_cast<float>(mapViewH));
         const float totalW = static_cast<float>(hudMapW * mapScale);
@@ -377,7 +378,12 @@ void GameSession::updateHudAndBeams() {
             hud->setWeather(simulation->data().weather, simulation->simTick());
         }
         hud->update(hs);
-        hud->draw(renderer);
+        if (hudHidden) {
+            renderer.clearOverlay(OverlaySlot::hud);
+            renderer.setHudBarHeight(0);
+        } else {
+            hud->draw(renderer);
+        }
         {
             const auto wNow = std::chrono::steady_clock::now();
             const float wtSec = paused
@@ -435,7 +441,7 @@ void GameSession::updateHudAndBeams() {
     if (altHeld && selection && SDL_GetMouseFocus() == window && !briefing.active() && !menu.active()) {
         float mx{}, my{};
         SDL_GetMouseState(&mx, &my);
-        if (!hud || !hud->opaqueAtWindow(mx, my)) {
+        if (!hud || hudHidden || !hud->opaqueAtWindow(mx, my)) {
             const auto [mapX, mapY] = renderer.mapPosition(mx, my);
             if (vehicleScene) {
                 if (const auto vHov = selection->vehicleAt(int(std::floor(mapX)), int(std::floor(mapY)))) {
@@ -482,11 +488,11 @@ void GameSession::updateHudAndBeams() {
     bool previewRing = false;
     float ringX = 0.0f, ringY = 0.0f, ringRad = 0.0f;
     std::uint8_t ringR = 244, ringG = 186, ringB = 78;
-    if ((attackGroundArmed || armedAirSupport.has_value()) && SDL_GetMouseFocus() == window &&
+    if ((attackGroundArmed || smokeArmed || armedAirSupport.has_value()) && SDL_GetMouseFocus() == window &&
         !briefing.active() && !menu.active()) {
         float mx{}, my{};
         SDL_GetMouseState(&mx, &my);
-        if (!hud || !hud->opaqueAtWindow(mx, my)) {
+        if (!hud || hudHidden || !hud->opaqueAtWindow(mx, my)) {
             const auto [mapX, mapY] = renderer.mapPosition(mx, my);
             previewRing = true;
             ringX = static_cast<float>(mapX);
@@ -507,6 +513,8 @@ void GameSession::updateHudAndBeams() {
                     ringRad = 72.0f; ringR = 105; ringG = 212; ringB = 235;
                     break;
                 }
+            } else if (smokeArmed) {
+                ringRad = 72.0f; ringR = 200; ringG = 216; ringB = 228;
             } else {
                 ringRad = 56.0f; ringR = 244; ringG = 186; ringB = 78;
                 if (!rangePreviews.empty()) {
@@ -536,7 +544,7 @@ void GameSession::updateHudAndBeams() {
         SDL_GetMouseFocus() == window && !briefing.active() && !menu.active()) {
         float mx{}, my{};
         SDL_GetMouseState(&mx, &my);
-        if (!hud || !hud->opaqueAtWindow(mx, my)) {
+        if (!hud || hudHidden || !hud->opaqueAtWindow(mx, my)) {
             const auto [mapX, mapY] = renderer.mapPosition(mx, my);
             facePreview = true;
             faceTargetX = static_cast<float>(mapX);
