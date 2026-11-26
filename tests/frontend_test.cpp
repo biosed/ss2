@@ -482,7 +482,8 @@ int main() {
         FrontEnd sc;
         sc.setMissions(missions());
         check(sc.shortcutId('s') == "single" && sc.shortcutId('S') == "single", "Main Menu S -> Single Player");
-        check(sc.shortcutId('m') == "multi" && sc.shortcutId('c') == "credits", "Main Menu letter shortcuts");
+        check(sc.shortcutId('m') == "multi" && sc.shortcutId('c') == "credits" && sc.shortcutId('q') == "quit",
+              "Main Menu letter shortcuts");
         check(sc.shortcutId('x').empty(), "unadvertised letter has no shortcut");
         sc.activate(sc.shortcutId('s'));
         check(sc.screen() == FrontEnd::Screen::SinglePlayer, "shortcut S opens Single Player");

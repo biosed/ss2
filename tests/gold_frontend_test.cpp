@@ -435,27 +435,30 @@ void testFallbackInteraction() {
     // Toggle language row (index 1: y=94+42+4=140..168) -> increments Language::english -> french.
     ofe.handleMouseDown(674.0, 154.0, 1);
     check(ss2::language() == ss2::Language::french, "Options live-previews Language");
-    // Toggle Skip Intro row (index 8: y=94+8*42+4=434..462) and Enhanced graphics toggle {264,524,258,35}
+    // Toggle Skip Intro row (index 8: y=94+8*42+4=434..462), Doctrine pill {526,26,188,30}, and Enhanced graphics toggle {264,524,258,35}
     ofe.handleMouseDown(674.0, 448.0, 1);
+    ofe.handleMouseDown(600.0, 40.0, 1);
     ofe.handleMouseDown(393.0, 540.0, 1);
     ofe.handleKey(SDLK_ESCAPE);
     check(ofe.state().screen() == ss2::FrontEnd::Screen::MainMenu, "Esc returns from Options to MainMenu");
     check(ss2::language() == ss2::Language::english, "Cancel/Esc reverts live Language preview");
-    check(!ofe.takeSettingsSaved() && !ofe.settings().skipIntro && ofe.settings().enhancedGraphics,
+    check(!ofe.takeSettingsSaved() && !ofe.settings().skipIntro && !ofe.settings().realismDoctrine &&
+              ofe.settings().enhancedGraphics,
           "Cancel/Esc discards unsaved Options edits");
 
     ofe.handleKey(SDLK_O);
     check(ofe.state().screen() == ss2::FrontEnd::Screen::Options, "O reopens Options");
-    // Use exact keyboard navigation on Options: start focused on opt_difficulty -> 6x Down (opt_smooth), Right, 2x Down (opt_skip_intro), Right, Return (OK)
+    // Use exact keyboard navigation on Options: start focused on opt_difficulty -> 6x Down (opt_smooth), Right, 2x Down (opt_skip_intro), Right, click opt_doctrine & opt_enhanced_gfx, OK
     for (int k = 0; k < 6; ++k) ofe.handleKey(SDLK_DOWN);
     ofe.handleKey(SDLK_RIGHT);
     for (int k = 0; k < 2; ++k) ofe.handleKey(SDLK_DOWN);
     ofe.handleKey(SDLK_RIGHT);
+    ofe.handleMouseDown(600.0, 40.0, 1);   // opt_doctrine {526,26,188,30} -> true
     ofe.handleMouseDown(393.0, 540.0, 1);  // opt_enhanced_gfx {264,524,258,35} -> false
     ofe.handleMouseDown(188.0, 529.0, 1);  // OK [132,512,112,35]
     check(ofe.state().screen() == ss2::FrontEnd::Screen::MainMenu, "OK returns from Options to MainMenu");
     check(ofe.takeSettingsSaved() && ofe.settings().smoothTerrain && ofe.settings().skipIntro &&
-              !ofe.settings().enhancedGraphics,
+              ofe.settings().realismDoctrine && !ofe.settings().enhancedGraphics,
           "OK commits Options edits and sets takeSettingsSaved()");
 
     // Synthetic Replay Browser flow: empty notice, then populate 2 replays and launch via double-click.
@@ -1576,6 +1579,13 @@ void testPostMissionScreenFallback() {
     pm.open(st, false);
     check(pm.focusedId() == "replay", "Defeat focuses replay first");
     check(pm.actionIds().size() == 5u, "Defeat omits next_campaign");
+    st.canReturnToMainMenu = true;
+    pm.open(st, false);
+    {
+        const auto mainMenuIds = pm.actionIds();
+        check(std::ranges::find(mainMenuIds, "main_menu") != mainMenuIds.end(),
+              "PostMissionScreen exposes main_menu action when canReturnToMainMenu is true");
+    }
     std::vector<std::uint8_t> defeatBuf;
     pm.renderToBuffer(800, 600, defeatBuf);
     check(countDiffPixels(stars10, defeatBuf, 800, 0, 0, 800, 600) > 20000u,

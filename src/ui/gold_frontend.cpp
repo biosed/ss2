@@ -489,7 +489,7 @@ constexpr std::array<ButtonSpec, 7> kMainButtons{{
     {"ratings", "Ratings", 'R', {115, 312, 140, 35}, true},
     {"replay", "Replay", 'P', {115, 378, 140, 35}, true},
     {"credits", "Credits", 'C', {115, 445, 140, 35}, true},
-    {"quit", "Quit", '\0', {146, 512, 83, 35}, true},
+    {"quit", "Quit", 'Q', {146, 512, 83, 35}, true},
 }};
 
 }  // namespace
@@ -1210,7 +1210,7 @@ void GoldFrontEnd::activateId(const std::string& id) {
         return;
     }
     if (prev == FrontEnd::Screen::Options) {
-        if (id == "opt_enhanced_gfx") {
+        if (id == "opt_enhanced_gfx" || id == "opt_doctrine") {
             focusedId_ = id;
             adjustOption(id, 1);
             return;
@@ -1820,8 +1820,29 @@ void GoldFrontEnd::renderMainMenu(const RenderEnv& env) {
         drawGoldStencilButton(env.cr, env.pangoCtx, b.rect, tr(b.enLabel), b.shortcut,
                               hoveredId_ == b.id, focusedId_ == b.id, b.enabled, 24.0);
     }
-    auto ver = makeTextLayout(env.pangoCtx, "ver 2.2", 11.5, false);
-    cairo_move_to(env.cr, 725, 576);
+    if (!settings_.activeProfile.empty()) {
+        const std::string profTxt = tr("Profile") + ": " + settings_.activeProfile;
+        auto prof = makeTextLayout(env.pangoCtx, profTxt, 11.5, false);
+        cairo_move_to(env.cr, 20.0, 576.0);
+        cairo_set_source_rgba(env.cr, 224.0 / 255.0, 220.0 / 255.0, 192.0 / 255.0, 0.85);
+        pango_cairo_show_layout(env.cr, prof.get());
+    }
+    std::string footer = "ver 2.2 \xE2\x80\xA2 Native";
+    if (!settings_.activeMod.empty()) {
+        std::string modLbl = settings_.activeMod;
+        for (const auto& m : availableMods_) {
+            if (assets::equalsIgnoreCaseAscii(m.id, settings_.activeMod)) {
+                modLbl = m.name;
+                break;
+            }
+        }
+        footer = modLbl + " \xE2\x80\xA2 " + footer;
+    }
+    if (settings_.realismDoctrine) {
+        footer = tr("Realism") + " \xE2\x80\xA2 " + footer;
+    }
+    auto ver = makeTextLayout(env.pangoCtx, footer, 11.5, false, 440.0, PANGO_ALIGN_RIGHT);
+    cairo_move_to(env.cr, 342.0, 576.0);
     cairo_set_source_rgba(env.cr, 232.0 / 255.0, 228.0 / 255.0, 200.0 / 255.0, 0.85);
     pango_cairo_show_layout(env.cr, ver.get());
 }

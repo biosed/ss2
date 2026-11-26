@@ -236,8 +236,159 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
         if (audio && !mr.activated.empty() && mr.activated != "resume") {
             audio->playGroup("choose", 0.42f, ss2::VoicePriority::High);
         }
-        if (mr.closed || mr.activated == "resume") {
+        const auto adjustPauseOption = [&](std::string_view optId, int delta) -> bool {
+            const int step = delta >= 0 ? 1 : -1;
+            if (optId == "fullscreen") {
+                const bool isFullscreen = (SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN) != 0;
+                if (!SDL_SetWindowFullscreen(window, !isFullscreen)) {
+                    SDL_Log("Fullscreen switch failed: %s", SDL_GetError());
+                }
+                menu.setItems(buildOptionsItems());
+                return true;
+            }
+            if (optId == "effects") {
+                combatEffects = !combatEffects;
+                settings.combatEffects = combatEffects;
+                persistNow();
+                if (!combatEffects) {
+                    activeVfx.clear();
+                    burningWrecks.clear();
+                }
+                menu.setItems(buildOptionsItems());
+                return true;
+            }
+            if (optId == "doctrine" && !multiplayer.enabled && !replayFile) {
+                settings.realismDoctrine = !settings.realismDoctrine;
+                persistNow();
+                if (settings.realismDoctrine && simulation) {
+                    simulation->setRealismDoctrine(true);
+                }
+                menu.setItems(buildOptionsItems());
+                orderNotice.show(
+                    ss2::tr(settings.realismDoctrine
+                                ? "Realism Doctrine (RWM/LRM) enabled (+sight & standoff range)."
+                                : "Classic Gold Doctrine selected (applies on next mission)."),
+                    ss2::NoticeKind::accepted);
+                return true;
+            }
+            if (optId == "speed" && simulation && !multiplayer.enabled) {
+                static constexpr std::array<int, 4> kSpeeds{{50, 100, 200, 300}};
+                const int cur = simulation->speedPercent();
+                std::size_t idx = 1;
+                for (std::size_t k = 0; k < kSpeeds.size(); ++k) {
+                    if (kSpeeds[k] == cur) { idx = k; break; }
+                }
+                const int next = kSpeeds[(idx + std::size_t(step + int(kSpeeds.size()))) % kSpeeds.size()];
+                simulation->setSpeedPercent(next);
+                settings.speedPercent = next;
+                persistNow();
+                menu.setItems(buildOptionsItems());
+                return true;
+            }
+            if (optId == "difficulty" && !multiplayer.enabled) {
+                settings.difficulty = 1 + ((settings.difficulty - 1 + step + 3) % 3);
+                persistNow();
+                const char* diffKey = settings.difficulty == 1 ? "Easy" : settings.difficulty == 3 ? "Hard" : "Normal";
+                menu.setItems(buildOptionsItems());
+                orderNotice.show(ss2::trf("Difficulty set to {0} (applies on restart or next mission).",
+                                          {ss2::tr(diffKey)}),
+                                 ss2::NoticeKind::accepted);
+                return true;
+            }
+            if (optId == "language") {
+                static constexpr std::array<ss2::Language, 3> kLangs{{
+                    ss2::Language::english, ss2::Language::french, ss2::Language::spanish
+                }};
+                const auto cur = ss2::language();
+                std::size_t idx = 0;
+                for (std::size_t k = 0; k < kLangs.size(); ++k) {
+                    if (kLangs[k] == cur) { idx = k; break; }
+                }
+                const auto nextLang = kLangs[(idx + std::size_t(step + int(kLangs.size()))) % kLangs.size()];
+                ss2::setLanguage(nextLang);
+                settings.language = nextLang;
+                persistNow();
+                menu.open(ss2::tr("Options"), buildOptionsItems());
+                menu.highlight("language");
+                return true;
+            }
+            if (optId == "enhanced") {
+                enhancedGraphics = !enhancedGraphics;
+                settings.enhancedGraphics = enhancedGraphics;
+                persistNow();
+                applyMapGraphics();
+                syncGpuSprites();
+                menu.setItems(buildOptionsItems());
+                return true;
+            }
+            if (optId == "smooth") {
+                smoothTerrain = !smoothTerrain;
+                settings.smoothTerrain = smoothTerrain;
+                persistNow();
+                applyMapGraphics();
+                menu.setItems(buildOptionsItems());
+                return true;
+            }
+            if (optId == "music" && audio) {
+                settings.musicMuted = audio->toggleMusicMute();
+                persistNow();
+                menu.setItems(buildOptionsItems());
+                return true;
+            }
+            if (optId == "sfx_volume" && audio) {
+                static constexpr std::array<float, 5> kSfx{{0.0f, 0.25f, 0.50f, 0.75f, 1.0f}};
+                const float cur = audio->sfxVolume();
+                std::size_t best = 0;
+                float bestDiff = 10.0f;
+                for (std::size_t k = 0; k < kSfx.size(); ++k) {
+                    if (const float d = std::abs(cur - kSfx[k]); d < bestDiff) { bestDiff = d; best = k; }
+                }
+                const float next = kSfx[(best + std::size_t(step + int(kSfx.size()))) % kSfx.size()];
+                audio->setSfxVolume(next);
+                settings.sfxVolume = next;
+                persistNow();
+                if (next > 0.0f) audio->playGroup("accept", 0.5f);
+                menu.setItems(buildOptionsItems());
+                return true;
+            }
+            if (optId == "music_volume" && audio) {
+                static constexpr std::array<float, 4> kMus{{0.09f, 0.18f, 0.28f, 0.40f}};
+                const float cur = audio->musicVolume();
+                std::size_t best = 0;
+                float bestDiff = 10.0f;
+                for (std::size_t k = 0; k < kMus.size(); ++k) {
+                    if (const float d = std::abs(cur - kMus[k]); d < bestDiff) { bestDiff = d; best = k; }
+                }
+                const float next = kMus[(best + std::size_t(step + int(kMus.size()))) % kMus.size()];
+                audio->setMusicVolume(next);
+                settings.musicVolume = next;
+                persistNow();
+                menu.setItems(buildOptionsItems());
+                return true;
+            }
+            return false;
+        };
+
+        if (mr.closed) {
+            if (menuPage == MenuPage::Options || menuPage == MenuPage::SaveLoad ||
+                menuPage == MenuPage::Controls || menuPage == MenuPage::ForceStatus ||
+                menuPage == MenuPage::AirSupport || menuPage == MenuPage::Campaigns ||
+                menuPage == MenuPage::Missions || menuPage == MenuPage::CampaignMissions ||
+                menuPage == MenuPage::ConfirmRestart || menuPage == MenuPage::ConfirmMainMenu ||
+                menuPage == MenuPage::ConfirmQuit) {
+                if (audio) audio->playGroup("pull", 0.42f, ss2::VoicePriority::High);
+                openPauseMenu();
+            } else {
+                closeMenu();
+            }
+        } else if (mr.step != 0 && menuPage == MenuPage::Options) {
+            if (adjustPauseOption(menu.highlighted(), mr.step) && audio) {
+                audio->playGroup("choose", 0.35f, ss2::VoicePriority::High);
+            }
+        } else if (mr.activated == "resume") {
             closeMenu();
+        } else if (mr.activated == "options") {
+            openOptionsMenu();
         } else if (mr.activated == "airsupport" && simulation) {
             openAirSupportMenu();
         } else if (mr.activated.rfind("aircall:", 0) == 0 && simulation) {
@@ -262,94 +413,12 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
             int slot = -1;
             const auto [end, ec] = std::from_chars(slotStr.data(), slotStr.data() + slotStr.size(), slot);
             if (ec == std::errc{} && end == slotStr.data() + slotStr.size() &&
-                slot >= (isLoad ? -1 : 0) && slot <= 3) {
+                slot >= (isLoad ? -3 : 0) && slot <= 3) {
                 if (isLoad) doLoadSlot(slot);
                 else doSaveSlot(slot);
                 closeMenu();
             }
-        } else if (mr.activated == "effects") {
-            combatEffects = !combatEffects;
-            settings.combatEffects = combatEffects;
-            persistNow();
-            if (!combatEffects) {
-                activeVfx.clear();   // the next frame sends an empty list
-                burningWrecks.clear();
-            }
-            std::cout << "Tutorial I combat effects " << (combatEffects ? "on" : "off") << '\n';
-            menu.setItems(buildPauseItems());
-        } else if (mr.activated == "doctrine" && !multiplayer.enabled && !replayFile) {
-            settings.realismDoctrine = !settings.realismDoctrine;
-            persistNow();
-            if (settings.realismDoctrine && simulation) {
-                simulation->setRealismDoctrine(true);
-            }
-            menu.setItems(buildPauseItems());
-            orderNotice.show(
-                ss2::tr(settings.realismDoctrine
-                            ? "Realism Doctrine (RWM/LRM) enabled (+sight & standoff range)."
-                            : "Classic Gold Doctrine selected (applies on next mission)."),
-                ss2::NoticeKind::accepted);
-        } else if (mr.activated == "speed" && simulation) {
-            const int cur = simulation->speedPercent();
-            const int next = cur == 50 ? 100 : cur == 100 ? 200 : cur == 200 ? 300 : 50;
-            simulation->setSpeedPercent(next);
-            settings.speedPercent = next;
-            persistNow();
-            menu.setItems(buildPauseItems());
-        } else if (mr.activated == "difficulty") {
-            settings.difficulty = settings.difficulty == 1 ? 2 : settings.difficulty == 2 ? 3 : 1;
-            persistNow();
-            const char* diffKey = settings.difficulty == 1 ? "Easy" : settings.difficulty == 3 ? "Hard" : "Normal";
-            menu.setItems(buildPauseItems());
-            orderNotice.show(ss2::trf("Difficulty set to {0} (applies on restart or next mission).",
-                                      {ss2::tr(diffKey)}),
-                             ss2::NoticeKind::accepted);
-        } else if (mr.activated == "language") {
-            const auto current = ss2::language();
-            const auto nextLang = current == ss2::Language::english ? ss2::Language::french
-                                : current == ss2::Language::french ? ss2::Language::spanish : ss2::Language::english;
-            ss2::setLanguage(nextLang);
-            settings.language = nextLang;
-            persistNow();
-            menu.open(ss2::tr("Paused"), buildPauseItems());
-            for (int step = 0; step < 16 && menu.highlighted() != "language"; ++step) {
-                SDL_Event down{};
-                down.type = SDL_EVENT_KEY_DOWN;
-                down.key.key = SDLK_DOWN;
-                menu.handle(down);
-            }
-        } else if (mr.activated == "enhanced") {
-            enhancedGraphics = !enhancedGraphics;
-            settings.enhancedGraphics = enhancedGraphics;
-            persistNow();
-            applyMapGraphics();
-            syncGpuSprites();
-            menu.setItems(buildPauseItems());
-        } else if (mr.activated == "smooth") {
-            smoothTerrain = !smoothTerrain;
-            settings.smoothTerrain = smoothTerrain;
-            persistNow();
-            applyMapGraphics();
-            menu.setItems(buildPauseItems());
-        } else if (mr.activated == "music" && audio) {
-            settings.musicMuted = audio->toggleMusicMute();
-            persistNow();
-            menu.setItems(buildPauseItems());
-        } else if (mr.activated == "sfx_volume" && audio) {
-            const float cur = audio->sfxVolume();
-            const float next = cur > 0.85f ? 0.75f : cur > 0.60f ? 0.50f : cur > 0.35f ? 0.25f : cur > 0.05f ? 0.0f : 1.0f;
-            audio->setSfxVolume(next);
-            settings.sfxVolume = next;
-            persistNow();
-            if (next > 0.0f) audio->playGroup("accept", 0.5f);
-            menu.setItems(buildPauseItems());
-        } else if (mr.activated == "music_volume" && audio) {
-            const float cur = audio->musicVolume();
-            const float next = cur >= 0.34f ? 0.28f : cur >= 0.23f ? 0.18f : cur >= 0.13f ? 0.09f : 0.40f;
-            audio->setMusicVolume(next);
-            settings.musicVolume = next;
-            persistNow();
-            menu.setItems(buildPauseItems());
+        } else if (adjustPauseOption(mr.activated, 1)) {
         } else if (mr.activated == "next_track" && audio) {
             audio->nextMusicTrack();
             logHud(ss2::tr("Switched to next soundtrack track."));
@@ -360,6 +429,26 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
             *nextMissionOut = *nextCampaignMissionPath;
             dismissPostMissionScreen();
             menu.close();
+            menuPage = MenuPage::None;
+            running = false;
+        } else if (mr.activated == "restart_mission" && !multiplayer.enabled && !currentMissionPath.empty() && nextMissionOut) {
+            if (simulation && simulation->simTick() > 25u) {
+                openConfirmMenu(MenuPage::ConfirmRestart, ss2::tr("Restart mission?"),
+                                "confirm_restart", ss2::tr("Yes, restart"));
+            } else {
+                if (campaignUnitPools) *campaignUnitPools = initialSavedPools;
+                *nextMissionOut = currentMissionPath;
+                dismissPostMissionScreen();
+                menu.close();
+                menuPage = MenuPage::None;
+                running = false;
+            }
+        } else if (mr.activated == "confirm_restart" && !multiplayer.enabled && !currentMissionPath.empty() && nextMissionOut) {
+            if (campaignUnitPools) *campaignUnitPools = initialSavedPools;
+            *nextMissionOut = currentMissionPath;
+            dismissPostMissionScreen();
+            menu.close();
+            menuPage = MenuPage::None;
             running = false;
         } else if (mr.activated == "replay" && !currentMissionPath.empty() && nextMissionOut) {
             if (campaignUnitPools) {
@@ -368,6 +457,7 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
             *nextMissionOut = currentMissionPath;
             dismissPostMissionScreen();
             menu.close();
+            menuPage = MenuPage::None;
             running = false;
         } else if (mr.activated == "campaigns") {
             openCampaignsMenu();
@@ -401,6 +491,7 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
                     }
                     *nextMissionOut = chosenPath;
                     menu.close();
+                    menuPage = MenuPage::None;
                     running = false;
                 }
             }
@@ -416,6 +507,7 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
                 if (campaignUnitPools) campaignUnitPools->clear();
                 *nextMissionOut = menuMissions[idx].path;
                 menu.close();
+                menuPage = MenuPage::None;
                 running = false;
             }
         } else if (mr.activated == "forces") {
@@ -465,14 +557,42 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
         } else if (mr.activated == "log") {
             openLogMenu();
         } else if (mr.activated == "back") {
-            dismissPostMissionScreen();
-            menu.open(ss2::tr("Paused"), buildPauseItems());
+            openPauseMenu();
         } else if (mr.activated == "resign" && simulation && multiplayer.enabled) {
             simulation->resign(static_cast<std::uint8_t>(localOwner()));
             closeMenu();
             showNotice(ss2::tr("You surrendered."), ss2::NoticeKind::blocked);
-        } else if (mr.activated == "quit") {
+        } else if (mr.activated == "main_menu") {
+            if (menuPage == MenuPage::Pause && simulation && simulation->simTick() > 25u) {
+                openConfirmMenu(MenuPage::ConfirmMainMenu, ss2::tr("Return to main menu?"),
+                                "confirm_main_menu", ss2::tr("Yes, exit to main menu"));
+            } else {
+                if (returnToMainMenuOut) *returnToMainMenuOut = true;
+                dismissPostMissionScreen();
+                menu.close();
+                menuPage = MenuPage::None;
+                running = false;
+            }
+        } else if (mr.activated == "confirm_main_menu") {
+            if (returnToMainMenuOut) *returnToMainMenuOut = true;
             dismissPostMissionScreen();
+            menu.close();
+            menuPage = MenuPage::None;
+            running = false;
+        } else if (mr.activated == "quit") {
+            if (menuPage == MenuPage::Pause && simulation && simulation->simTick() > 25u) {
+                openConfirmMenu(MenuPage::ConfirmQuit, ss2::tr("Quit to desktop?"),
+                                "confirm_quit", ss2::tr("Yes, quit to desktop"));
+            } else {
+                dismissPostMissionScreen();
+                menu.close();
+                menuPage = MenuPage::None;
+                running = false;
+            }
+        } else if (mr.activated == "confirm_quit") {
+            dismissPostMissionScreen();
+            menu.close();
+            menuPage = MenuPage::None;
             running = false;
         }
         if (mr.consumed) return;

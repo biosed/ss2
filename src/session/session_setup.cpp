@@ -73,7 +73,8 @@ GameSession::GameSession(SDL_Window* win, ValidationReport* rep, int lim, bool t
                          bool manualClk, const std::filesystem::path& loadSave,
                          MultiplayerSessionConfig mpConfig,
                          std::map<unsigned, std::vector<assets::ReinforcementUnit>>* campaignPools,
-                         bool liveRep)
+                         bool liveRep,
+                         bool* retMainOut)
     : window(win),
       report(rep),
       limit(lim),
@@ -87,6 +88,7 @@ GameSession::GameSession(SDL_Window* win, ValidationReport* rep, int lim, bool t
       persistSettings(persistCfg),
       overviewOnly(ovOnly),
       nextMissionOut(nextOut),
+      returnToMainMenuOut(retMainOut),
       recordPath(recPath),
       replayFile(repFile),
       manualClock(manualClk),
@@ -906,11 +908,12 @@ int runGameSession(SDL_Window* window, ValidationReport* report, int limit, bool
                    const std::filesystem::path& loadSavePath,
                    MultiplayerSessionConfig multiplayer,
                    std::map<unsigned, std::vector<assets::ReinforcementUnit>>* campaignPools,
-                   bool liveReplay) {
+                   bool liveReplay,
+                   bool* returnToMainMenuOut) {
     GameSession session(window, report, limit, timing, gameDir, mission, hdPack, originalInfantry,
                         autoEngage, settings, persistSettings, overviewOnly, nextMissionOut,
                         recordPath, replayFile, manualClock, loadSavePath, std::move(multiplayer),
-                        campaignPools, liveReplay);
+                        campaignPools, liveReplay, returnToMainMenuOut);
     return session.run();
 }
 

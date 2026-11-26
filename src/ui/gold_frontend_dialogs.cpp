@@ -27,6 +27,7 @@ constexpr double kOptionsRowH = 36.0;
 constexpr RectD kOptionsOkRect{132, 524, 112, 35};
 constexpr RectD kOptionsEnhancedGfxRect{264, 524, 258, 35};
 constexpr RectD kOptionsCancelRect{542, 524, 118, 35};
+constexpr RectD kOptionsDoctrineRect{526, 26, 188, 30};
 
 RectD optionRowRect(std::size_t idx) {
     return {96.0, kOptionsRowY0 + double(idx) * kOptionsRowStep, 608.0, kOptionsRowH};
@@ -230,6 +231,9 @@ void GoldFrontEnd::adjustOption(const std::string& id, int delta) {
     } else if (id == "opt_enhanced_gfx") {
         optionsDraft_.enhancedGraphics = !optionsDraft_.enhancedGraphics;
         openCue = optionsDraft_.enhancedGraphics;
+    } else if (id == "opt_doctrine") {
+        optionsDraft_.realismDoctrine = !optionsDraft_.realismDoctrine;
+        openCue = optionsDraft_.realismDoctrine;
     } else if (id == "opt_effects") {
         optionsDraft_.combatEffects = !optionsDraft_.combatEffects;
         openCue = optionsDraft_.combatEffects;
@@ -279,6 +283,7 @@ void GoldFrontEnd::scrollRatingsBy(int deltaRows) {
 std::string GoldFrontEnd::hitTestOptions(double sx, double sy) const {
     if (kOptionsOkRect.contains(sx, sy)) return "ok";
     if (kOptionsEnhancedGfxRect.contains(sx, sy)) return "opt_enhanced_gfx";
+    if (kOptionsDoctrineRect.contains(sx, sy)) return "opt_doctrine";
     if (kOptionsCancelRect.contains(sx, sy)) return "cancel";
     for (std::size_t i = 0; i < kOptionRowIds.size(); ++i) {
         if (optionDecRect(i).contains(sx, sy)) return std::string("opt_dec:") + kOptionRowIds[i];
@@ -320,7 +325,7 @@ void GoldFrontEnd::handleOptionsKey(SDL_Keycode key) {
     static const std::vector<std::string> kOrder{
         "opt_difficulty", "opt_language", "opt_sfx", "opt_music_vol",
         "opt_music_mute", "opt_speed", "opt_smooth", "opt_effects",
-        "opt_skip_intro", "opt_mod", "opt_enhanced_gfx", "ok", "cancel"
+        "opt_skip_intro", "opt_mod", "opt_doctrine", "opt_enhanced_gfx", "ok", "cancel"
     };
     if (key == SDLK_UP) cycleFocus(kOrder, -1);
     else if (key == SDLK_DOWN || key == SDLK_TAB) cycleFocus(kOrder, 1);
@@ -385,6 +390,16 @@ void GoldFrontEnd::renderOptions(const RenderEnv& env) {
     PangoContext* pangoCtx = env.pangoCtx;
 
     drawHeading(cr, pangoCtx, tr("Options"), {200, 28, 400, 32}, 18.0);
+    {
+        const bool docHov = (hoveredId_ == "opt_doctrine");
+        const bool docFoc = (focusedId_ == "opt_doctrine");
+        drawBronzeBox(cr, kOptionsDoctrineRect.x, kOptionsDoctrineRect.y,
+                      kOptionsDoctrineRect.w, kOptionsDoctrineRect.h, (docHov || docFoc) ? 0.94 : 0.85);
+        const std::string docLabel = tr("Doctrine") + ": " +
+            tr(optionsDraft_.realismDoctrine ? "Realism" : "Classic");
+        drawGoldStencilButton(cr, pangoCtx, kOptionsDoctrineRect, docLabel, '\0',
+                              docHov, docFoc, true, 13.5, true);
+    }
     drawBronzeBox(cr, kOptionsPanelRect.x, kOptionsPanelRect.y,
                   kOptionsPanelRect.w, kOptionsPanelRect.h, 0.88);
 
@@ -448,6 +463,10 @@ void GoldFrontEnd::renderOptions(const RenderEnv& env) {
             cairo_fill(cr);
         } else if (rowHov) {
             cairo_set_source_rgba(cr, 72.0 / 255.0, 96.0 / 255.0, 56.0 / 255.0, 0.22);
+            cairo_rectangle(cr, rr.x, rr.y, rr.w, rr.h);
+            cairo_fill(cr);
+        } else if ((i % 2) == 1) {
+            cairo_set_source_rgba(cr, 36.0 / 255.0, 42.0 / 255.0, 28.0 / 255.0, 0.22);
             cairo_rectangle(cr, rr.x, rr.y, rr.w, rr.h);
             cairo_fill(cr);
         }

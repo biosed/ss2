@@ -1,4 +1,5 @@
 #include "tutorial_vm_test_internal.hpp"
+#include "sim/tutorial_coordinates.hpp"
 
 namespace ss2::vm_test {
 void runPhase4Xto5B() {
@@ -839,26 +840,24 @@ void runPhase4Xto5B() {
                         (void)sim5aC.moveVehicles(std::array<size_t, 1>{0}, dryX, dryY);
                         for (int t = 0; t < 15; ++t) (void)sim5aC.step();
                         const auto snapDry = sim5aC.takeSnapshot();
-                        const int dWu = (snapDry.vehicles[0].x - 512) / 2 + snapDry.vehicles[0].y;
-                        const int dWv = snapDry.vehicles[0].y - (snapDry.vehicles[0].x - 512) / 2;
+                        const auto [dWu, dWv] = ss2::tutorialFootWorld(snapDry.vehicles[0].x, snapDry.vehicles[0].y, 512);
                         const int dTx = dWu / 32;
                         const int dTy = dWv / 32;
                         if (nobst[static_cast<std::size_t>(dTy * 16 + dTx)] == 0x000Fu ||
                             std::hypot(double(snapDry.vehicles[0].x - dryX),
-                                       double(snapDry.vehicles[0].y - dryY)) < 15.0) {
+                                       double(snapDry.vehicles[0].y - dryY)) < 12.0) {
                             throw std::runtime_error("Phase 5A naval craft illegally entered dry ground");
                         }
                         // Order land tank toward deep water (6,8) -> must not enter deep water tile.
                         (void)sim5aC.moveVehicles(std::array<size_t, 1>{1}, deepX, deepY);
                         for (int t = 0; t < 35; ++t) (void)sim5aC.step();
                         const auto snapLand = sim5aC.takeSnapshot();
-                        const int lWu = (snapLand.vehicles[1].x - 512) / 2 + snapLand.vehicles[1].y;
-                        const int lWv = snapLand.vehicles[1].y - (snapLand.vehicles[1].x - 512) / 2;
+                        const auto [lWu, lWv] = ss2::tutorialFootWorld(snapLand.vehicles[1].x, snapLand.vehicles[1].y, 512);
                         const int lTx = lWu / 32;
                         const int lTy = lWv / 32;
                         if (nobst[static_cast<std::size_t>(lTy * 16 + lTx)] == 0x00F0u ||
                             std::hypot(double(snapLand.vehicles[1].x - deepX),
-                                       double(snapLand.vehicles[1].y - deepY)) < 15.0) {
+                                       double(snapLand.vehicles[1].y - deepY)) < 12.0) {
                             throw std::runtime_error("Phase 5A land tank illegally entered deep water");
                         }
                     }

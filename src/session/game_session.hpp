@@ -72,7 +72,8 @@ int runGameSession(SDL_Window* window, ValidationReport* report, int limit, bool
                    const std::filesystem::path& loadSavePath = {},
                    MultiplayerSessionConfig multiplayer = {},
                    std::map<unsigned, std::vector<assets::ReinforcementUnit>>* campaignPools = nullptr,
-                   bool liveReplay = false);
+                   bool liveReplay = false,
+                   bool* returnToMainMenuOut = nullptr);
 
 int verifyReplayHeadless(const std::filesystem::path& gameDir, const std::filesystem::path& mission,
                          bool originalInfantry, int difficulty, bool autoEngage,
@@ -200,6 +201,7 @@ struct GameSession {
     bool persistSettings;
     bool overviewOnly;
     std::optional<std::filesystem::path>* nextMissionOut;
+    bool* returnToMainMenuOut = nullptr;
     const std::filesystem::path& recordPath;
     const cmd::ReplayFile* replayFile;
     bool manualClock = false;
@@ -267,6 +269,25 @@ struct GameSession {
     std::optional<SoundPlayer> audio;
     std::optional<Hud> hud;
     Menu menu;
+    enum class MenuPage : std::uint8_t {
+        None,
+        Pause,
+        Options,
+        SaveLoad,
+        Controls,
+        ForceStatus,
+        ForceStatusStandalone,
+        AirSupport,
+        Log,
+        Campaigns,
+        Missions,
+        CampaignMissions,
+        Debrief,
+        ConfirmRestart,
+        ConfirmMainMenu,
+        ConfirmQuit,
+    };
+    MenuPage menuPage = MenuPage::None;
     std::unique_ptr<GoldPostMissionScreen> postMissionScreen;
     Tooltip tooltip;
     std::vector<ActiveVfx> activeVfx;
@@ -414,7 +435,8 @@ struct GameSession {
                 bool manualClock = false, const std::filesystem::path& loadSavePath = {},
                 MultiplayerSessionConfig multiplayer = {},
                 std::map<unsigned, std::vector<assets::ReinforcementUnit>>* campaignPools = nullptr,
-                bool liveReplay = false);
+                bool liveReplay = false,
+                bool* returnToMainMenuOut = nullptr);
 
     int run();
     int localOwner() const noexcept {
@@ -499,8 +521,12 @@ struct GameSession {
 
     // Pause/debrief/roster menus and save/load slots (session_menus.cpp).
     std::vector<MenuItem> buildPauseItems();
+    std::vector<MenuItem> buildOptionsItems();
     void openAirSupportMenu();
     void openPauseMenu();
+    void openOptionsMenu();
+    void openConfirmMenu(MenuPage page, const std::string& title,
+                         const std::string& confirmId, const std::string& confirmLabel);
     void closeMenu();
     void openMissionsMenu();
     void openCampaignsMenu();

@@ -1873,8 +1873,19 @@ void runPhase5Pto5U() {
                                 supSpec5x.ammo2 = 400;
                                 supSpec5x.ammoRegenDelay = 25;
 
+                                ss2::assets::UnitSpec shipSpec5x{};
+                                shipSpec5x.id = "ship_5x";
+                                shipSpec5x.isVehicle = true;
+                                shipSpec5x.health = 600;
+                                shipSpec5x.sight = 14;
+                                shipSpec5x.moveSpeed = 1.6;
+                                shipSpec5x.moveSpeedMax = 1.6;
+                                shipSpec5x.selType = "landing";
+                                shipSpec5x.walkOnGround = false;
+                                shipSpec5x.walkOnWater = true;
+
                                 auto cat5x = ss2::assets::UnitCatalog::fromSpecs(
-                                    {obsSpec5x, fastTank5x, supSpec5x}, {}, /*retailCatalog=*/true);
+                                    {obsSpec5x, fastTank5x, supSpec5x, shipSpec5x}, {}, /*retailCatalog=*/true);
 
                                 auto tc5x = [&](int tx, int ty) -> std::pair<int, int> {
                                     const int wu = tx * 32 + 16;
@@ -1984,6 +1995,80 @@ void runPhase5Pto5U() {
                                         prevAfter.front().rangePx <= prevBefore.front().rangePx + 40.0f ||
                                         prevAfter.front().sightPx <= prevBefore.front().sightPx + 32.0f) {
                                         throw std::runtime_error("Phase 5X Realism Doctrine failed to expand standoff range & sight");
+                                    }
+                                }
+
+                                // 4) Cherbourg partial-blocked 'o' hedgerow wall routing + spawn snap + naval edge navigation.
+                                {
+                                    std::vector<std::uint32_t> flagsHedge(64u * 64u, 0u);
+                                    std::vector<std::uint16_t> obstHedge(64u * 64u, 0x000Fu); // ground tiles
+                                    // Vertical hedgerow barrier at tile x = 24 with ONLY a 1-subcell 'o' gap at (24, 20)
+                                    // where center slot 3 (bit 3) is blocked (0x0E blocks slots 1,2,3; only slot 0 open).
+                                    for (int ty = 14; ty <= 26; ++ty) {
+                                        flagsHedge[std::size_t(ty) * 64u + 24u] = (ty == 20) ? 0x0Eu : 0x0Fu;
+                                    }
+                                    // Blocked tile at (20, 22) to test spawnVehicle snapping off blocked spawn.
+                                    flagsHedge[22u * 64u + 20u] = 0x0Fu;
+                                    // Southern coastal water band for y = 38..48, x = 0..32 (ground at x >= 33).
+                                    for (int ty = 38; ty <= 48; ++ty) {
+                                        for (int tx = 0; tx <= 32; ++tx) {
+                                            obstHedge[std::size_t(ty) * 64u + std::size_t(tx)] = 0x00F0u; // water only
+                                        }
+                                    }
+
+                                    const auto [tStartX, tStartY] = tc5x(20, 20);
+                                    const auto [tDstX, tDstY] = tc5x(28, 20);
+                                    const auto [infX, infY] = tc5x(23, 20);
+                                    const auto [shipStartX, shipStartY] = tc5x(2, 43);
+                                    const auto [shipDstX, shipDstY] = tc5x(20, 43);
+
+                                    std::vector<ss2::assets::Infantry> infHedge{
+                                        {"officer_5x", infX, infY, 100, 0, 1, 0},
+                                        {"officer_5x", infX + 4, infY, 100, 0, 1, 0},
+                                        {"officer_5x", infX - 4, infY + 2, 100, 0, 1, 0},
+                                    };
+                                    std::vector<ss2::assets::Placement> vehHedge{
+                                        {"tank_5x", tStartX, tStartY, 0, 100, 100, 1, 0},
+                                        {"ship_5x", shipStartX, shipStartY, 0, 100, 100, 1, 0},
+                                    };
+                                    ss2::TutorialUnits simHedge(
+                                        ss2::InfantryPathGrid::fromSubCellMasks(64, 64, flagsHedge, obstHedge),
+                                        infHedge, vehHedge, ss2::FogGrid(64, 64, flagsHedge), 2, false, {}, cat5x);
+
+                                    // Verify live spawnVehicle snaps out of fully blocked tile (20, 22).
+                                    const auto [blkX, blkY] = tc5x(20, 22);
+                                    ss2::assets::VehicleUnit reinUnit{};
+                                    reinUnit.id = "tank_5x";
+                                    reinUnit.x = blkX;
+                                    reinUnit.y = blkY;
+                                    reinUnit.hp = 100;
+                                    reinUnit.ammo = 100;
+                                    reinUnit.owner = 0;
+                                    reinUnit.group = 1;
+                                    reinUnit.hasCrew = true;
+                                    reinUnit.visible = true;
+                                    reinUnit.alive = true;
+                                    const size_t snappedIdx = simHedge.spawnVehicle(reinUnit);
+
+                                    if (simHedge.moveVehicles(std::array<size_t, 1>{0u}, tDstX, tDstY, false) != 1u ||
+                                        simHedge.moveVehicles(std::array<size_t, 1>{1u}, shipDstX, shipDstY, false) != 1u) {
+                                        throw std::runtime_error("Phase 5X Cherbourg hedgerow/naval move order rejected");
+                                    }
+                                    for (int t = 0; t < 260; ++t) {
+                                        (void)simHedge.step();
+                                    }
+                                    const auto snapHedge = simHedge.takeSnapshot();
+                                    const auto& tankEnd = snapHedge.vehicles[0];
+                                    const auto& shipEnd = snapHedge.vehicles[1];
+                                    const auto& snappedVeh = snapHedge.vehicles[snappedIdx];
+                                    if (std::abs(tankEnd.x - tDstX) > 40 || std::abs(tankEnd.y - tDstY) > 40) {
+                                        throw std::runtime_error("Phase 5X tank got stuck on partial-blocked hedgerow gap");
+                                    }
+                                    if (std::abs(shipEnd.x - shipDstX) > 48 || std::abs(shipEnd.y - shipDstY) > 48) {
+                                        throw std::runtime_error("Phase 5X border ship failed to navigate from coastal edge");
+                                    }
+                                    if (snappedVeh.x == blkX && snappedVeh.y == blkY) {
+                                        throw std::runtime_error("Phase 5X spawnVehicle failed to snap out of blocked tile");
                                     }
                                 }
 

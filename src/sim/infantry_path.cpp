@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <deque>
 #include <limits>
+#include <queue>
 #include <stdexcept>
 #include <utility>
 
@@ -759,5 +760,154 @@ std::vector<std::uint8_t> InfantryPathGrid::findTileDirectionsForMask(
     std::reverse(dirs.begin(), dirs.end());
     if (int(dirs.size()) > maxSteps) dirs.resize(static_cast<std::size_t>(maxSteps));
     return dirs;
+}
+
+std::vector<SubCell> InfantryPathGrid::findSubCellPathForMask(
+        SubCell start, SubCell goal, std::uint16_t forbiddenMask, int maxSteps) const {
+    if (maxSteps <= 0 || subWidth_ <= 0 || subHeight_ <= 0) return {};
+
+    const auto isWalkable = [&](SubCell c) -> bool {
+        return walkableMask(c, forbiddenMask);
+    };
+
+    const auto snapToWalkable = [&](SubCell origin) -> std::optional<SubCell> {
+        if (isWalkable(origin)) return origin;
+        int bestDist2 = std::numeric_limits<int>::max();
+        std::optional<SubCell> best;
+        for (int dy = -12; dy <= 12; ++dy) {
+            for (int dx = -12; dx <= 12; ++dx) {
+                const SubCell cand{origin.x + dx, origin.y + dy};
+                if (!isWalkable(cand)) continue;
+                const int d2 = dx * dx + dy * dy;
+                if (d2 < bestDist2) {
+                    bestDist2 = d2;
+                    best = cand;
+                }
+            }
+        }
+        return best;
+    };
+
+    const auto snapGoalTileSlot = [&](SubCell origin) -> std::optional<SubCell> {
+        if (isWalkable(origin)) return origin;
+        if (!inBounds(origin)) return snapToWalkable(origin);
+        const int gtx = origin.x >> 1;
+        const int gty = origin.y >> 1;
+        int bestDist2 = std::numeric_limits<int>::max();
+        std::optional<SubCell> best;
+        for (int s = 0; s < 4; ++s) {
+            const SubCell cand{gtx * 2 + (s & 1), gty * 2 + (s >> 1)};
+            if (!isWalkable(cand)) continue;
+            const int dx = cand.x - origin.x;
+            const int dy = cand.y - origin.y;
+            const int d2 = dx * dx + dy * dy;
+            if (d2 < bestDist2) {
+                bestDist2 = d2;
+                best = cand;
+            }
+        }
+        return best;
+    };
+
+    const auto startOpt = snapToWalkable(start);
+    const auto goalOpt = snapGoalTileSlot(goal);
+    if (!startOpt || !goalOpt) return {};
+    const SubCell startCell = *startOpt;
+    const SubCell goalCell = *goalOpt;
+
+    if (startCell == goalCell) {
+        if (startCell != start) return {startCell};
+        return {};
+    }
+
+    const int W = subWidth_;
+    const int H = subHeight_;
+    const int totalCells = W * H;
+    const int startIdx = startCell.y * W + startCell.x;
+    const int goalIdx = goalCell.y * W + goalCell.x;
+
+    const auto octileH = [&](int x, int y) -> int {
+        const int adx = std::abs(x - goalCell.x);
+        const int ady = std::abs(y - goalCell.y);
+        const int lo = std::min(adx, ady);
+        const int hi = std::max(adx, ady);
+        return 14 * lo + 10 * (hi - lo);
+    };
+
+    struct Node {
+        int f;
+        int g;
+        int idx;
+        bool operator>(const Node& o) const {
+            if (f != o.f) return f > o.f;
+            if (g != o.g) return g > o.g;
+            return idx > o.idx;
+        }
+    };
+
+    std::vector<int> gScore(static_cast<std::size_t>(totalCells), std::numeric_limits<int>::max());
+    std::vector<int> parentIdx(static_cast<std::size_t>(totalCells), -1);
+    std::vector<std::uint8_t> closed(static_cast<std::size_t>(totalCells), 0u);
+    std::priority_queue<Node, std::vector<Node>, std::greater<Node>> pq;
+
+    gScore[static_cast<std::size_t>(startIdx)] = 0;
+    pq.push({octileH(startCell.x, startCell.y), 0, startIdx});
+
+    bool found = false;
+    int expansions = 0;
+    const int maxExpansions = std::min(totalCells, 131072);
+
+    while (!pq.empty()) {
+        const Node cur = pq.top();
+        pq.pop();
+        if (closed[static_cast<std::size_t>(cur.idx)] != 0u) continue;
+        closed[static_cast<std::size_t>(cur.idx)] = 1u;
+
+        if (cur.idx == goalIdx) {
+            found = true;
+            break;
+        }
+        if (++expansions >= maxExpansions) break;
+
+        const int cx = cur.idx % W;
+        const int cy = cur.idx / W;
+
+        for (std::uint8_t d = 0; d < 8u; ++d) {
+            const int nx = cx + kDx[d];
+            const int ny = cy + kDy[d];
+            if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+            const SubCell next{nx, ny};
+            if (!isWalkable(next)) continue;
+            if (kDx[d] != 0 && kDy[d] != 0) {
+                if (!isWalkable({cx + kDx[d], cy}) || !isWalkable({cx, cy + kDy[d]})) continue;
+            }
+
+            const int nIdx = ny * W + nx;
+            if (closed[static_cast<std::size_t>(nIdx)] != 0u) continue;
+
+            const int stepCost = (kDx[d] != 0 && kDy[d] != 0) ? 14 : 10;
+            const int candG = cur.g + stepCost;
+            if (candG < gScore[static_cast<std::size_t>(nIdx)]) {
+                gScore[static_cast<std::size_t>(nIdx)] = candG;
+                parentIdx[static_cast<std::size_t>(nIdx)] = cur.idx;
+                pq.push({candG + octileH(nx, ny), candG, nIdx});
+            }
+        }
+    }
+
+    if (!found) return {};
+
+    std::vector<SubCell> path;
+    int cur = goalIdx;
+    while (cur != startIdx && cur >= 0) {
+        path.push_back(SubCell{cur % W, cur / W});
+        cur = parentIdx[static_cast<std::size_t>(cur)];
+    }
+    if (startCell != start) {
+        path.push_back(startCell);
+    }
+    std::reverse(path.begin(), path.end());
+    if (int(path.size()) > maxSteps) path.resize(static_cast<std::size_t>(maxSteps));
+    return path;
 }
 } // namespace ss2

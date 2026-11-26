@@ -47,6 +47,16 @@ int main(int argc, char** argv) {
         check(menu.active() && menu.highlighted() == "resume", "opens on the first selectable row");
         check(menu.width() <= unsigned(pixelW) && menu.height() <= unsigned(pixelH), "fits the window");
         for (std::size_t i = 3; i < menu.rgba().size(); i += 4) check(menu.rgba()[i] == 255, "panel is opaque");
+        check(menu.handle(key(SDLK_RIGHT)).step == 1 && menu.handle(key(SDLK_LEFT)).step == -1,
+              "Left/Right arrows emit step -1/+1 without changing existing activation");
+
+        // Section header ("sec:*") renders distinctly from a plain info row.
+        {
+            ss2::Menu secMenu(window.get()), plainMenu(window.get());
+            secMenu.open("Options", {{"sec:video", "Video", "", false}, {"ok", "OK", "", true}});
+            plainMenu.open("Options", {{"", "Video", "", false}, {"ok", "OK", "", true}});
+            check(secMenu.rgba() != plainMenu.rgba(), "section header draws distinct accent/rule");
+        }
 
         // Keyboard: Down and Up skip plain rows and wrap; Enter and Space choose; Escape closes.
         auto shot = menu.rgba();
@@ -110,6 +120,15 @@ int main(int argc, char** argv) {
         check(menu.highlighted() == "row79" && menu.rowRect("row79").height > 0 && menu.rowRect("row0").height == 0, "list scrolls down");
         menu.handle(key(SDLK_DOWN));
         check(menu.highlighted() == "row0" && menu.rowRect("row0").height > 0, "wraps back to the top");
+        // Clicking the rendered scrollbar gutter pages down cleanly.
+        {
+            const SDL_FPoint sbPt{
+                ((pixelW - int(menu.width())) / 2 + int(menu.width()) - 14.f) * w / pixelW,
+                ((pixelH - int(menu.height())) / 2 + int(menu.height()) * 0.60f) * h / pixelH
+            };
+            check(mouse(SDL_EVENT_MOUSE_BUTTON_DOWN, sbPt).consumed, "scrollbar click is consumed");
+            check(menu.rowRect("row0").height == 0, "clicking scrollbar track below thumb pages down");
+        }
         // A label carrying line breaks still draws as one row: nothing spills into the next row.
         {
             menu.open("Rows", {{"a", "One", "", true}, {"b", "plain", "", false}});

@@ -641,6 +641,7 @@ std::string FrontEnd::shortcutId(char letter) const {
                 case 'r': return "ratings";
                 case 'p': return "replay";
                 case 'c': return "credits";
+                case 'q': return "quit";
                 default: break;
             }
             break;

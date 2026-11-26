@@ -506,6 +506,18 @@ std::optional<FrontEndResult> runFrontEnd(SDL_Window* window, ss2::ValidationRep
     };
     refreshFrontEndProgress();
 
+    const auto dispatchFrontEndEvent = [&](const SDL_Event& ev) {
+        if (ev.type == SDL_EVENT_KEY_DOWN && ev.key.key == SDLK_F11 && !ev.key.repeat) {
+            const bool isFullscreen = (SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN) != 0;
+            if (!SDL_SetWindowFullscreen(window, !isFullscreen)) {
+                SDL_Log("Fullscreen switch failed: %s", SDL_GetError());
+            }
+            return;
+        }
+        renderer.handleEvent(ev);
+        goldFe.handleEvent(ev);
+    };
+
     const ss2::Snapshot empty{};
     std::uint64_t lastTick = SDL_GetTicksNS();
     int framesToPresent = 3;
@@ -515,20 +527,17 @@ std::optional<FrontEndResult> runFrontEnd(SDL_Window* window, ss2::ValidationRep
             if (SDL_WaitEventTimeout(&event, 16)) {
                 framesToPresent = 2;
                 if (event.type == SDL_EVENT_QUIT) return std::nullopt;
-                renderer.handleEvent(event);
-                goldFe.handleEvent(event);
+                dispatchFrontEndEvent(event);
                 while (SDL_PollEvent(&event)) {
                     if (event.type == SDL_EVENT_QUIT) return std::nullopt;
-                    renderer.handleEvent(event);
-                    goldFe.handleEvent(event);
+                    dispatchFrontEndEvent(event);
                 }
             }
         } else {
             while (SDL_PollEvent(&event)) {
                 framesToPresent = 2;
                 if (event.type == SDL_EVENT_QUIT) return std::nullopt;
-                renderer.handleEvent(event);
-                goldFe.handleEvent(event);
+                dispatchFrontEndEvent(event);
             }
         }
 
@@ -1247,105 +1256,121 @@ int main(int argc, char** argv) try {
     ss2::ValidationReport report;
     int result = 0;
     ss2::MultiplayerSessionConfig mpConfig;
-    if (mpRequested) {
-        ss2::MultiplayerHandshake hs;
-        if (mpHostPort) {
-            const auto md = ss2::assets::readMissionData(mission);
-            ss2::MatchSetupPacket setup;
-            const int hostPlayers = cliMpPlayers.value_or(2);
-            setup.assignedSeat = 1;
-            setup.playerCount = static_cast<std::uint8_t>(hostPlayers);
-            setup.mapHash = ss2::computeMissionMapHash(md);
-            setup.missionSpec = mission.stem().string();
-            if (cliMpTeams) {
-                setup.playerTeams = *cliMpTeams;
-            } else if (hostPlayers == 4) {
-                std::string stemLow = setup.missionSpec;
-                for (char& ch : stemLow) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-                setup.playerTeams = stemLow.starts_with("2x2")
-                    ? std::array<int, 4>{0, 1, 0, 1}
-                    : std::array<int, 4>{0, 1, 2, 3};
+    const bool allowMainMenuReturn = !gameDir.empty() && !overviewOnly && !limit && !timing && recordPath.empty();
+    for (;;) {
+        const bool iterMpRequested = mpHostPort.has_value() || mpJoinEndpoint.has_value();
+        if (iterMpRequested) {
+            ss2::MultiplayerHandshake hs;
+            if (mpHostPort) {
+                const auto md = ss2::assets::readMissionData(mission);
+                ss2::MatchSetupPacket setup;
+                const int hostPlayers = cliMpPlayers.value_or(2);
+                setup.assignedSeat = 1;
+                setup.playerCount = static_cast<std::uint8_t>(hostPlayers);
+                setup.mapHash = ss2::computeMissionMapHash(md);
+                setup.missionSpec = mission.stem().string();
+                if (cliMpTeams) {
+                    setup.playerTeams = *cliMpTeams;
+                } else if (hostPlayers == 4) {
+                    std::string stemLow = setup.missionSpec;
+                    for (char& ch : stemLow) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+                    setup.playerTeams = stemLow.starts_with("2x2")
+                        ? std::array<int, 4>{0, 1, 0, 1}
+                        : std::array<int, 4>{0, 1, 2, 3};
+                }
+                setup.autoEngage = autoEngage;
+                setup.playerNations[0] = cliMpNation.value_or(1u);
+                setup.playerNames[0] = settings.activeProfile.empty() ? std::string("Player 1") : settings.activeProfile;
+                if (!hs.startHost(*mpHostPort, std::move(setup))) {
+                    throw std::runtime_error(hs.errorText());
+                }
+                std::cout << "Hosting lockstep multiplayer (" << hostPlayers << " players) on port "
+                          << hs.listeningPort() << " (" << hs.matchSetup().missionSpec << ")\n";
+            } else {
+                std::uint64_t expectedHash = 0;
+                if (!mission.empty()) {
+                    expectedHash = ss2::computeMissionMapHash(ss2::assets::readMissionData(mission));
+                }
+                const std::string joinName = settings.activeProfile.empty() ? std::string("Player 2") : settings.activeProfile;
+                if (!hs.startJoin(mpJoinEndpoint->first, mpJoinEndpoint->second, joinName, expectedHash,
+                                  cliMpNation.value_or(0u))) {
+                    throw std::runtime_error(hs.errorText());
+                }
+                std::cout << "Joining lockstep multiplayer at " << mpJoinEndpoint->first
+                          << ':' << mpJoinEndpoint->second << '\n';
             }
-            setup.autoEngage = autoEngage;
-            setup.playerNations[0] = cliMpNation.value_or(1u);
-            setup.playerNames[0] = settings.activeProfile.empty() ? std::string("Player 1") : settings.activeProfile;
-            if (!hs.startHost(*mpHostPort, std::move(setup))) {
-                throw std::runtime_error(hs.errorText());
+            while (hs.state() != ss2::MultiplayerHandshake::State::Ready &&
+                   hs.state() != ss2::MultiplayerHandshake::State::Failed) {
+                SDL_Event ev;
+                while (SDL_PollEvent(&ev)) {
+                    if (ev.type == SDL_EVENT_QUIT ||
+                        (ev.type == SDL_EVENT_KEY_DOWN && !ev.key.repeat && ev.key.key == SDLK_ESCAPE)) {
+                        hs.cancel();
+                        return 0;
+                    }
+                }
+                hs.poll();
+                SDL_Delay(5);
             }
-            std::cout << "Hosting lockstep multiplayer (" << hostPlayers << " players) on port "
-                      << hs.listeningPort() << " (" << hs.matchSetup().missionSpec << ")\n";
-        } else {
-            std::uint64_t expectedHash = 0;
-            if (!mission.empty()) {
-                expectedHash = ss2::computeMissionMapHash(ss2::assets::readMissionData(mission));
+            if (hs.state() != ss2::MultiplayerHandshake::State::Ready) {
+                throw std::runtime_error(hs.errorText().empty() ? "Multiplayer handshake failed" : hs.errorText());
             }
-            const std::string joinName = settings.activeProfile.empty() ? std::string("Player 2") : settings.activeProfile;
-            if (!hs.startJoin(mpJoinEndpoint->first, mpJoinEndpoint->second, joinName, expectedHash,
-                              cliMpNation.value_or(0u))) {
-                throw std::runtime_error(hs.errorText());
+            if (!hs.isHost()) {
+                mission = resolveMultiplayerMissionFromSetup(gameDir, hs.matchSetup(), mission);
+                autoEngage = hs.matchSetup().autoEngage;
             }
-            std::cout << "Joining lockstep multiplayer at " << mpJoinEndpoint->first
-                      << ':' << mpJoinEndpoint->second << '\n';
-        }
-        while (hs.state() != ss2::MultiplayerHandshake::State::Ready &&
-               hs.state() != ss2::MultiplayerHandshake::State::Failed) {
-            SDL_Event ev;
-            while (SDL_PollEvent(&ev)) {
-                if (ev.type == SDL_EVENT_QUIT ||
-                    (ev.type == SDL_EVENT_KEY_DOWN && !ev.key.repeat && ev.key.key == SDLK_ESCAPE)) {
-                    hs.cancel();
-                    return 0;
+            mpConfig = makeMultiplayerConfig(hs, hs.takeConnections());
+        } else if (mission.empty() && !gameDir.empty() && !overviewOnly && !limit && !timing && !parsedReplay && !parsedSave) {
+            auto chosen = runFrontEnd(window.get(), validate ? &report : nullptr, gameDir, settings, persistSettings);
+            if (!chosen) return 0;
+            mission = std::move(chosen->missionPath);
+            if (chosen->replayFile) {
+                parsedReplay = std::move(chosen->replayFile);
+                watchReplay = true;
+                if (parsedReplay->difficulty) settings.difficulty = *parsedReplay->difficulty;
+                if (parsedReplay->autoEngage) autoEngage = *parsedReplay->autoEngage;
+            }
+            if (!chosen->savePath.empty()) {
+                loadSavePath = std::move(chosen->savePath);
+                if (!cliDifficulty && chosen->saveDifficulty) {
+                    settings.difficulty = std::clamp(*chosen->saveDifficulty, 1, 3);
                 }
             }
-            hs.poll();
-            SDL_Delay(5);
-        }
-        if (hs.state() != ss2::MultiplayerHandshake::State::Ready) {
-            throw std::runtime_error(hs.errorText().empty() ? "Multiplayer handshake failed" : hs.errorText());
-        }
-        if (!hs.isHost()) {
-            mission = resolveMultiplayerMissionFromSetup(gameDir, hs.matchSetup(), mission);
-            autoEngage = hs.matchSetup().autoEngage;
-        }
-        mpConfig = makeMultiplayerConfig(hs, hs.takeConnections());
-    } else if (mission.empty() && !gameDir.empty() && !overviewOnly && !limit && !timing && !parsedReplay && !parsedSave) {
-        auto chosen = runFrontEnd(window.get(), validate ? &report : nullptr, gameDir, settings, persistSettings);
-        if (!chosen) return 0;
-        mission = std::move(chosen->missionPath);
-        if (chosen->replayFile) {
-            parsedReplay = std::move(chosen->replayFile);
-            watchReplay = true;
-            if (parsedReplay->difficulty) settings.difficulty = *parsedReplay->difficulty;
-            if (parsedReplay->autoEngage) autoEngage = *parsedReplay->autoEngage;
-        }
-        if (!chosen->savePath.empty()) {
-            loadSavePath = std::move(chosen->savePath);
-            if (!cliDifficulty && chosen->saveDifficulty) {
-                settings.difficulty = std::clamp(*chosen->saveDifficulty, 1, 3);
+            if (chosen->multiplayerConfig) {
+                mpConfig = std::move(*chosen->multiplayerConfig);
+                autoEngage = true;
             }
         }
-        if (chosen->multiplayerConfig) {
-            mpConfig = std::move(*chosen->multiplayerConfig);
-            autoEngage = true;
+        std::map<unsigned, std::vector<ss2::assets::ReinforcementUnit>> campaignUnitPools;
+        if (!mpConfig.enabled && !parsedReplay && loadSavePath.empty() && !mission.empty()) {
+            const auto poolPath = ss2::campaignPoolPathForMission(settings.activeProfile, mission);
+            if (auto diskPools = ss2::readCampaignPoolFile(poolPath)) {
+                campaignUnitPools = std::move(*diskPools);
+            }
         }
-    }
-    std::map<unsigned, std::vector<ss2::assets::ReinforcementUnit>> campaignUnitPools;
-    if (!mpConfig.enabled && !parsedReplay && loadSavePath.empty() && !mission.empty()) {
-        const auto poolPath = ss2::campaignPoolPathForMission(settings.activeProfile, mission);
-        if (auto diskPools = ss2::readCampaignPoolFile(poolPath)) {
-            campaignUnitPools = std::move(*diskPools);
+        bool returnToMainMenu = false;
+        for (;;) {
+            std::optional<std::filesystem::path> nextMission;
+            returnToMainMenu = false;
+            result = ss2::runGameSession(window.get(), validate ? &report : nullptr, limit, timing, gameDir, mission, hdPack,
+                               originalInfantry, autoEngage, settings, persistSettings, overviewOnly, &nextMission,
+                               recordPath, parsedReplay ? &*parsedReplay : nullptr, false, loadSavePath, mpConfig,
+                               mpConfig.enabled ? nullptr : &campaignUnitPools, watchReplay,
+                               allowMainMenuReturn ? &returnToMainMenu : nullptr);
+            loadSavePath.clear();
+            if (returnToMainMenu || !nextMission || result != 0 || !recordPath.empty() || parsedReplay || mpConfig.enabled) break;
+            mission = std::move(*nextMission);
+            overviewOnly = false;
         }
-    }
-    for (;;) {
-        std::optional<std::filesystem::path> nextMission;
-        result = ss2::runGameSession(window.get(), validate ? &report : nullptr, limit, timing, gameDir, mission, hdPack,
-                           originalInfantry, autoEngage, settings, persistSettings, overviewOnly, &nextMission,
-                           recordPath, parsedReplay ? &*parsedReplay : nullptr, false, loadSavePath, mpConfig,
-                           mpConfig.enabled ? nullptr : &campaignUnitPools, watchReplay);
+        if (!returnToMainMenu || result != 0 || !allowMainMenuReturn) break;
+        mission.clear();
         loadSavePath.clear();
-        if (!nextMission || result != 0 || !recordPath.empty() || parsedReplay || mpConfig.enabled) break;
-        mission = std::move(*nextMission);
-        overviewOnly = false;
+        parsedReplay.reset();
+        watchReplay = false;
+        mpConfig = {};
+        mpHostPort.reset();
+        mpJoinEndpoint.reset();
+        if (cliDifficulty) settings.difficulty = *cliDifficulty;
     }
     if (validate) {
         std::cout << "Validation errors: " << report.errors.load() << '\n';

@@ -186,6 +186,18 @@ int main(int argc, char** argv) try {
         // Escape opens Pause Menu (pausing simulation); second Escape resumes cleanly.
         session.handleInputEvent(makeKeyDown(win, SDLK_ESCAPE));
         require(session.menu.active() && session.paused, "Escape must open Pause Menu and pause");
+        require(session.menu.rowRect("options").height > 0 && session.menu.rowRect("quit").height > 0,
+                "Pause Menu options and quit rows must fit on screen without scrolling");
+        for (int s = 0; s < 16 && session.menu.highlighted() != "options"; ++s) {
+            session.handleInputEvent(makeKeyDown(win, SDLK_DOWN));
+        }
+        require(session.menu.highlighted() == "options", "Pause Menu must contain options row");
+        session.handleInputEvent(makeKeyDown(win, SDLK_RETURN));
+        require(session.menu.active() && session.menuPage == ss2::GameSession::MenuPage::Options,
+                "Selecting Options must open Options submenu");
+        session.handleInputEvent(makeKeyDown(win, SDLK_ESCAPE));
+        require(session.menu.active() && session.menuPage == ss2::GameSession::MenuPage::Pause && session.paused,
+                "Escape in Options submenu must return to Pause Menu");
         session.handleInputEvent(makeKeyDown(win, SDLK_ESCAPE));
         require(!session.menu.active() && !session.paused,
                 "Second Escape must close Pause Menu and unpause");

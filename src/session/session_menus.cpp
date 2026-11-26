@@ -45,7 +45,7 @@ double difficultyScoreWeight(int difficulty, bool isMultiplayer) noexcept {
 std::vector<MenuItem> GameSession::buildPauseItems() {
     ensureRetailMenuSkin(menu, gameDir);
     std::vector<ss2::MenuItem> items;
-    items.push_back({"resume", ss2::tr("Resume"), "", true});
+    items.push_back({"resume", ss2::tr("Resume"), "Esc", true});
     if (simulation) {
         int airReady = 0;
         for (const auto& s : simulation->playerAirSupport()) airReady += s.ready;
@@ -58,35 +58,47 @@ std::vector<MenuItem> GameSession::buildPauseItems() {
             if (multiplayer.playerCount > 2) {
                 natVal += " T" + std::to_string(missionPlayerTeams[localOwner() & 3] + 1);
             }
-            items.push_back({"", ss2::tr("Nation"), natVal, false});
             if (mpRttMs >= 0) {
-                items.push_back({"", "RTT", std::to_string(mpRttMs) + " ms", false});
+                natVal += " • " + std::to_string(mpRttMs) + " ms";
             }
-            if (multiplayer.playerCount > 2) {
-                for (int s = 0; s < std::min(multiplayer.playerCount, 4); ++s) {
-                    const std::string pName = !multiplayer.playerNames[s].empty()
-                        ? multiplayer.playerNames[s]
-                        : ("Player " + std::to_string(s + 1));
-                    const std::string pVal = ss2::tr(mpNationName(multiplayer.playerNations[s])) +
-                        " • T" + std::to_string(missionPlayerTeams[s] + 1);
-                    items.push_back({"", "#" + std::to_string(s + 1) + " " + pName, pVal, false});
-                }
-            }
+            items.push_back({"", ss2::tr("Nation"), natVal, false});
         } else {
-            items.push_back({"quicksave", ss2::tr("Quick Save"), "F9", true});
-            items.push_back({"quickload", ss2::tr("Quick Load"), "F10", true});
-            items.push_back({"saveload", ss2::tr("Save / Load..."), "", true});
+            items.push_back({"saveload", ss2::tr("Save / Load"), "F9 / F10", true});
         }
         items.push_back({"forces", ss2::tr("Force Status"), "O", true});
         items.push_back({"briefing", ss2::tr("Mission Briefing"), "J", true});
     }
-    if (!multiplayer.enabled && !gameDir.empty() && nextMissionOut) {
-        items.push_back({"campaigns", ss2::tr("Campaigns"), "", true});
-        items.push_back({"missions", ss2::tr("Missions"), "", true});
+    items.push_back({"log", ss2::tr("Message Log"), "L", true});
+    items.push_back({"options", ss2::tr("Options"), ">", true});
+    items.push_back({"controls", ss2::tr("Controls"), ">", true});
+    if (!multiplayer.enabled && !currentMissionPath.empty() && nextMissionOut) {
+        items.push_back({"restart_mission", ss2::tr("Restart Mission"), "", true});
     }
+    if (multiplayer.enabled && simulation) {
+        items.push_back({"resign", ss2::tr("Surrender"), "", true});
+    }
+    if (returnToMainMenuOut != nullptr) {
+        items.push_back({"main_menu", ss2::tr("Exit to Main Menu"), "", true});
+    }
+    items.push_back({"quit", ss2::tr("Quit to Desktop"), "", true});
+    return items;
+}
+
+std::vector<MenuItem> GameSession::buildOptionsItems() {
+    ensureRetailMenuSkin(menu, gameDir);
+    std::vector<ss2::MenuItem> items;
+    items.push_back({"back", ss2::tr("Back to Pause Menu"), "Esc", true});
+
+    items.push_back({"sec:video", ss2::tr("Video"), "", false});
+    const bool isFullscreen = (SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN) != 0;
+    items.push_back({"fullscreen", ss2::tr("Display mode"),
+                     ss2::tr(isFullscreen ? "Fullscreen" : "Windowed"), true});
     items.push_back({"enhanced", ss2::tr("Enhanced graphics"), ss2::tr(enhancedGraphics ? "On" : "Off"), true});
     items.push_back({"smooth", ss2::tr("Smooth terrain"), ss2::tr(smoothTerrain ? "On" : "Off"), true});
+    items.push_back({"effects", ss2::tr("Tracers and flashes"), ss2::tr(combatEffects ? "On" : "Off"), true});
+
     if (audio) {
+        items.push_back({"sec:audio", ss2::tr("Audio"), "", false});
         items.push_back({"music", ss2::tr("Music"), ss2::tr(audio->musicPlaying() ? "On" : "Muted"), true});
         const int sfxPct = static_cast<int>(std::lround(audio->sfxVolume() * 100.0f));
         const std::string sfxLbl = sfxPct <= 0 ? ss2::tr("Muted") : (std::to_string(sfxPct) + "%");
@@ -96,32 +108,26 @@ std::vector<MenuItem> GameSession::buildPauseItems() {
         items.push_back({"music_volume", ss2::tr("Music volume"), musLbl, true});
         items.push_back({"next_track", ss2::tr("Next soundtrack track"), "N", true});
     }
-    items.push_back({"effects", ss2::tr("Tracers and flashes"), ss2::tr(combatEffects ? "On" : "Off"), true});
-    if (!multiplayer.enabled && !replayFile) {
-        items.push_back({"doctrine", ss2::tr("Tactical Doctrine"),
-                         ss2::tr(settings.realismDoctrine ? "Realism (RWM/LRM)" : "Classic Gold"), true});
-    }
-    if (!multiplayer.enabled && simulation) {
-        const int sp = simulation->speedPercent();
-        const std::string spStr = sp == 50 ? "0.5x" : sp == 200 ? "2x" : sp == 300 ? "3x" : "1x";
-        items.push_back({"speed", ss2::tr("Game speed"), spStr, true});
-    }
+
     if (!multiplayer.enabled) {
+        items.push_back({"sec:gameplay", ss2::tr("Gameplay"), "", false});
+        if (simulation) {
+            const int sp = simulation->speedPercent();
+            const std::string spStr = sp == 50 ? "0.5x" : sp == 200 ? "2x" : sp == 300 ? "3x" : "1x";
+            items.push_back({"speed", ss2::tr("Game speed"), spStr, true});
+        }
+        if (!replayFile) {
+            items.push_back({"doctrine", ss2::tr("Tactical Doctrine"),
+                             ss2::tr(settings.realismDoctrine ? "Realism (RWM/LRM)" : "Classic Gold"), true});
+        }
         const char* diffKey = settings.difficulty == 1 ? "Easy" : settings.difficulty == 3 ? "Hard" : "Normal";
         items.push_back({"difficulty", ss2::tr("Difficulty"), ss2::tr(diffKey), true});
     }
-    {
-        // Each language is named in itself so it can be found whatever is showing.
-        const auto current = ss2::language();
-        items.push_back({"language", ss2::tr("Language"),
-                         current == ss2::Language::french ? "Français" : current == ss2::Language::spanish ? "Español" : "English", true});
-    }
-    items.push_back({"controls", ss2::tr("Controls"), "", true});
-    items.push_back({"log", ss2::tr("Message log"), "L", true});
-    if (multiplayer.enabled && simulation) {
-        items.push_back({"resign", ss2::tr("Surrender"), "", true});
-    }
-    items.push_back({"quit", ss2::tr("Quit to desktop"), "", true});
+
+    items.push_back({"sec:interface", ss2::tr("Interface"), "", false});
+    const auto current = ss2::language();
+    items.push_back({"language", ss2::tr("Language"),
+                     current == ss2::Language::french ? "Français" : current == ss2::Language::spanish ? "Español" : "English", true});
     return items;
 }
 
@@ -145,7 +151,7 @@ void GameSession::openAirSupportMenu() {
     if (audio) audio->playGroup("choose", 0.42f, ss2::VoicePriority::High);
     const auto slots = simulation->playerAirSupport();
     std::vector<ss2::MenuItem> items;
-    items.push_back({"back", ss2::tr("Back to pause menu"), "", true});
+    items.push_back({"back", ss2::tr("Back to Pause Menu"), "Esc", true});
     for (std::size_t k = 0; k < slots.size(); ++k) {
         const auto kind = static_cast<ss2::assets::AirMissionKind>(k);
         const std::string tag = slots[k].planeId.empty()
@@ -153,6 +159,7 @@ void GameSession::openAirSupportMenu() {
             : (slots[k].planeId + " x" + std::to_string(slots[k].ready));
         items.push_back({"aircall:" + std::to_string(k), ss2::tr(airKindLabel(kind)), tag, slots[k].ready > 0});
     }
+    menuPage = MenuPage::AirSupport;
     menu.open(ss2::tr("Air Support"), std::move(items));
 }
 
@@ -171,20 +178,40 @@ void GameSession::openPauseMenu() {
     if (simulation && !paused && !multiplayer.enabled) {
         paused = simulation->togglePause();
         menuPausedClock = true;
-    } else {
+    } else if (menuPage == MenuPage::None) {
         menuPausedClock = false;
     }
-    if (audio) {
+    if (audio && menuPage == MenuPage::None) {
         audio->stopAllLoops();
         audio->playGroup("push", 0.42f, ss2::VoicePriority::High);
     }
+    menuPage = MenuPage::Pause;
     menu.open(ss2::tr("Paused"), buildPauseItems());
+}
+
+void GameSession::openOptionsMenu() {
+    ensureRetailMenuSkin(menu, gameDir);
+    dismissPostMissionScreen();
+    menuPage = MenuPage::Options;
+    menu.open(ss2::tr("Options"), buildOptionsItems());
+}
+
+void GameSession::openConfirmMenu(MenuPage page, const std::string& title,
+                                  const std::string& confirmId, const std::string& confirmLabel) {
+    ensureRetailMenuSkin(menu, gameDir);
+    dismissPostMissionScreen();
+    menuPage = page;
+    menu.open(title, {
+        {"back", ss2::tr("No, return to pause menu"), "Esc", true},
+        {confirmId, confirmLabel, "", true},
+    });
 }
 
 void GameSession::closeMenu() {
     dismissPostMissionScreen();
     if (menu.active() && audio) audio->playGroup("pull", 0.42f, ss2::VoicePriority::High);
     menu.close();
+    menuPage = MenuPage::None;
     if (simulation && menuPausedClock && paused) {
         paused = simulation->togglePause();
     }
@@ -197,7 +224,7 @@ void GameSession::openMissionsMenu() {
     dismissPostMissionScreen();
     menuMissions = ss2::assets::listSinglePlayerMissions(gameDir);
     std::vector<ss2::MenuItem> items;
-    items.push_back({"back", ss2::tr("Back to pause menu"), "", true});
+    items.push_back({"back", ss2::tr("Back to Pause Menu"), "Esc", true});
     for (std::size_t i = 0; i < menuMissions.size(); ++i) {
         const auto& m = menuMissions[i];
         const char* schemeTag = m.scheme == 1 ? " Winter" : m.scheme == 2 ? " Beach" : m.scheme == 3 ? " Desert" : " Summer";
@@ -212,6 +239,7 @@ void GameSession::openMissionsMenu() {
         }
         items.push_back({"mission:" + std::to_string(i), m.name, tag, true});
     }
+    menuPage = MenuPage::Missions;
     menu.open(ss2::tr("Single-Player Missions"), std::move(items));
 }
 
@@ -221,7 +249,7 @@ void GameSession::openCampaignsMenu() {
     dismissPostMissionScreen();
     menuCampaigns = ss2::assets::listCampaigns(gameDir);
     std::vector<ss2::MenuItem> items;
-    items.push_back({"back", ss2::tr("Back to pause menu"), "", true});
+    items.push_back({"back", ss2::tr("Back to Pause Menu"), "Esc", true});
     for (std::size_t i = 0; i < menuCampaigns.size(); ++i) {
         const auto& c = menuCampaigns[i];
         std::size_t done = 0;
@@ -243,6 +271,7 @@ void GameSession::openCampaignsMenu() {
     if (menuCampaigns.empty()) {
         items.push_back({"", ss2::tr("No campaigns installed."), "", false});
     }
+    menuPage = MenuPage::Campaigns;
     menu.open(ss2::tr("Campaigns"), std::move(items));
 }
 
@@ -279,15 +308,17 @@ void GameSession::openCampaignMissionsMenu(std::size_t campaignIdx) {
         }
         items.push_back({"cmission:" + std::to_string(campaignIdx) + ":" + std::to_string(i), m.title, tag, true});
     }
+    menuPage = MenuPage::CampaignMissions;
     menu.open(c.name, std::move(items));
 }
 
 void GameSession::openControlsMenu() {
     ensureRetailMenuSkin(menu, gameDir);
     dismissPostMissionScreen();
+    menuPage = MenuPage::Controls;
     menu.open(ss2::tr("Controls"), {
-        {"back", ss2::tr("Back to pause menu"), "", true},
-        {"", ss2::tr("Selection & Orders"), "", false},
+        {"back", ss2::tr("Back to Pause Menu"), "Esc", true},
+        {"sec:orders", ss2::tr("Selection & Orders"), "", false},
         {"", ss2::tr("Select / box select"), ss2::tr("Left click / drag"), false},
         {"", ss2::tr("Select class on screen / all"), ss2::tr("Double-click / Ctrl+DblClick"), false},
         {"", ss2::tr("Select on-screen / all units"), "Ctrl+A / Ctrl+Shift+A", false},
@@ -311,12 +342,12 @@ void GameSession::openControlsMenu() {
         {"", ss2::tr("Game speed (- / +)"), "[ / ]", false},
         {"", ss2::tr("Quick Save / Quick Load"), "F9 / F10 (Ctrl+S / L)", false},
         {"", ss2::tr("Assign / recall / focus group"), "Ctrl+0..9 / 0..9 / 2x 0..9", false},
-        {"", ss2::tr("Tactical Stance"), "", false},
+        {"sec:stance", ss2::tr("Tactical Stance"), "", false},
         {"", ss2::tr("Stop selected units"), "S", false},
         {"", ss2::tr("Hold fire / Depot hold (trucks)"), "H", false},
         {"", ss2::tr("Toggle crouch stance"), "C", false},
         {"", ss2::tr("Officer binoculars"), "B", false},
-        {"", ss2::tr("Camera & Interface"), "", false},
+        {"sec:cam", ss2::tr("Camera & Interface"), "", false},
         {"", ss2::tr("Pan / Zoom"), ss2::tr("Edges / Arrows / Wheel"), false},
         {"", ss2::tr("Hide / restore HUD"), "Alt+Y", false},
         {"", ss2::tr("Save / jump bookmark"), "Ctrl+F1..F8 / F1..F8", false},
@@ -441,9 +472,13 @@ void GameSession::openDebriefMenu(bool victory) {
     }
     items.push_back({"campaigns", ss2::tr("Campaigns"), "", true});
     items.push_back({"missions", ss2::tr("Missions"), "", true});
+    if (returnToMainMenuOut != nullptr) {
+        items.push_back({"main_menu", ss2::tr("Exit to Main Menu"), "", true});
+    }
     items.push_back({"resume", ss2::tr("Continue"), "", true});
-    items.push_back({"quit", ss2::tr("Quit to desktop"), "", true});
+    items.push_back({"quit", ss2::tr("Quit to Desktop"), "", true});
     ensureRetailMenuSkin(menu, gameDir);
+    menuPage = MenuPage::Debrief;
     menu.open(ss2::tr(victory ? "Mission Accomplished!" : "Mission Failed."), std::move(items));
 
     GoldMedalFaction medalFaction = GoldMedalFaction::Allied;
@@ -573,6 +608,7 @@ void GameSession::openDebriefMenu(bool victory) {
     stats.canReplay = !currentMissionPath.empty();
     stats.canBrowseCampaigns = true;
     stats.canBrowseMissions = true;
+    stats.canReturnToMainMenu = (returnToMainMenuOut != nullptr);
     stats.sfxVolume = audio ? audio->sfxVolume() : settings.sfxVolume;
 
     if (!postMissionScreen) {
@@ -619,6 +655,7 @@ void GameSession::openLogMenu() {
         }
     }
     if (items.size() == 1) items.push_back({"", ss2::tr("No messages yet."), "", false});
+    menuPage = MenuPage::Log;
     menu.open(ss2::tr("Message Log"), std::move(items));
 }
 
@@ -629,8 +666,8 @@ void GameSession::openForceOverviewMenu(bool fromPauseMenu) {
     forceRosterGroups.clear();
     std::vector<ss2::MenuItem> items;
     items.push_back(fromPauseMenu
-        ? ss2::MenuItem{"back", ss2::tr("Back to pause menu"), "", true}
-        : ss2::MenuItem{"resume", ss2::tr("Close"), "", true});
+        ? ss2::MenuItem{"back", ss2::tr("Back to Pause Menu"), "Esc", true}
+        : ss2::MenuItem{"resume", ss2::tr("Close"), "Esc", true});
     const unsigned secs = simulation->simTick() / 25u;
     const unsigned mins = secs / 60u;
     const unsigned remS = secs % 60u;
@@ -724,6 +761,7 @@ void GameSession::openForceOverviewMenu(bool fromPauseMenu) {
                              " | HP " + std::to_string(lb.hp) + "/" + std::to_string(lb.maxHp),
                          true});
     }
+    menuPage = fromPauseMenu ? MenuPage::ForceStatus : MenuPage::ForceStatusStandalone;
     menu.open(ss2::tr("Force Status"), std::move(items));
 }
 
@@ -1162,14 +1200,14 @@ void GameSession::openSaveLoadMenu() {
         slotTags[static_cast<std::size_t>(s)] = saveSlotStatus(quickSavePath(s), slotExists[static_cast<std::size_t>(s)]);
     }
     std::vector<ss2::MenuItem> items;
-    items.push_back({"back", ss2::tr("Back to pause menu"), "", true});
-    items.push_back({"", ss2::tr("Save Game"), "", false});
+    items.push_back({"back", ss2::tr("Back to Pause Menu"), "Esc", true});
+    items.push_back({"sec:save", ss2::tr("Save Game"), "", false});
     for (int s = 0; s <= 3; ++s) {
         const std::string lbl = (s == 0) ? ss2::tr("Quick Save (F9)")
                                          : ss2::trf("Save Slot {0}", {std::to_string(s)});
         items.push_back({"save:" + std::to_string(s), lbl, slotTags[static_cast<std::size_t>(s)], true});
     }
-    items.push_back({"", ss2::tr("Load Game"), "", false});
+    items.push_back({"sec:load", ss2::tr("Load Game"), "", false});
     {
         bool autoExists = false;
         const std::string autoTag = saveSlotStatus(quickSavePath(-1), autoExists);
@@ -1188,6 +1226,7 @@ void GameSession::openSaveLoadMenu() {
                          slotTags[static_cast<std::size_t>(s)], slotExists[static_cast<std::size_t>(s)]});
     }
     ensureRetailMenuSkin(menu, gameDir);
+    menuPage = MenuPage::SaveLoad;
     menu.open(ss2::tr("Save / Load"), std::move(items));
 }
 

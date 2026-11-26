@@ -245,8 +245,8 @@ void Menu::render() {
     const int fontPx = std::clamp(int(std::lround(pixelH / 40.0)), 14, 44);
     const int uiScale = std::max(1, static_cast<int>(std::lround(double(pixelH) / 1080.0)));
     const int titlePx = fontPx * 5 / 4, pad = fontPx;
-    rowHeight_ = fontPx * 2;
-    const int panelW = std::clamp(std::max(380, pixelW / 2), 1, pixelW);
+    rowHeight_ = std::max(fontPx + 10, static_cast<int>(std::lround(fontPx * 1.72)));
+    const int panelW = std::clamp(std::max(440, pixelW * 42 / 100), 1, pixelW);
     const int chrome = pad + titlePx * 3 / 2 + pad / 2 + pad;        // title block above, margin below
     visible_ = std::clamp((pixelH * 4 / 5 - chrome) / rowHeight_, 1, std::max(1, int(items_.size())));
     // Bring the highlighted row on screen after it moved; free scrolling may leave it behind.
@@ -257,6 +257,20 @@ void Menu::render() {
     first_ = std::clamp(first_, 0, std::max(0, int(items_.size()) - visible_));
     rowsTop_ = pad + titlePx * 3 / 2 + pad / 2;
     const int panelH = std::min(pixelH, rowsTop_ + visible_ * rowHeight_ + pad);
+    const bool hasScroll = int(items_.size()) > visible_;
+    if (hasScroll) {
+        scrollBarW_ = std::max(14, 16 * uiScale);
+        scrollBarX_ = panelW - pad / 2 - scrollBarW_;
+        scrollBarY_ = rowsTop_;
+        scrollBarH_ = visible_ * rowHeight_;
+        scrollArrowH_ = std::min(scrollBarW_, std::max(12, scrollBarH_ / 6));
+    } else {
+        scrollBarX_ = scrollBarY_ = scrollBarW_ = scrollBarH_ = scrollArrowH_ = 0;
+        scrollThumbTop_ = scrollThumbH_ = 0;
+    }
+    const int contentRight = hasScroll ? (scrollBarX_ - std::max(6, pad / 3)) : (panelW - pad);
+    const int rowBoxRight = hasScroll ? (scrollBarX_ - std::max(4, pad / 4)) : (panelW - pad / 2);
+    const int contentW = std::max(60, contentRight - pad);
 
     Surface panel(cairo_image_surface_create(CAIRO_FORMAT_ARGB32, panelW, panelH), cairo_surface_destroy);
     Context graphics(cairo_create(panel.get()), cairo_destroy);
@@ -340,11 +354,14 @@ void Menu::render() {
     for (int i = first_; i < first_ + visible_ && i < int(items_.size()); ++i) {
         const auto& item = items_[i];
         const int y = rowsTop_ + (i - first_) * rowHeight_;
+        const bool isSection = !item.selectable && item.value.empty() && !item.label.empty() &&
+                               item.id.starts_with("sec:");
         if (i == highlight_) {
             const double rowInset = 2.0 * lw;
+            const double rowW = std::max(1.0, double(rowBoxRight) - pad / 2.0);
             if (skinned) {
                 colour(cr, i == armed_ ? 98 : 68, i == armed_ ? 104 : 78, i == armed_ ? 68 : 52);
-                cairo_rectangle(cr, pad / 2.0, y + rowInset, panelW - pad, std::max(1.0, rowHeight_ - 2.0 * rowInset));
+                cairo_rectangle(cr, pad / 2.0, y + rowInset, rowW, std::max(1.0, rowHeight_ - 2.0 * rowInset));
                 cairo_fill_preserve(cr);
                 cairo_set_source_rgba(cr, 182.0 / 255.0, 164.0 / 255.0, 108.0 / 255.0, 0.80);
                 cairo_set_line_width(cr, lw);
@@ -354,31 +371,80 @@ void Menu::render() {
                 cairo_fill(cr);
             } else {
                 colour(cr, i == armed_ ? 96 : 74, i == armed_ ? 104 : 86, i == armed_ ? 78 : 60);
-                cairo_rectangle(cr, pad / 2.0, y + rowInset, panelW - pad, std::max(1.0, rowHeight_ - 2.0 * rowInset));
+                cairo_rectangle(cr, pad / 2.0, y + rowInset, rowW, std::max(1.0, rowHeight_ - 2.0 * rowInset));
                 cairo_fill(cr);
             }
         }
-        const int half = (panelW - 2 * pad) / 2;
+        const int half = contentW / 2;
         const bool hasValue = !item.value.empty();
-        if (skinned) {
+        if (isSection) {
+            if (skinned) colour(cr, 224, 202, 136);
+            else colour(cr, 212, 198, 148);
+        } else if (skinned) {
             if (i == highlight_) colour(cr, 246, 244, 232);
             else if (item.selectable) colour(cr, 232, 230, 218);
             else colour(cr, 168, 174, 160);
         } else {
             if (item.selectable) colour(cr, 236, 236, 228); else colour(cr, 170, 176, 168);
         }
-        text(cr, fonts_.get(), item.label, fontPx, item.selectable && i == highlight_, pad, y + (rowHeight_ - fontPx * 1.3) / 2,
-             hasValue ? half : panelW - 2 * pad, Align::left);
+        text(cr, fonts_.get(), item.label, isSection ? std::max(12, fontPx - 1) : fontPx,
+             isSection || (item.selectable && i == highlight_),
+             pad, y + (rowHeight_ - fontPx * 1.3) / 2,
+             hasValue ? half : contentW, Align::left);
+        if (isSection) {
+            cairo_set_source_rgba(cr, 168.0 / 255.0, 152.0 / 255.0, 102.0 / 255.0, 0.55);
+            cairo_rectangle(cr, pad, y + rowHeight_ - 2.0 * lw, contentW, lw);
+            cairo_fill(cr);
+        }
         if (hasValue) {
             if (skinned) colour(cr, i == highlight_ ? 236 : 206, i == highlight_ ? 214 : 192, i == highlight_ ? 148 : 146);
             else colour(cr, 201, 190, 152);
-            text(cr, fonts_.get(), item.value, fontPx, false, pad + half, y + (rowHeight_ - fontPx * 1.3) / 2, half, Align::right);
+            text(cr, fonts_.get(), item.value, fontPx, false, pad + half, y + (rowHeight_ - fontPx * 1.3) / 2,
+                 contentW - half, Align::right);
         }
     }
-    // Marks at the edge when rows are scrolled out of view.
-    colour(cr, 132, 127, 101);
-    if (first_ > 0) { cairo_rectangle(cr, panelW / 2.0 - 12.0 * lw, rowsTop_ - 3.0 * lw, 24.0 * lw, 2.0 * lw); cairo_fill(cr); }
-    if (first_ + visible_ < int(items_.size())) { cairo_rectangle(cr, panelW / 2.0 - 12.0 * lw, panelH - pad / 2.0, 24.0 * lw, 2.0 * lw); cairo_fill(cr); }
+    // Visible scrollbar track, arrow caps, and proportional thumb when items overflow.
+    if (hasScroll) {
+        const double sx = double(scrollBarX_), sy = double(scrollBarY_);
+        const double sw = double(scrollBarW_), sh = double(scrollBarH_), ah = double(scrollArrowH_);
+        cairo_set_source_rgba(cr, 14.0 / 255.0, 18.0 / 255.0, 12.0 / 255.0, 0.85);
+        cairo_rectangle(cr, sx, sy, sw, sh);
+        cairo_fill_preserve(cr);
+        colour(cr, 132, 122, 92);
+        cairo_set_line_width(cr, lw);
+        cairo_stroke(cr);
+
+        auto drawArrowBox = [&](double ay, bool up) {
+            colour(cr, 48, 54, 42);
+            cairo_rectangle(cr, sx + lw, ay + lw, sw - 2.0 * lw, ah - 2.0 * lw);
+            cairo_fill_preserve(cr);
+            colour(cr, 132, 122, 92);
+            cairo_stroke(cr);
+            colour(cr, 224, 210, 164);
+            const double cx = sx + sw * 0.5;
+            const double cy = ay + ah * 0.5;
+            const double r = std::max(3.0, std::min(sw, ah) * 0.25);
+            cairo_move_to(cr, cx, up ? (cy - r) : (cy + r));
+            cairo_line_to(cr, cx - r, up ? (cy + r * 0.7) : (cy - r * 0.7));
+            cairo_line_to(cr, cx + r, up ? (cy + r * 0.7) : (cy - r * 0.7));
+            cairo_close_path(cr);
+            cairo_fill(cr);
+        };
+        drawArrowBox(sy, true);
+        drawArrowBox(sy + sh - ah, false);
+
+        const int trackY = scrollBarY_ + scrollArrowH_;
+        const int trackH = std::max(1, scrollBarH_ - 2 * scrollArrowH_);
+        const int maxFirst = std::max(1, int(items_.size()) - visible_);
+        scrollThumbH_ = std::clamp(trackH * visible_ / int(items_.size()), std::max(14, int(16 * lw)), trackH);
+        const int travel = std::max(0, trackH - scrollThumbH_);
+        scrollThumbTop_ = trackY + (travel * first_) / maxFirst;
+        colour(cr, 118, 124, 86);
+        cairo_rectangle(cr, sx + 2.0 * lw, double(scrollThumbTop_), sw - 4.0 * lw, double(scrollThumbH_));
+        cairo_fill_preserve(cr);
+        colour(cr, 206, 186, 120);
+        cairo_stroke(cr);
+    }
     if (cairo_status(cr) != CAIRO_STATUS_SUCCESS) throw std::runtime_error(cairo_status_to_string(cairo_status(cr)));
 
     width_ = unsigned(panelW);
@@ -423,6 +489,12 @@ MenuResult Menu::handle(const SDL_Event& event) {
         case SDLK_PAGEDOWN: scroll(std::max(1, visible_ - 1)); break;
         case SDLK_HOME: scroll(-int(items_.size())); break;
         case SDLK_END: scroll(int(items_.size())); break;
+        case SDLK_LEFT:
+            if (!event.key.repeat && highlight_ >= 0) result.step = -1;
+            break;
+        case SDLK_RIGHT:
+            if (!event.key.repeat && highlight_ >= 0) result.step = 1;
+            break;
         case SDLK_RETURN: case SDLK_KP_ENTER: case SDLK_SPACE:
             if (!event.key.repeat && highlight_ >= 0) result.activated = items_[highlight_].id;
             break;
@@ -450,6 +522,22 @@ MenuResult Menu::handle(const SDL_Event& event) {
     case SDL_EVENT_MOUSE_BUTTON_DOWN: {
         result.consumed = true;
         if (event.button.button != SDL_BUTTON_LEFT) return result;
+        if (scrollBarW_ > 0) {
+            int w = 0, h = 0, pixelW = 0, pixelH = 0;
+            if (SDL_GetWindowSize(parent_, &w, &h) && SDL_GetWindowSizeInPixels(parent_, &pixelW, &pixelH)) {
+                if (const auto phys = hidpi::windowToPhysical(double(event.button.x), double(event.button.y), w, h, pixelW, pixelH)) {
+                    const double px = phys->x - left_, py = phys->y - top_;
+                    if (px >= scrollBarX_ && px < scrollBarX_ + scrollBarW_ &&
+                        py >= scrollBarY_ && py < scrollBarY_ + scrollBarH_) {
+                        if (py < scrollBarY_ + scrollArrowH_) scroll(-1);
+                        else if (py >= scrollBarY_ + scrollBarH_ - scrollArrowH_) scroll(1);
+                        else if (py < scrollThumbTop_) scroll(-std::max(1, visible_ - 1));
+                        else if (py >= scrollThumbTop_ + scrollThumbH_) scroll(std::max(1, visible_ - 1));
+                        return result;
+                    }
+                }
+            }
+        }
         const int row = rowAt(event.button.x, event.button.y);
         if (row >= 0) { highlight_ = armed_ = row; render(); }
         return result;

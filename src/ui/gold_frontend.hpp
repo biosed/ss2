@@ -351,6 +351,7 @@ struct GoldPostMissionStats {
     bool canReplay{true};
     bool canBrowseCampaigns{true};
     bool canBrowseMissions{true};
+    bool canReturnToMainMenu{false};
     float sfxVolume{1.0f};
 };
 

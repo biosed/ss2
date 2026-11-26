@@ -145,10 +145,14 @@ std::vector<std::pair<size_t, std::pair<int, int>>> TutorialUnits::vehicleFormat
     const double rx = -fy;
     const double ry = fx;
 
+    const std::uint16_t terrainMask =
+        !eligibleIds.empty() && eligibleIds[0] < vehicles_.size()
+            ? vehicles_[eligibleIds[0]].forbiddenTerrainMask
+            : std::uint16_t{0x00F0u};
     const auto isWalkableMapPt = [&](int px, int py) {
         if (!mapBounds(px, py)) return false;
         const SubCell c = placementCell(px, py, originX_);
-        return grid_.inBounds(c) && grid_.walkable(c);
+        return grid_.walkableMask(c, terrainMask);
     };
 
     const size_t n = eligibleIds.size();
@@ -176,7 +180,10 @@ std::vector<std::pair<size_t, std::pair<int, int>>> TutorialUnits::vehicleFormat
                 const int px = std::clamp(candX + ox, 0, std::max(0, mapPixelW_ - 1));
                 const int py = std::clamp(candY + oy, 0, std::max(0, mapPixelH_ - 1));
                 if (isWalkableMapPt(px, py)) {
-                    chosen = {px, py};
+                    const SubCell c = placementCell(px, py, originX_);
+                    const int wu = c.x * 16 + 8;
+                    const int wv = c.y * 16 + 8;
+                    chosen = {originX_ + wu - wv, (wu + wv) / 2};
                     break;
                 }
             }
@@ -641,6 +648,35 @@ bool TutorialUnits::isValidVehicleAttackTarget(size_t targetIdx, int viewerOwner
 
 size_t TutorialUnits::spawnVehicle(const assets::VehicleUnit& unit) {
     const size_t index = appendVehicle(unit);
+    if (index < vehicles_.size()) {
+        auto& v = vehicles_[index];
+        if (v.alive && v.speedPx > 0.0 && !grid_.walkableMask(v.cell, v.forbiddenTerrainMask)) {
+            int bestD2 = 1000000;
+            SubCell bestCell = v.cell;
+            bool found = false;
+            for (int dy = -8; dy <= 8; ++dy) {
+                for (int dx = -8; dx <= 8; ++dx) {
+                    const SubCell cand{v.cell.x + dx, v.cell.y + dy};
+                    if (!grid_.walkableMask(cand, v.forbiddenTerrainMask)) continue;
+                    const int d2 = dx * dx + dy * dy;
+                    if (d2 < bestD2) {
+                        bestD2 = d2;
+                        bestCell = cand;
+                        found = true;
+                    }
+                }
+            }
+            if (found) {
+                const int wu = bestCell.x * 16 + 8;
+                const int wv = bestCell.y * 16 + 8;
+                v.cell = bestCell;
+                v.x = originX_ + wu - wv;
+                v.y = (wu + wv) / 2;
+                v.fx = static_cast<double>(v.x);
+                v.fy = static_cast<double>(v.y);
+            }
+        }
+    }
     if (fog_) refreshSpotting(nullptr, true);
     emitVehiclePose(index);
     return index;
@@ -1501,7 +1537,34 @@ bool TutorialUnits::canVehicleStepTo(const Vehicle& v, double nextFx, double nex
     if (!grid_.inBounds(v.cell)) {
         return outCell.x >= 0 && outCell.y >= 0 && outCell.x < grid_.width() && outCell.y < grid_.height();
     }
-    return grid_.inBounds(outCell) && grid_.walkableMask(outCell, v.forbiddenTerrainMask);
+    if (grid_.walkableMask(outCell, v.forbiddenTerrainMask)) return true;
+    // Allow a vehicle trapped on an initially blocked subcell to escape toward nearest open subcell.
+    if (grid_.inBounds(outCell) && !grid_.walkableMask(v.cell, v.forbiddenTerrainMask)) {
+        int bestMan = 1000;
+        int bestD2 = 1000000;
+        SubCell escapeCell{};
+        bool found = false;
+        for (int dy = -6; dy <= 6; ++dy) {
+            for (int dx = -6; dx <= 6; ++dx) {
+                const SubCell cand{v.cell.x + dx, v.cell.y + dy};
+                if (!grid_.walkableMask(cand, v.forbiddenTerrainMask)) continue;
+                const int man = std::abs(dx) + std::abs(dy);
+                const int d2 = dx * dx + dy * dy;
+                if (man < bestMan || (man == bestMan && d2 < bestD2)) {
+                    bestMan = man;
+                    bestD2 = d2;
+                    escapeCell = cand;
+                    found = true;
+                }
+            }
+        }
+        if (found) {
+            const int curDist = std::abs(v.cell.x - escapeCell.x) + std::abs(v.cell.y - escapeCell.y);
+            const int candDist = std::abs(outCell.x - escapeCell.x) + std::abs(outCell.y - escapeCell.y);
+            return candDist < curDist;
+        }
+    }
+    return false;
 }
 
 bool TutorialUnits::isVehicleTargetValidFor(int attackerOwner, bool targetIsVehicle, size_t targetIdx) const {
@@ -1865,13 +1928,17 @@ void TutorialUnits::stepVehicles(std::vector<SoldierPose>& changed) {
             continue;
         }
 
-        while (v.waypoints.size() > 1) {
-            const auto [wx, wy] = v.waypoints.front();
-            if (det::detHypot(static_cast<double>(wx) - v.fx, static_cast<double>(wy) - v.fy) > stepSpeed) {
-                break;
+        const auto pruneReachedWaypoints = [&]() {
+            const double pruneRadius = std::max(stepSpeed, kVehicleArrivePx);
+            while (v.waypoints.size() > 1) {
+                const auto [wx, wy] = v.waypoints.front();
+                if (det::detHypot(static_cast<double>(wx) - v.fx, static_cast<double>(wy) - v.fy) > pruneRadius) {
+                    break;
+                }
+                v.waypoints.pop_front();
             }
-            v.waypoints.pop_front();
-        }
+        };
+        pruneReachedWaypoints();
         if (v.waypoints.size() == 1) {
             const auto [wx, wy] = v.waypoints.front();
             if (det::detHypot(static_cast<double>(wx) - v.fx, static_cast<double>(wy) - v.fy) <= kVehicleArrivePx) {
@@ -1934,64 +2001,40 @@ void TutorialUnits::stepVehicles(std::vector<SoldierPose>& changed) {
         SubCell nextCell = v.cell;
         bool moved = tryStepToward(stepTx, stepTy, !v.waypoints.empty(), nextFx, nextFy, nextCell);
 
-        if (!moved && v.waypoints.empty()) {
+        const auto repathVehicleWaypoints = [&](int maxSteps) -> bool {
             const SubCell destCell = pointerCell(tx, ty, originX_);
-            if (grid_.inBounds(destCell)) {
-                const auto dirs = grid_.findTileDirectionsForMask(v.cell, destCell, v.forbiddenTerrainMask, 256);
-                if (!dirs.empty()) {
-                    int curTx = v.cell.x / 2;
-                    int curTy = v.cell.y / 2;
-                    const auto pushTileCenter = [&](int tileX, int tileY) {
-                        const int wu = tileX * 32 + 16;
-                        const int wv = tileY * 32 + 16;
-                        v.waypoints.emplace_back(originX_ + wu - wv, (wu + wv) / 2);
-                    };
-                    for (std::uint8_t d : dirs) {
-                        if (d >= 8u) break;
-                        const int dxTile = kTileDx[d];
-                        const int dyTile = kTileDy[d];
-                        if (dxTile != 0 && dyTile != 0) {
-                            const SubCell sideA{(curTx + dxTile) * 2, curTy * 2};
-                            const SubCell sideB{curTx * 2, (curTy + dyTile) * 2};
-                            if (!grid_.walkableMask(sideA, v.forbiddenTerrainMask) ||
-                                !grid_.walkableMask(sideB, v.forbiddenTerrainMask)) {
-                                if (grid_.walkableMask(sideA, v.forbiddenTerrainMask)) {
-                                    pushTileCenter(curTx + dxTile, curTy);
-                                } else if (grid_.walkableMask(sideB, v.forbiddenTerrainMask)) {
-                                    pushTileCenter(curTx, curTy + dyTile);
-                                }
-                            }
-                        }
-                        curTx += dxTile;
-                        curTy += dyTile;
-                        pushTileCenter(curTx, curTy);
-                    }
-                    if (!v.waypoints.empty()) {
-                        v.waypoints.back() = {tx, ty};
-                        while (v.waypoints.size() > 1) {
-                            const auto [wx, wy] = v.waypoints.front();
-                            if (det::detHypot(static_cast<double>(wx) - v.fx, static_cast<double>(wy) - v.fy) > stepSpeed) {
-                                break;
-                            }
-                            v.waypoints.pop_front();
-                        }
-                        if (!v.waypoints.empty()) {
-                            stepTx = v.waypoints.front().first;
-                            stepTy = v.waypoints.front().second;
-                            moved = tryStepToward(stepTx, stepTy, true, nextFx, nextFy, nextCell);
-                        }
-                    }
-                }
+            const auto subPath = grid_.findSubCellPathForMask(v.cell, destCell, v.forbiddenTerrainMask, maxSteps);
+            if (subPath.empty()) return false;
+            v.waypoints.clear();
+            for (const SubCell& sc : subPath) {
+                const int wu = sc.x * 16 + 8;
+                const int wv = sc.y * 16 + 8;
+                v.waypoints.emplace_back(originX_ + wu - wv, (wu + wv) / 2);
             }
+            if (!v.waypoints.empty() && grid_.walkableMask(destCell, v.forbiddenTerrainMask)) {
+                v.waypoints.back() = {tx, ty};
+            }
+            pruneReachedWaypoints();
+            if (v.waypoints.empty()) return false;
+            stepTx = v.waypoints.front().first;
+            stepTy = v.waypoints.front().second;
+            return tryStepToward(stepTx, stepTy, true, nextFx, nextFy, nextCell);
+        };
+
+        if (!moved && v.waypoints.empty()) {
+            moved = repathVehicleWaypoints(768);
         }
 
         if (!moved) {
             ++v.stuckTicks;
-            if (v.stuckTicks <= 14) {
-                static constexpr std::array<double, 6> kWideSteer{
+            if (v.stuckTicks <= 14 &&
+                (v.waypoints.empty() || v.stuckTicks == 1 || v.stuckTicks == 5 || v.stuckTicks == 10)) {
+                moved = repathVehicleWaypoints(768);
+            }
+            if (!moved && v.stuckTicks <= 14) {
+                static constexpr std::array<double, 4> kWideSteer{
                     0.7853981633974483, -0.7853981633974483,
-                    1.2217304763960306, -1.2217304763960306,
-                    1.6580627893946132, -1.6580627893946132
+                    1.2217304763960306, -1.2217304763960306
                 };
                 const double dx = static_cast<double>(stepTx) - v.fx;
                 const double dy = static_cast<double>(stepTy) - v.fy;
@@ -2004,6 +2047,9 @@ void TutorialUnits::stepVehicles(std::vector<SoldierPose>& changed) {
                         const auto sc = det::detSinCos(ang);
                         const double candFx = v.fx + (ux * sc.c - uy * sc.s) * stepLen;
                         const double candFy = v.fy + (ux * sc.s + uy * sc.c) * stepLen;
+                        const double candDist = det::detHypot(static_cast<double>(stepTx) - candFx,
+                                                              static_cast<double>(stepTy) - candFy);
+                        if (candDist >= dist - 0.05) continue;
                         SubCell candCell{};
                         if (canVehicleStepTo(v, candFx, candFy, candCell) && !isDetectedAiMineCell(candCell)) {
                             nextFx = candFx;
@@ -2011,31 +2057,6 @@ void TutorialUnits::stepVehicles(std::vector<SoldierPose>& changed) {
                             nextCell = candCell;
                             moved = true;
                             break;
-                        }
-                    }
-                }
-            }
-            if (!moved && v.stuckTicks <= 14 && (v.stuckTicks == 1 || v.stuckTicks == 6 || v.stuckTicks == 11)) {
-                const SubCell destCell = pointerCell(tx, ty, originX_);
-                if (grid_.inBounds(destCell)) {
-                    const auto dirs = grid_.findTileDirectionsForMask(v.cell, destCell, v.forbiddenTerrainMask, 384);
-                    if (!dirs.empty()) {
-                        v.waypoints.clear();
-                        int curTx = v.cell.x / 2;
-                        int curTy = v.cell.y / 2;
-                        for (std::uint8_t d : dirs) {
-                            if (d >= 8u) break;
-                            curTx += kTileDx[d];
-                            curTy += kTileDy[d];
-                            const int wu = curTx * 32 + 16;
-                            const int wv = curTy * 32 + 16;
-                            v.waypoints.emplace_back(originX_ + wu - wv, (wu + wv) / 2);
-                        }
-                        if (!v.waypoints.empty()) {
-                            v.waypoints.back() = {tx, ty};
-                            stepTx = v.waypoints.front().first;
-                            stepTy = v.waypoints.front().second;
-                            moved = tryStepToward(stepTx, stepTy, true, nextFx, nextFy, nextCell);
                         }
                     }
                 }
@@ -2069,7 +2090,13 @@ void TutorialUnits::stepVehicles(std::vector<SoldierPose>& changed) {
             emitVehiclePose(i);
             continue;
         }
-        v.stuckTicks = 0;
+        const double oldStepDist = det::detHypot(static_cast<double>(stepTx) - v.fx,
+                                                 static_cast<double>(stepTy) - v.fy);
+        const double newStepDist = det::detHypot(static_cast<double>(stepTx) - nextFx,
+                                                 static_cast<double>(stepTy) - nextFy);
+        if (nextCell != v.cell || newStepDist <= kVehicleArrivePx || newStepDist < oldStepDist - 0.25 * stepSpeed) {
+            v.stuckTicks = 0;
+        }
 
         const double prevFx = v.fx;
         const double prevFy = v.fy;

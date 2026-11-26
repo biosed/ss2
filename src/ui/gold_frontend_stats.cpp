@@ -573,7 +573,11 @@ std::vector<GoldPostMissionScreen::ActionButton> GoldPostMissionScreen::buildAct
     if (stats_.canBrowseMissions) {
         raw.push_back({"missions", tr("Missions"), 'M'});
     }
-    raw.push_back({"resume", tr("Continue"), 'C'});
+    if (stats_.canReturnToMainMenu) {
+        raw.push_back({"main_menu", tr("Main Menu"), 'E'});
+    } else {
+        raw.push_back({"resume", tr("Continue"), 'C'});
+    }
     raw.push_back({"quit", tr("Quit to desktop"), 'Q'});
 
     std::vector<ActionButton> out;

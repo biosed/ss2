@@ -57,6 +57,8 @@ public:
     std::vector<std::uint8_t> findTileDirections(SubCell start, SubCell goal, int maxSteps = 512) const;
     std::vector<std::uint8_t> findTileDirectionsForMask(SubCell start, SubCell goal,
                                                         std::uint16_t forbiddenMask, int maxSteps = 256) const;
+    std::vector<SubCell> findSubCellPathForMask(SubCell start, SubCell goal,
+                                                std::uint16_t forbiddenMask, int maxSteps = 512) const;
     std::optional<AcceptedStep> acceptStep(SubCell from, std::uint8_t tileDirection) const;
     std::vector<std::uint8_t> findDirections(SubCell start, SubCell goal, int maxSteps = 512) const;
     std::vector<SubCell> findPath(SubCell start, SubCell goal, int maxSteps = 512) const;

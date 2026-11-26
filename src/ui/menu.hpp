@@ -22,6 +22,7 @@ struct MenuItem {
 struct MenuResult {
     bool consumed = false;      // the event belonged to the menu; do not pass it on
     bool closed = false;        // Escape was pressed; the menu is now closed
+    int step = 0;               // -1 on Left arrow, +1 on Right arrow when highlighted
     std::string activated;      // id of the row that was chosen, or empty
 };
 
@@ -74,6 +75,8 @@ private:
     std::vector<MenuItem> items_;
     bool active_ = false, follow_ = false;   // follow_: bring the highlight into view on the next render
     int highlight_ = -1, armed_ = -1, first_ = 0, visible_ = 0, rowHeight_ = 0, rowsTop_ = 0;
+    int scrollBarX_ = 0, scrollBarY_ = 0, scrollBarW_ = 0, scrollBarH_ = 0, scrollArrowH_ = 0;
+    int scrollThumbTop_ = 0, scrollThumbH_ = 0;
     unsigned width_ = 0, height_ = 0;
     int left_ = 0, top_ = 0;
     std::vector<std::uint8_t> rgba_;
