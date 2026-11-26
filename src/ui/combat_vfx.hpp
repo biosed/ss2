@@ -1725,7 +1725,7 @@ public:
         if (const auto* sh = bank_.frameAt(CombatVfxClip::ParachuteShadow, 0u, frameIdx)) {
             const float shShift = std::max(0.0f, altitudePx) * 0.35f;
             out.push_back({
-                makeWorldSprite(*sh, simX + shShift, simY + shShift * 0.5f, mapScale, 1.0f, 0.0f, 0.42f * fade),
+                makeWorldSprite(*sh, simX + shShift, simY + shShift * 0.5f, mapScale, 1.0f, 1.0f, 0.42f * fade),
                 -15000 + static_cast<int>(simY)
             });
         }

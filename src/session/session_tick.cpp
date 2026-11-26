@@ -399,6 +399,11 @@ void GameSession::stepSimulationEvents() {
             if (!pose.alive && prevHp > 0) {
                 const auto& deadUnit = scene->units().at(pose.index);
                 fallenSoldiers.push_back({pose.x, pose.y, deadUnit.id, pose.direction});
+                if (fallenSoldiers.size() > 256u) {
+                    fallenSoldiers.erase(
+                        fallenSoldiers.begin(),
+                        fallenSoldiers.begin() + static_cast<std::ptrdiff_t>(fallenSoldiers.size() - 256u));
+                }
                 if (isHostileOwner(pose.owner)) {
                     ++enemyInfKilled;
                     enemyScoreEarned += scoreValueForId(deadUnit.id, false);
@@ -471,6 +476,11 @@ void GameSession::stepSimulationEvents() {
                     else movingSmokeVehicles.erase(vp.index);
                 } else {
                     movingSmokeVehicles.erase(vp.index);
+                }
+                if (vp.alive && vp.hp > 0 && vp.moving && smSpec && smSpec->isTracked()) {
+                    if (crushOrBlastTreesAt(vp.x, vp.y, 16, combatEffects && vp.visible)) {
+                        spritesDirty = true;
+                    }
                 }
                 if (combatEffects && (!smSpec || (!smSpec->isTrain() && !smSpec->isSupplyCrate()))) {
                     const std::size_t prevDecals = combatVfx.activeDecalCount();
@@ -928,18 +938,20 @@ void GameSession::stepSimulationEvents() {
                 }
                 combatVfx.spawnExplosion(static_cast<float>(bru.x), static_cast<float>(bru.y), 1, false);
                 spritesDirty = true;
-            } else if (bru.repairedThisTick) {
+            } else if (bru.repairedThisTick || (wasDestroyed && !bru.destroyed)) {
                 if (wasDestroyed && !bru.destroyed) {
                     showNotice(ss2::tr("Bridge repaired and passable!"), ss2::NoticeKind::accepted);
+                    if (audio && playWorldSound("construct", 0.52f, bru.x, bru.y, ss2::VoicePriority::Normal)) {
+                        lastRepairAudioAt = now;
+                    }
+                } else if (audio && now - lastRepairAudioAt >= std::chrono::milliseconds(1500)) {
+                    if (playWorldSound("construct", 0.42f, bru.x, bru.y, ss2::VoicePriority::Low)) {
+                        lastRepairAudioAt = now;
+                    }
                 }
                 if (combatEffects && activeVfx.size() < 64 && isBuildingPointVisible(bru.x, bru.y)) {
                     activeVfx.push_back({ActiveVfx::Kind::RepairPulse, bx, by, bx, by, now,
                                          std::chrono::milliseconds(550)});
-                }
-                if (audio && now - lastRepairAudioAt >= std::chrono::milliseconds(1500)) {
-                    if (playWorldSound("construct", 0.42f, bru.x, bru.y, ss2::VoicePriority::Low)) {
-                        lastRepairAudioAt = now;
-                    }
                 }
             }
         }

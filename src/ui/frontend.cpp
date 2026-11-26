@@ -335,7 +335,8 @@ std::vector<MenuItem> FrontEnd::items() const {
             const bool hasMissions = camp && !camp->missions.empty();
             if (hasMissions) {
                 for (std::size_t i = 0; i < camp->missions.size(); ++i) {
-                    items.push_back({"cmission:" + std::to_string(i), camp->missions[i].name, camp->missions[i].tag, true});
+                    items.push_back({"cmission:" + std::to_string(i), camp->missions[i].name, camp->missions[i].tag,
+                                     camp->missions[i].unlocked});
                 }
             } else {
                 items.push_back({"", tr("No missions installed."), "", false});
@@ -436,6 +437,10 @@ void FrontEnd::activate(const std::string& id) {
     if (std::size_t index = 0; parseTailIndex(id, "cmission:", index)) {
         if (const auto* camp = currentCampaign(); camp && index < camp->missions.size()) {
             selectCampaignMission(index);
+            if (!camp->missions[index].unlocked) {
+                notice_ = tr("Complete the previous mission first.");
+                return;
+            }
             briefingFromCampaign_ = true;
             screen_ = Screen::Briefing;
         }
@@ -507,9 +512,13 @@ void FrontEnd::activate(const std::string& id) {
             if (id == "difficulty") {
                 cycleDifficulty(1);
             } else if (id == "start") {
-                if (selectedCampaignMissionEntry()) {
-                    briefingFromCampaign_ = true;
-                    screen_ = Screen::Briefing;
+                if (const auto* m = selectedCampaignMissionEntry()) {
+                    if (!m->unlocked) {
+                        notice_ = tr("Complete the previous mission first.");
+                    } else {
+                        briefingFromCampaign_ = true;
+                        screen_ = Screen::Briefing;
+                    }
                 } else {
                     notice_ = tr("No missions installed.");
                 }

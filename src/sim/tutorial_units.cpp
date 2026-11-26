@@ -488,6 +488,10 @@ size_t TutorialUnits::appendSoldier(const assets::Infantry& unit, SubCell cell, 
             s.desc.rangeBase = spec->shot1.range;
             s.desc.rangeDelta = std::max(0, spec->shot1.rangeMax - spec->shot1.range);
             if (spec->shot1.deadzone > 0) s.desc.deadzoneBase = spec->shot1.deadzone;
+            if (spec->shot1.accuracyBase > 0) {
+                s.desc.accuracyBase = spec->shot1.accuracyBase;
+                s.desc.accuracyDelta = spec->shot1.accuracyMin - spec->shot1.accuracyBase;
+            }
             if (spec->shot1.reloadTicks > 0) {
                 s.desc.reloadBase = spec->shot1.reloadTicks;
                 s.desc.reloadDelta = -std::max(0, s.desc.reloadBase / 6);
@@ -497,6 +501,9 @@ size_t TutorialUnits::appendSoldier(const assets::Infantry& unit, SubCell cell, 
                 s.desc.burstReloadBase = spec->shot1.burstReloadTicks;
                 s.desc.burstReloadDelta = -std::max(0, s.desc.burstReloadBase / 6);
             }
+        }
+        if (spec->shot1.hitType != assets::HitType::None) {
+            s.primaryHitType = spec->shot1.hitType;
         }
     }
     s.hp = unit.hp > 0 ? unit.hp : s.desc.maxHp;
@@ -543,6 +550,8 @@ size_t TutorialUnits::appendSoldier(const assets::Infantry& unit, SubCell cell, 
         s.moraleRallyRate = std::clamp((retailRate + 1) / 2, 2, 6);
     }
     s.isAntiVehicle = isAntiVehicleSoldierId(lowId) || (spec && spec->isAntiTankInfantry());
+    s.hasCatalogAtShot = (spec && !spec->isVehicle && s.isAntiVehicle &&
+                          spec->shot1.damage > 0 && spec->shot1.range > 0);
     s.isFlamer = lowId.find("flam") != std::string::npos || (spec && spec->hasFlamethrower());
     s.isSniper = lowId.find("sniper") != std::string::npos || (spec && spec->isSniper());
     s.isSapper = lowId.find("sapper") != std::string::npos || lowId.find("miner") != std::string::npos ||
@@ -1470,10 +1479,10 @@ void TutorialUnits::refreshSpotting(std::vector<SoldierPose>* changed, bool emit
                 continue;
             }
             const int occSight = scaleByExpa(s.desc.sightBase, s.desc.sightDelta, s.expa);
-            const int garBonus = 3 + (s.hasBinoculars && s.binoculars ? s.binoSightBonus : 0);
+            const int garBonus = b.sightBonus + (s.hasBinoculars && s.binoculars ? s.binoSightBonus : 0);
             const int preWeather = occSight + garBonus;
             int r = std::clamp(visPct >= 100 ? preWeather : (preWeather * visPct) / 100, 1, 31);
-            if (difficulty_ <= 1 && s.owner == 0) {
+            if (difficulty_ <= 1 && s.owner == 0 && !multiplayerSymmetry_) {
                 r = std::clamp((r * 13) / 10, 1, 31);
             }
             revealWithAllies(b.entryCell.x / 2, b.entryCell.y / 2, r, s.owner);
@@ -1508,14 +1517,14 @@ void TutorialUnits::refreshSpotting(std::vector<SoldierPose>* changed, bool emit
         if (v.bonusSight != 0) {
             effVr = std::clamp(effVr + (v.bonusSight * visPct) / 100, 1, 31);
         }
-        if (difficulty_ <= 1 && v.owner == 0) {
+        if (difficulty_ <= 1 && v.owner == 0 && !multiplayerSymmetry_) {
             effVr = std::clamp((effVr * 13) / 10, 1, 31);
         }
         if (marchBonus > 0) {
             // Gold 0x1001d3e0..0x1001d46f adds (marchsightbonus * visPct) / 100 after base vehicle sight,
             // re-applies Easy 1.3x for player units, clamps to 31 (0x1f), and takes max(base, result).
             int withMarch = effVr + (marchBonus * visPct) / 100;
-            if (difficulty_ <= 1 && v.owner == 0) {
+            if (difficulty_ <= 1 && v.owner == 0 && !multiplayerSymmetry_) {
                 withMarch = (withMarch * 13) / 10;
             }
             effVr = std::max(effVr, std::min(31, withMarch));

@@ -341,14 +341,22 @@ void GameSession::updateHudAndBeams() {
         hud->update(hs);
         hud->draw(renderer);
     }
-    std::vector<std::size_t> crippledSmokeVehicles;
+    std::vector<std::size_t> lightDamageSmokeVehicles;
+    std::vector<std::size_t> heavyDamageSmokeVehicles;
     if (combatEffects && vehicleScene && unitCatalog) {
         const auto& vehs = vehicleScene->vehicles();
-        for (std::size_t vi = 0; vi < vehs.size() && crippledSmokeVehicles.size() < 8u; ++vi) {
+        for (std::size_t vi = 0; vi < vehs.size(); ++vi) {
             const auto& v = vehs[vi];
             if (!v.alive || v.hp <= 0 || !v.visible) continue;
-            if (const auto* spec = unitCatalog->find(v.id); spec && spec->moveDamageHp > 0 && v.hp < spec->moveDamageHp) {
-                crippledSmokeVehicles.push_back(vi);
+            const auto* spec = unitCatalog->find(v.id);
+            if (spec && spec->isSupplyCrate()) continue;
+            const int maxHp = (vi < initialVehicleHp.size() && initialVehicleHp[vi] > 0) ? initialVehicleHp[vi] : 100;
+            const bool moveImp = (vi < vehicleMoveImpaired.size() && vehicleMoveImpaired[vi]) ||
+                                 (spec && spec->moveDamageHp > 0 && v.hp < spec->moveDamageHp);
+            if (static_cast<std::int64_t>(v.hp) * 4 < maxHp || moveImp) {
+                if (heavyDamageSmokeVehicles.size() < 12u) heavyDamageSmokeVehicles.push_back(vi);
+            } else if (static_cast<std::int64_t>(v.hp) * 2 < maxHp) {
+                if (lightDamageSmokeVehicles.size() < 12u) lightDamageSmokeVehicles.push_back(vi);
             }
         }
     }
@@ -361,14 +369,66 @@ void GameSession::updateHudAndBeams() {
         orderLines = simulation->selectionOrderLines(sids, vids);
     }
     std::vector<ss2::VehicleRangePreview> rangePreviews;
-    if (attackGroundArmed && simulation && selection &&
+    if (simulation && selection &&
         (!selection->selectedVehicles().empty() || !selection->selected().empty())) {
         const auto& vsel = selection->selectedVehicles();
         const auto& sel = selection->selected();
         const std::vector<size_t> vids(vsel.begin(), vsel.end());
         const std::vector<size_t> sids(sel.begin(), sel.end());
         rangePreviews = simulation->selectionRangePreviews(vids, sids);
-        if (rangePreviews.size() > 3u) rangePreviews.resize(3u);
+        if (rangePreviews.size() > 4u) rangePreviews.resize(4u);
+    }
+    const bool altHeld = (SDL_GetModState() & SDL_KMOD_ALT) != 0;
+    struct ThreatRingPreview {
+        bool active{false};
+        float x{0.0f}, y{0.0f}, rangePx{0.0f}, deadzonePx{0.0f};
+    } threatRing;
+    if (altHeld && selection && SDL_GetMouseFocus() == window && !briefing.active() && !menu.active()) {
+        float mx{}, my{};
+        SDL_GetMouseState(&mx, &my);
+        if (!hud || !hud->opaqueAtWindow(mx, my)) {
+            const auto [mapX, mapY] = renderer.mapPosition(mx, my);
+            if (vehicleScene) {
+                if (const auto vHov = selection->vehicleAt(int(std::floor(mapX)), int(std::floor(mapY)))) {
+                    const auto& tv = vehicleScene->vehicles().at(*vHov);
+                    if (tv.alive && tv.hp > 0 && tv.visible && isHostileOwner(tv.owner)) {
+                        const auto* vSpec = unitCatalog ? unitCatalog->find(tv.id) : nullptr;
+                        float rPx = 0.0f;
+                        float dzPx = 0.0f;
+                        if (vSpec) {
+                            if (vSpec->shot1.damage > 0 && vSpec->shot1.range > 0) {
+                                rPx = static_cast<float>(vSpec->isKamikaze()
+                                    ? std::clamp(static_cast<double>(vSpec->shot1.range), 48.0, 96.0)
+                                    : std::clamp(vSpec->shot1.range * 0.65, 140.0, 560.0));
+                                dzPx = static_cast<float>(std::max(0.0, vSpec->shot1.deadzone * 0.5));
+                            } else if (vSpec->shot2.damage > 0 && vSpec->shot2.range > 0) {
+                                rPx = static_cast<float>(std::clamp(vSpec->shot2.range * 0.65, 140.0, 520.0));
+                            }
+                        } else {
+                            rPx = 260.0f;
+                        }
+                        if (rPx > 12.0f) {
+                            threatRing = {true, static_cast<float>(tv.x), static_cast<float>(tv.y), rPx, dzPx};
+                        }
+                    }
+                }
+            }
+            if (!threatRing.active && !liveBuildings.empty()) {
+                const int simX = int(std::floor(mapX / mapScale));
+                const int simY = int(std::floor(mapY / mapScale));
+                if (const auto bHov = buildingAtMap(simX, simY)) {
+                    const auto& tb = liveBuildings[*bHov];
+                    if (!tb.destroyed && tb.owner >= 0 && isHostileOwner(tb.owner) &&
+                        tb.occupantCount > 0 && isBuildingPointVisible(tb.x, tb.y)) {
+                        const int garBonus = unitCatalog
+                            ? std::clamp(unitCatalog->buildingDefense().bonusShotRange / 3, 32, 64)
+                            : 48;
+                        threatRing = {true, static_cast<float>(tb.x), static_cast<float>(tb.y),
+                                      static_cast<float>(200 + garBonus), 0.0f};
+                    }
+                }
+            }
+        }
     }
     bool previewRing = false;
     float ringX = 0.0f, ringY = 0.0f, ringRad = 0.0f;
@@ -502,9 +562,11 @@ void GameSession::updateHudAndBeams() {
     const bool hasSelectionRings = enhancedGraphics && hasSelectedUnits;
     const bool hasWeatherBeams = enhancedGraphics && combatEffects &&
         (missionWeather == assets::WeatherKind::Rain || missionWeather == assets::WeatherKind::Snow);
-    if (!activeVfx.empty() || !orderPulses.empty() || !burningWrecks.empty() || !crippledSmokeVehicles.empty() ||
+    if (!activeVfx.empty() || !orderPulses.empty() || !burningWrecks.empty() ||
+        !lightDamageSmokeVehicles.empty() || !heavyDamageSmokeVehicles.empty() ||
         !movingSmokeVehicles.empty() || !livePlanes.empty() || hasAirTrailBeams || !orderLines.empty() ||
-        previewRing || facePreview || !rangePreviews.empty() || !visibleOnScreenMines.empty() ||
+        previewRing || facePreview || !rangePreviews.empty() || threatRing.active ||
+        objectiveMarkerSim.has_value() || !visibleOnScreenMines.empty() ||
         !statusBadges.empty() || !beamZeppelins.empty() || !activeBeacons.empty() ||
         hasSelectedUnits || hasSelectionRings || hasWeatherBeams || vfxWasNonEmpty) {
         const auto now = std::chrono::steady_clock::now();
@@ -519,8 +581,10 @@ void GameSession::updateHudAndBeams() {
         std::vector<ss2::MapBeam> beams;
         beams.reserve(visibleOnScreenMines.size() * 2u + statusBadges.size() * 3u + orderLines.size() * 2u +
                       orderPulses.size() * 24u + (previewRing ? 18u : 0u) + (facePreview ? 8u : 0u) +
-                      rangePreviews.size() * 40u + (hasSelectionRings ? 256u : 0u) +
-                      activeVfx.size() * 5u + burningWrecks.size() * 3u + crippledSmokeVehicles.size() +
+                      rangePreviews.size() * 64u + (threatRing.active ? 40u : 0u) +
+                      (objectiveMarkerSim ? 20u : 0u) + (hasSelectionRings ? 256u : 0u) +
+                      activeVfx.size() * 6u + burningWrecks.size() * 3u +
+                      lightDamageSmokeVehicles.size() + heavyDamageSmokeVehicles.size() * 2u +
                       std::min<std::size_t>(movingSmokeVehicles.size(), 6u));
         const float s = static_cast<float>(mapScale);
         const auto pushIsoEllipse = [&](float cx, float cy, float radiusSimPx, int segments, float lineW,
@@ -575,7 +639,7 @@ void GameSession::updateHudAndBeams() {
             if (scene) {
                 const auto& units = scene->units();
                 for (const size_t sid : selection->selected()) {
-                    if (beams.size() >= 112u) break;
+                    if (beams.size() >= 480u) break;
                     if (sid >= units.size()) continue;
                     const auto& u = units[sid];
                     if (u.hp <= 0 || !u.visible) continue;
@@ -583,12 +647,12 @@ void GameSession::updateHudAndBeams() {
                     const float uy = static_cast<float>(u.y) * s;
                     if (!inViewBounds(ux, uy)) continue;
                     const float barY = uy - (crouchedUnits.contains(sid) ? 24.0f : 30.0f) * s;
-                    if (selection->controlGroupOfInfantry(sid).has_value() && beams.size() < 112u) {
+                    if (selection->controlGroupOfInfantry(sid).has_value() && beams.size() < 480u) {
                         beams.push_back({ux - 10.5f * s, barY + 1.5f * s,
                                          ux - 10.5f * s, barY + 1.5f * s,
                                          3.8f * s, 244, 186, 78, 0.92f, 0.92f});
                     }
-                    if (simulation && beams.size() < 112u) {
+                    if (simulation && beams.size() < 480u) {
                         if (const auto rit = unitReloadWindow.find(sid);
                             rit != unitReloadWindow.end() && rit->second.durationTicks > 0u &&
                             curTick >= rit->second.startTick &&
@@ -606,7 +670,7 @@ void GameSession::updateHudAndBeams() {
             if (vehicleScene) {
                 const auto& vehs = vehicleScene->vehicles();
                 for (const size_t vid : selection->selectedVehicles()) {
-                    if (beams.size() >= 112u) break;
+                    if (beams.size() >= 480u) break;
                     if (vid >= vehs.size()) continue;
                     const auto& v = vehs[vid];
                     if (!v.alive || v.hp <= 0 || !v.visible) continue;
@@ -614,12 +678,12 @@ void GameSession::updateHudAndBeams() {
                     const float vy = static_cast<float>(v.y) * s;
                     if (!inViewBounds(vx, vy)) continue;
                     const float barY = static_cast<float>(v.height > 0 ? v.top - 5 : v.y - 26) * s;
-                    if (selection->controlGroupOfVehicle(vid).has_value() && beams.size() < 112u) {
+                    if (selection->controlGroupOfVehicle(vid).has_value() && beams.size() < 480u) {
                         beams.push_back({vx - 17.0f * s, barY + 1.5f * s,
                                          vx - 17.0f * s, barY + 1.5f * s,
                                          4.2f * s, 244, 186, 78, 0.92f, 0.92f});
                     }
-                    if (simulation && beams.size() < 112u) {
+                    if (simulation && beams.size() < 480u) {
                         if (const auto rit = vehReloadWindow.find(vid);
                             rit != vehReloadWindow.end() && rit->second.durationTicks > 0u &&
                             curTick >= rit->second.startTick &&
@@ -636,7 +700,7 @@ void GameSession::updateHudAndBeams() {
             }
         }
         for (const auto& op : orderPulses) {
-            if (beams.size() >= 112u) break;
+            if (beams.size() >= 480u) break;
             const float t = std::clamp(std::chrono::duration<float>(now - op.start).count() / 0.60f, 0.0f, 1.0f);
             const float fade = 1.0f - t;
             std::uint8_t r = 110, g = 224, b = 120;
@@ -644,26 +708,99 @@ void GameSession::updateHudAndBeams() {
             else if (op.kind == OrderPulse::Kind::Attack) { r = 235; g = 92; b = 68; }
             const float dx = static_cast<float>(op.dstSimX) * s;
             const float dy = static_cast<float>(op.dstSimY) * s;
-            if (beams.size() + 12u < 112u) {
+            if (beams.size() + 12u < 480u) {
                 pushIsoEllipse(dx, dy, 8.0f + 22.0f * t, 12, 1.8f * s, r, g, b, 0.78f * fade);
             }
-            if (beams.size() + 10u < 112u) {
+            if (beams.size() + 10u < 480u) {
                 pushIsoEllipse(dx, dy, 3.0f + 12.0f * t, 10, 1.4f * s, r, g, b, 0.55f * fade);
             }
-            if (op.hasSource && beams.size() < 112u) {
+            if (op.hasSource && beams.size() < 480u) {
                 beams.push_back({static_cast<float>(op.srcSimX) * s, static_cast<float>(op.srcSimY) * s,
                                  dx, dy, 1.4f * s, r, g, b, 0.08f * fade, 0.38f * fade});
             }
         }
-        for (const auto& rp : rangePreviews) {
-            const float vx = static_cast<float>(rp.x) * s;
-            const float vy = static_cast<float>(rp.y) * s;
-            pushIsoEllipse(vx, vy, rp.rangePx, 24, 1.5f * s, 244, 186, 78, 0.34f);
-            if (rp.deadzonePx > 12.0f) {
-                pushIsoEllipse(vx, vy, rp.deadzonePx, 16, 1.5f * s, 235, 92, 68, 0.42f);
+        {
+            const bool anySelBino = selection && std::ranges::any_of(selection->selected(), [&](size_t id) {
+                return binocularUnits.contains(id);
+            });
+            const bool showSightRings = altHeld || anySelBino;
+            const float rangeAlpha = attackGroundArmed ? 0.58f : 0.28f;
+            const float deadzoneAlpha = attackGroundArmed ? 0.55f : 0.34f;
+            for (const auto& rp : rangePreviews) {
+                if (beams.size() + 24u >= 480u) break;
+                const float vx = static_cast<float>(rp.x) * s;
+                const float vy = static_cast<float>(rp.y) * s;
+                pushIsoEllipse(vx, vy, rp.rangePx, 24, 1.5f * s, 244, 186, 78, rangeAlpha);
+                if (rp.deadzonePx > 12.0f && beams.size() + 16u < 480u) {
+                    pushIsoEllipse(vx, vy, rp.deadzonePx, 16, 1.5f * s, 235, 92, 68, deadzoneAlpha);
+                }
+                if (showSightRings && rp.sightPx > 12.0f && beams.size() + 24u < 480u) {
+                    pushIsoEllipse(vx, vy, rp.sightPx, 24, 1.4f * s, 105, 212, 235, 0.34f);
+                }
             }
         }
+        if (threatRing.active && beams.size() + 24u < 480u) {
+            const float tx = threatRing.x * s;
+            const float ty = threatRing.y * s;
+            pushIsoEllipse(tx, ty, threatRing.rangePx, 24, 1.8f * s, 235, 78, 68, 0.56f);
+            if (threatRing.deadzonePx > 12.0f && beams.size() + 16u < 480u) {
+                pushIsoEllipse(tx, ty, threatRing.deadzonePx, 16, 1.4f * s, 235, 78, 68, 0.42f);
+            }
+        }
+        if (objectiveMarkerSim && beams.size() + 18u < 480u) {
+            const float objX = static_cast<float>(objectiveMarkerSim->first) * s;
+            const float objY = static_cast<float>(objectiveMarkerSim->second) * s;
+            const float animT = std::chrono::duration<float>(now - animStart).count();
+            const float pulse = 0.5f + 0.5f * std::sin(animT * 4.2f);
+            int objWinH = viewWinH;
+            int objPixelH = viewWinH;
+            (void)SDL_GetWindowSizeInPixels(window, nullptr, &objPixelH);
+            const double mapViewH = hud
+                ? ss2::hidpi::logicalMapViewHeight(viewWinH, objPixelH, static_cast<int>(hud->height()))
+                : static_cast<double>(viewWinH);
+            const auto [cx0, cy0] = renderer.mapPosition(0.0f, 0.0f);
+            const auto [cx1, cy1] = renderer.mapPosition(static_cast<float>(viewWinW), static_cast<float>(mapViewH));
+            const float vpMinX = static_cast<float>(std::min(cx0, cx1));
+            const float vpMaxX = static_cast<float>(std::max(cx0, cx1));
+            const float vpMinY = static_cast<float>(std::min(cy0, cy1));
+            const float vpMaxY = static_cast<float>(std::max(cy0, cy1));
+            if (objX >= vpMinX && objX <= vpMaxX && objY >= vpMinY && objY <= vpMaxY) {
+                pushIsoEllipse(objX, objY, 18.0f + 10.0f * pulse, 16, 2.0f * s, 244, 186, 78, 0.50f + 0.30f * pulse);
+                const float tipY = objY - (16.0f + 5.0f * pulse) * s;
+                beams.push_back({objX - 7.5f * s, tipY - 7.5f * s, objX, tipY, 2.2f * s, 244, 186, 78, 0.88f, 0.88f});
+                beams.push_back({objX + 7.5f * s, tipY - 7.5f * s, objX, tipY, 2.2f * s, 244, 186, 78, 0.88f, 0.88f});
+            } else {
+                const float vpCx = 0.5f * (vpMinX + vpMaxX);
+                const float vpCy = 0.5f * (vpMinY + vpMaxY);
+                const float dx = objX - vpCx;
+                const float dy = objY - vpCy;
+                const float len = std::hypot(dx, dy);
+                if (len > 1.0f) {
+                    const float padX = std::max(14.0f * s, 0.035f * (vpMaxX - vpMinX));
+                    const float padY = std::max(14.0f * s, 0.055f * (vpMaxY - vpMinY));
+                    const float halfX = std::max(10.0f, 0.5f * (vpMaxX - vpMinX) - padX);
+                    const float halfY = std::max(10.0f, 0.5f * (vpMaxY - vpMinY) - padY);
+                    const float tx = (std::abs(dx) > 1e-4f) ? (halfX / std::abs(dx)) : 1e9f;
+                    const float ty = (std::abs(dy) > 1e-4f) ? (halfY / std::abs(dy)) : 1e9f;
+                    const float tEdge = std::min(tx, ty);
+                    const float tipX = vpCx + dx * tEdge;
+                    const float tipY = vpCy + dy * tEdge;
+                    const float nx = dx / len;
+                    const float ny = dy / len;
+                    const float px = -ny;
+                    const float py = nx;
+                    const float chev = std::clamp(0.015f * (vpMaxX - vpMinX), 8.0f * s, 18.0f * s);
+                    const float alpha = 0.55f + 0.25f * pulse;
+                    beams.push_back({tipX - nx * chev + px * chev * 0.65f, tipY - ny * chev + py * chev * 0.65f,
+                                     tipX, tipY, 2.2f * s, 244, 186, 78, alpha, alpha});
+                    beams.push_back({tipX - nx * chev - px * chev * 0.65f, tipY - ny * chev - py * chev * 0.65f,
+                                     tipX, tipY, 2.2f * s, 244, 186, 78, alpha, alpha});
+                }
+            }
+            (void)objWinH;
+        }
         for (const auto& vm : visibleOnScreenMines) {
+            if (beams.size() + 2u >= 480u) break;
             const float mx = static_cast<float>(vm.x) * s;
             const float my = static_cast<float>(vm.y) * s;
             if (vm.hostile) {
@@ -676,7 +813,7 @@ void GameSession::updateHudAndBeams() {
         {
             const int myTeam = (localOwner() >= 0 && localOwner() < 4) ? missionPlayerTeams[localOwner()] : 0;
             for (const auto& z : beamZeppelins) {
-                if (beams.size() >= 112u) break;
+                if (beams.size() >= 480u) break;
                 const float zx = static_cast<float>(z.x) * s;
                 const float zy = static_cast<float>(z.y) * s;
                 const bool heldByMe = (z.holderTeam >= 0 && z.holderTeam == myTeam);
@@ -700,7 +837,7 @@ void GameSession::updateHudAndBeams() {
                 }
             }
             for (const auto& ab : activeBeacons) {
-                if (beams.size() >= 112u) break;
+                if (beams.size() >= 480u) break;
                 const float bx = static_cast<float>(ab.x) * s;
                 const float by = static_cast<float>(ab.y) * s;
                 const float bt = std::clamp(
@@ -713,7 +850,7 @@ void GameSession::updateHudAndBeams() {
             }
         }
         for (const auto& ol : orderLines) {
-            if (beams.size() >= 112u) break;
+            if (beams.size() >= 480u) break;
             std::uint8_t r = 110, g = 224, b = 120;
             float alpha = 0.45f, width = 1.8f * s, pipW = 4.5f * s;
             switch (ol.kind) {
@@ -762,7 +899,7 @@ void GameSession::updateHudAndBeams() {
             const float badgeAnim = std::chrono::duration<float>(now - animStart).count();
             const float dryAlpha = 0.45f + 0.45f * (0.5f + 0.5f * std::sin(badgeAnim * 6.0f));
             for (const auto& sb : statusBadges) {
-                if (beams.size() >= 112u) break;
+                if (beams.size() >= 480u) break;
                 if (sb.outOfAmmo) {
                     beams.push_back({sb.x - 5.0f * s, sb.y, sb.x + 5.0f * s, sb.y,
                                      3.2f * s, 244, 186, 78, dryAlpha, dryAlpha});
@@ -778,7 +915,7 @@ void GameSession::updateHudAndBeams() {
                 }
             }
         }
-        if (previewRing) {
+        if (previewRing && beams.size() + 18u < 480u) {
             pushIsoEllipse(ringX, ringY, ringRad, 16, 2.0f * s, ringR, ringG, ringB, 0.62f);
             beams.push_back({ringX - 10.0f * s, ringY, ringX + 10.0f * s, ringY,
                              1.6f * s, ringR, ringG, ringB, 0.62f, 0.62f});
@@ -786,18 +923,39 @@ void GameSession::updateHudAndBeams() {
                              1.6f * s, ringR, ringG, ringB, 0.62f, 0.62f});
         }
         if (combatEffects) {
-            // Strictly <= 8 distinct RGB colors so VulkanWindow::maxBeamColours (16) is never exceeded.
-            if (vehicleScene && !crippledSmokeVehicles.empty()) {
+            // Strictly <= 15 distinct RGB colors so VulkanWindow::maxBeamColours (16) is never exceeded.
+            const bool addGlow = enhancedGraphics;
+            if (vehicleScene && !heavyDamageSmokeVehicles.empty()) {
                 const auto& vehs = vehicleScene->vehicles();
                 const float animPhase = std::chrono::duration<float>(now - animStart).count();
-                for (const std::size_t vi : crippledSmokeVehicles) {
-                    if (beams.size() >= 64) break;
+                for (const std::size_t vi : heavyDamageSmokeVehicles) {
+                    if (beams.size() >= 480u || vi >= vehs.size()) break;
                     const auto& v = vehs[vi];
                     const float vx = static_cast<float>(v.x * mapScale);
                     const float vy = static_cast<float>(v.y * mapScale);
-                    const float sway = std::sin(animPhase * 2.1f + static_cast<float>(vi) * 1.1f) * 4.0f * s;
-                    const float rise = (14.0f + 6.0f * std::sin(animPhase * 3.4f + static_cast<float>(vi))) * s;
-                    beams.push_back({vx, vy - 5.0f * s, vx + sway, vy - rise, 7.5f * s, 60, 55, 50, 0.36f, 0.05f});
+                    const float sway = std::sin(animPhase * 2.1f + static_cast<float>(vi) * 1.1f) * 4.5f * s;
+                    const float rise = (16.0f + 6.0f * std::sin(animPhase * 3.4f + static_cast<float>(vi))) * s;
+                    beams.push_back({vx, vy - 5.0f * s, vx + sway, vy - rise, 8.5f * s, 60, 55, 50, 0.48f, 0.06f});
+                    const float sparkPulse = std::sin(animPhase * 13.0f + static_cast<float>(vi) * 2.7f);
+                    if (sparkPulse > 0.25f && beams.size() < 480u) {
+                        const float sxOff = std::cos(animPhase * 9.0f + static_cast<float>(vi)) * 3.5f * s;
+                        const float sa = std::clamp((sparkPulse - 0.25f) * 1.2f, 0.25f, 0.92f);
+                        beams.push_back({vx + sxOff, vy - 4.0f * s, vx + sxOff * 1.6f, vy - 9.0f * s,
+                                         2.6f * s, 255, 145, 40, sa, sa * 0.25f, addGlow});
+                    }
+                }
+            }
+            if (vehicleScene && !lightDamageSmokeVehicles.empty()) {
+                const auto& vehs = vehicleScene->vehicles();
+                const float animPhase = std::chrono::duration<float>(now - animStart).count();
+                for (const std::size_t vi : lightDamageSmokeVehicles) {
+                    if (beams.size() >= 480u || vi >= vehs.size()) break;
+                    const auto& v = vehs[vi];
+                    const float vx = static_cast<float>(v.x * mapScale);
+                    const float vy = static_cast<float>(v.y * mapScale);
+                    const float sway = std::sin(animPhase * 2.6f + static_cast<float>(vi) * 1.4f) * 3.5f * s;
+                    const float rise = (11.0f + 4.0f * std::sin(animPhase * 3.8f + static_cast<float>(vi))) * s;
+                    beams.push_back({vx, vy - 4.0f * s, vx + sway, vy - rise, 5.2f * s, 210, 210, 210, 0.24f, 0.03f});
                 }
             }
             if (vehicleScene && !movingSmokeVehicles.empty()) {
@@ -805,7 +963,7 @@ void GameSession::updateHudAndBeams() {
                 const float animPhase = std::chrono::duration<float>(now - animStart).count();
                 std::size_t drawn = 0;
                 for (const std::size_t vi : movingSmokeVehicles) {
-                    if (drawn >= 6u || beams.size() >= 64u || vi >= vehs.size()) break;
+                    if (drawn >= 6u || beams.size() >= 480u || vi >= vehs.size()) break;
                     const auto& v = vehs[vi];
                     if (!v.alive || !v.visible) continue;
                     const float vx = static_cast<float>(v.x * mapScale);
@@ -820,10 +978,10 @@ void GameSession::updateHudAndBeams() {
                 const float animPhase = std::chrono::duration<float>(now - animStart).count();
                 constexpr float kTwoPi = 6.28318530717958647692f;
                 for (const auto& [sid, lp] : livePlanes) {
-                    if (beams.size() >= 64u) break;
+                    if (beams.size() >= 480u) break;
                     const float px = static_cast<float>(lp.pose.x * mapScale);
                     const float py = static_cast<float>(lp.pose.y * mapScale);
-                    if (lp.pose.active && lp.pose.alive && enhancedGraphics && beams.size() + 3u <= 64u) {
+                    if (lp.pose.active && lp.pose.alive && enhancedGraphics && beams.size() + 3u <= 480u) {
                         const float ang = (static_cast<float>(lp.pose.dir32 & 31u) / 32.0f) * kTwoPi;
                         const float du = std::cos(ang);
                         const float dv = std::sin(ang);
@@ -853,13 +1011,12 @@ void GameSession::updateHudAndBeams() {
                     beams.push_back({px, py, px + sway, py - rise, 7.0f * s, 60, 55, 50, 0.42f, 0.06f});
                 }
             }
-            if (hud && hud->hasActiveAirTrails() && beams.size() < 64u) {
-                hud->appendAirTrailBeams(mapScale, 64u - beams.size(), beams);
+            if (hud && hud->hasActiveAirTrails() && beams.size() < 480u) {
+                hud->appendAirTrailBeams(mapScale, 480u - beams.size(), beams);
             }
-            const bool addGlow = enhancedGraphics;
             const bool hasRetailVfx = combatVfx.hasRetailAssets();
             for (const auto& bw : burningWrecks) {
-                if (beams.size() >= 64) break;
+                if (beams.size() >= 480u) break;
                 const float tSec = std::chrono::duration<float>(bw.until - now).count();
                 const float sway = std::sin(tSec * 2.5f + bw.x * 0.03f) * 5.0f * s;
                 const float rise = (18.0f + 10.0f * std::sin(tSec * 4.0f + bw.y * 0.05f)) * s;
@@ -871,7 +1028,7 @@ void GameSession::updateHudAndBeams() {
                 beams.push_back({bw.x, bw.y - 4.0f * s, bw.x, bw.y - 4.0f * s, 5.0f * s, 235, 100, 30, glow, glow, addGlow});
             }
             for (const auto& v : activeVfx) {
-                if (beams.size() >= 96) break;
+                if (beams.size() >= 480u) break;
                 const float t = std::clamp(
                     std::chrono::duration<float>(now - v.start).count() /
                         std::max(0.01f, static_cast<float>(v.duration.count()) * 0.001f),
@@ -910,9 +1067,15 @@ void GameSession::updateHudAndBeams() {
                     const float bx1 = v.x0 + (v.x1 - v.x0) * t;
                     const float by1 = v.y0 + (v.y1 - v.y0) * t;
                     if (heavy) {
-                        beams.push_back({bx0, by0, bx1, by1, 3.6f * s, 255, 145, 40, 0.10f, 1.0f, addGlow});
+                        const float smokeTail = std::max(0.0f, t - 0.52f);
+                        const float sx0 = v.x0 + (v.x1 - v.x0) * smokeTail;
+                        const float sy0 = v.y0 + (v.y1 - v.y0) * smokeTail;
+                        beams.push_back({sx0, sy0, bx1, by1, 4.4f * s, 210, 210, 210, 0.02f, 0.24f * (1.0f - 0.3f * t)});
+                        beams.push_back({bx0, by0, bx1, by1, 4.2f * s, 255, 145, 40, 0.15f, 0.95f, addGlow});
+                        beams.push_back({bx0, by0, bx1, by1, 1.8f * s, 255, 250, 232, 0.25f, 1.0f, addGlow});
                     } else {
-                        beams.push_back({bx0, by0, bx1, by1, 2.0f * s, 255, 240, 190, 0.0f, 1.0f, addGlow});
+                        beams.push_back({bx0, by0, bx1, by1, 3.0f * s, 255, 145, 40, 0.05f, 0.85f, addGlow});
+                        beams.push_back({bx0, by0, bx1, by1, 1.4f * s, 255, 250, 232, 0.10f, 1.0f, addGlow});
                     }
                     if (t > 0.78f) {
                         const float ia = (1.0f - t) / 0.22f;
@@ -927,11 +1090,13 @@ void GameSession::updateHudAndBeams() {
                     const float arcY = -20.0f * s * std::sin(t * 3.14159f);
                     const float hx = v.x0 + (v.x1 - v.x0) * t;
                     const float hy = v.y0 + (v.y1 - v.y0) * t + arcY;
-                    beams.push_back({sx0, sy0, hx, hy, 7.5f * s, 60, 55, 50, 0.08f, 0.52f * (1.0f - 0.35f * t)});
+                    beams.push_back({sx0, sy0, hx, hy, 8.0f * s, 210, 210, 210, 0.04f, 0.30f * (1.0f - 0.35f * t)});
+                    beams.push_back({sx0, sy0, hx, hy, 5.5f * s, 60, 55, 50, 0.08f, 0.48f * (1.0f - 0.35f * t)});
                     const float fTail = std::max(0.0f, t - 0.14f);
                     const float fx0 = v.x0 + (v.x1 - v.x0) * fTail;
                     const float fy0 = v.y0 + (v.y1 - v.y0) * fTail - 20.0f * s * std::sin(fTail * 3.14159f);
-                    beams.push_back({fx0, fy0, hx, hy, 4.2f * s, 255, 145, 40, 0.35f, 1.0f, addGlow});
+                    beams.push_back({fx0, fy0, hx, hy, 4.8f * s, 255, 145, 40, 0.35f, 1.0f, addGlow});
+                    beams.push_back({fx0, fy0, hx, hy, 2.0f * s, 255, 250, 232, 0.50f, 1.0f, addGlow});
                     if (t > 0.78f) {
                         const float ia = (1.0f - t) / 0.22f;
                         beams.push_back({v.x1, v.y1, v.x1, v.y1, 14.0f * s, 255, 230, 130, ia * 0.9f, ia * 0.9f, addGlow});
@@ -945,7 +1110,7 @@ void GameSession::updateHudAndBeams() {
                     const float fireR = (10.0f + 22.0f * std::min(1.0f, t * 2.0f)) * sc * s;
                     if (addGlow) {
                         beams.push_back({v.x0, v.y0, v.x0, v.y0, fireR * 2.2f, 255, 145, 40, fade * 0.34f, fade * 0.34f, true});
-                        if (beams.size() + 14u < 112u) {
+                        if (beams.size() + 14u < 480u) {
                             pushIsoEllipse(v.x0, v.y0, (12.0f + 44.0f * t) * sc, 12, 1.6f * s,
                                            255, 230, 130, fade * 0.40f, true);
                         }
@@ -990,7 +1155,7 @@ void GameSession::updateHudAndBeams() {
                 }
             }
         }
-        if (hasWeatherBeams && beams.size() < 112u) {
+        if (hasWeatherBeams && beams.size() < 480u) {
             int wPts = 1280, hPts = 720;
             SDL_GetWindowSize(window, &wPts, &hPts);
             const auto [wLeft, wTop] = renderer.mapPosition(0.0f, 0.0f);
@@ -1002,7 +1167,7 @@ void GameSession::updateHudAndBeams() {
             const float wt = paused
                 ? std::chrono::duration<float>(lastNoticeFrame - animStart).count()
                 : std::chrono::duration<float>(now - animStart).count();
-            const unsigned avail = 112u - static_cast<unsigned>(beams.size());
+            const unsigned avail = 480u - static_cast<unsigned>(beams.size());
             if (missionWeather == assets::WeatherKind::Rain) {
                 const unsigned dropCount = std::min(18u, avail);
                 for (unsigned d = 0u; d < dropCount; ++d) {

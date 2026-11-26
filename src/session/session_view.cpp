@@ -61,6 +61,15 @@ bool GameSession::updateViewTooltipAndPresent() {
         if (SDL_GetMouseFocus() == window && !briefing.active() && !menu.active()) {
             float mx{}, my{};
             const auto buttons = SDL_GetMouseState(&mx, &my);
+            if (buttons & SDL_BUTTON_MMASK) {
+                if (!mmbPanningCursor && panCursor) {
+                    SDL_SetCursor(panCursor.get());
+                    mmbPanningCursor = true;
+                }
+            } else if (mmbPanningCursor) {
+                mmbPanningCursor = false;
+                resetCursor();
+            }
             int winW = 1, winH = 1;
             SDL_GetWindowSize(window, &winW, &winH);
             // Classic RTS mouse edge-scrolling when cursor is near the window edges (not while dragging).
@@ -79,6 +88,111 @@ bool GameSession::updateViewTooltipAndPresent() {
             }
             if (!hud || !hud->opaqueAtWindow(mx, my)) {
                 const auto [mapX, mapY] = renderer.mapPosition(mx, my);
+                const auto hitTypeLabel = [](ss2::assets::HitType ht) -> const char* {
+                    switch (ht) {
+                    case ss2::assets::HitType::Pierce: return "AP";
+                    case ss2::assets::HitType::Transpierce: return "Heavy AP";
+                    case ss2::assets::HitType::Explosive: return "HE";
+                    case ss2::assets::HitType::Machine: return "MG";
+                    case ss2::assets::HitType::Sniper: return "Sniper";
+                    case ss2::assets::HitType::Fire: return "Flame";
+                    case ss2::assets::HitType::Mine: return "Mine";
+                    case ss2::assets::HitType::Air: return "AA";
+                    default: return "";
+                    }
+                };
+                const auto effectiveRangePx = [](const ss2::assets::UnitSpec* spec) -> int {
+                    if (!spec) return 0;
+                    if (!spec->isVehicle) return std::max(0, spec->shot1.range);
+                    if (spec->shot1.damage > 0 && spec->shot1.range > 0) {
+                        const double r = spec->isKamikaze()
+                            ? std::clamp(static_cast<double>(spec->shot1.range), 48.0, 96.0)
+                            : std::clamp(spec->shot1.range * 0.65, 140.0, 560.0);
+                        return static_cast<int>(std::lround(r));
+                    }
+                    if (spec->shot2.damage > 0 && spec->shot2.range > 0) {
+                        return static_cast<int>(std::lround(std::clamp(spec->shot2.range * 0.65, 140.0, 520.0)));
+                    }
+                    return 0;
+                };
+                const auto appendCombatStats = [&](ss2::TooltipContent& tip, const ss2::assets::UnitSpec* spec,
+                                                   int sightVal) {
+                    if (!spec) return;
+                    const int effRange = effectiveRangePx(spec);
+                    const int effSight = std::max(0, sightVal > 0 ? sightVal : spec->sight);
+                    if (effRange > 0 && effSight > 0) {
+                        tip.lines.push_back(ss2::trf("Range: {0}px | Sight: {1}",
+                                                     {std::to_string(effRange), std::to_string(effSight)}));
+                    } else if (effSight > 0) {
+                        tip.lines.push_back(ss2::trf("Sight: {0}", {std::to_string(effSight)}));
+                    }
+                    if (spec->shot1.damage > 0) {
+                        const auto ht1 = spec->shot1.hitType != ss2::assets::HitType::None
+                            ? spec->shot1.hitType
+                            : (spec->isVehicle ? ss2::assets::HitType::Pierce : ss2::assets::HitType::Machine);
+                        const char* lbl1 = hitTypeLabel(ht1);
+                        std::string wStr = std::to_string(spec->shot1.damage);
+                        if (*lbl1) { wStr += ' '; wStr += lbl1; }
+                        if (spec->isVehicle && spec->shot2.damage > 0) {
+                            const auto ht2 = spec->shot2.hitType != ss2::assets::HitType::None
+                                ? spec->shot2.hitType : ss2::assets::HitType::Machine;
+                            const char* lbl2 = hitTypeLabel(ht2);
+                            wStr += " | ";
+                            wStr += std::to_string(spec->shot2.damage);
+                            if (*lbl2) { wStr += ' '; wStr += lbl2; }
+                        }
+                        tip.lines.push_back(ss2::trf("Weapon: {0}", {wStr}));
+                    } else if (spec->isVehicle && spec->shot2.damage > 0) {
+                        const auto ht2 = spec->shot2.hitType != ss2::assets::HitType::None
+                            ? spec->shot2.hitType : ss2::assets::HitType::Machine;
+                        const char* lbl2 = hitTypeLabel(ht2);
+                        std::string wStr = std::to_string(spec->shot2.damage);
+                        if (*lbl2) { wStr += ' '; wStr += lbl2; }
+                        tip.lines.push_back(ss2::trf("Weapon: {0}", {wStr}));
+                    }
+                };
+                const auto appendArmorPenLine = [&](ss2::TooltipContent& tip, const ss2::assets::UnitSpec* targetSpec) {
+                    if (!targetSpec || !unitCatalog || !selection) return;
+                    const ss2::assets::UnitSpec* bestAtt = nullptr;
+                    if (vehicleScene) {
+                        const auto& vehs = vehicleScene->vehicles();
+                        for (const size_t vid : selection->selectedVehicles()) {
+                            if (vid >= vehs.size()) continue;
+                            const auto* sp = unitCatalog->find(vehs[vid].id);
+                            if (sp && sp->shot1.damage > 0 && (!bestAtt || sp->shot1.damage > bestAtt->shot1.damage)) {
+                                bestAtt = sp;
+                            }
+                        }
+                    }
+                    if (scene) {
+                        const auto& units = scene->units();
+                        for (const size_t sid : selection->selected()) {
+                            if (sid >= units.size()) continue;
+                            const auto* sp = unitCatalog->find(units[sid].id);
+                            if (sp && sp->shot1.damage > 0 && (!bestAtt || sp->shot1.damage > bestAtt->shot1.damage)) {
+                                bestAtt = sp;
+                            }
+                        }
+                    }
+                    if (!bestAtt) return;
+                    const auto ht = bestAtt->shot1.hitType != ss2::assets::HitType::None
+                        ? bestAtt->shot1.hitType
+                        : (bestAtt->isVehicle ? ss2::assets::HitType::Pierce : ss2::assets::HitType::Machine);
+                    const auto& arm = targetSpec->armor[static_cast<std::size_t>(ht)];
+                    const int dmg = bestAtt->shot1.damage;
+                    const auto penLabel = [&](int armorVal) -> const char* {
+                        if (armorVal >= 256 || dmg <= armorVal * 2) return "No Pen";
+                        if (dmg > armorVal * 4) return "Pen";
+                        return "Glance";
+                    };
+                    const char* htName = hitTypeLabel(ht);
+                    const std::string dmgDesc = *htName
+                        ? (std::to_string(dmg) + " " + htName)
+                        : std::to_string(dmg);
+                    tip.lines.push_back(ss2::trf("Pen vs F/S/R ({0}): {1} / {2} / {3}",
+                                                 {dmgDesc, ss2::tr(penLabel(arm.front)),
+                                                  ss2::tr(penLabel(arm.side)), ss2::tr(penLabel(arm.rear))}));
+                };
                 const auto appendArmorLine = [&](ss2::TooltipContent& tip, const ss2::assets::UnitSpec* spec) {
                     if (!spec) return;
                     const auto& ap = spec->armor[static_cast<std::size_t>(ss2::assets::HitType::Pierce)];
@@ -189,6 +303,13 @@ bool GameSession::updateViewTooltipAndPresent() {
                             if (simulation && simulation->isElevatedMapPoint(u.x, u.y)) {
                                 tc.lines.push_back(ss2::tr("High Ground (+vision, +range)"));
                             }
+                            if (uSpec) {
+                                const int infSight = (binocularUnits.contains(*hovered) && uSpec->binocularSight > 0)
+                                    ? uSpec->binocularSight
+                                    : (crouchedUnits.contains(*hovered) && uSpec->crouchSight > 0
+                                        ? uSpec->crouchSight : uSpec->sight);
+                                appendCombatStats(tc, uSpec, infSight);
+                            }
                         } else if (isAllyOwner(u.owner)) {
                             tc.lines.push_back(ss2::tr("Allied"));
                         } else if (!multiplayer.enabled && u.owner == 3) {
@@ -233,6 +354,11 @@ bool GameSession::updateViewTooltipAndPresent() {
                                     }
                                 }
                                 appendArmorLine(tc, vSpec);
+                                if (vSpec) {
+                                    const bool hatchOpen = *vHovered < vehicleHatchOpen.size() && vehicleHatchOpen[*vHovered];
+                                    const int vehSight = vSpec->sight + vSpec->bonusSight + (hatchOpen ? vSpec->marchSightBonus : 0);
+                                    appendCombatStats(tc, vSpec, vehSight);
+                                }
                                 const int vExpVal = (*vHovered < vehExpa.size()) ? vehExpa[*vHovered] : 0;
                                 const int vKillsVal = (*vHovered < vehKills.size()) ? vehKills[*vHovered] : 0;
                                 if (vKillsVal > 0) {
@@ -368,6 +494,9 @@ bool GameSession::updateViewTooltipAndPresent() {
                                 } else if (vSpec && vSpec->isTowable()) {
                                     tc.lines.push_back(ss2::tr("Towable field gun — right-click with truck to hitch"));
                                 }
+                                if (simulation && simulation->canCaptureVehicle(*vHovered)) {
+                                    tc.lines.push_back(ss2::tr("Under-crewed — right-click with infantry to re-crew"));
+                                }
                                 if (vehicleHoldFireUnits.contains(*vHovered)) tc.lines.push_back(ss2::tr("Holding fire"));
                             } else if (isAllyOwner(v.owner)) {
                                 tc.lines.push_back(ss2::tr("Allied"));
@@ -380,6 +509,10 @@ bool GameSession::updateViewTooltipAndPresent() {
                                     tc.lines.push_back(ss2::tr("Exposed crew — vulnerable to sniper/flank fire"));
                                 }
                                 appendArmorLine(tc, vSpec);
+                                if (vSpec) {
+                                    appendCombatStats(tc, vSpec, vSpec->sight + vSpec->bonusSight);
+                                    appendArmorPenLine(tc, vSpec);
+                                }
                             }
                             tooltip.show(tc, mx, my);
                             showTip = true;
@@ -532,6 +665,9 @@ bool GameSession::updateViewTooltipAndPresent() {
                     showTip = true;
                 }
             }
+        } else if (mmbPanningCursor) {
+            mmbPanningCursor = false;
+            resetCursor();
         }
         if (!showTip) tooltip.hide();
     }

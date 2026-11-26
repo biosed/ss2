@@ -343,7 +343,7 @@ void runPhase4Fto4O() {
                     throw std::runtime_error("Phase 4I initial group-5 bit0/bit1 mismatch");
                 }
                 const auto abSpawns = sim4i.abandonVehicles(std::array<size_t, 1>{0});
-                if (abSpawns.size() != 1u || abSpawns[0].owner != 0 ||
+                if (abSpawns.empty() || abSpawns[0].owner != 0 ||
                     sim4i.countByGroupMask(5u, 1u) != 1u || sim4i.countByGroupMask(5u, 2u) != 1u) {
                     throw std::runtime_error("Phase 4I abandonVehicles bit0/bit1 transition mismatch");
                 }

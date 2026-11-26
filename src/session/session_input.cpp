@@ -101,8 +101,13 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
             if (hud) {
                 const auto hr = hud->handle(event);
                 if (hr.action == ss2::HudAction::moveCamera && hudMapW && hudMapH) {
-                    renderer.focusMap(hr.u * static_cast<double>(hudMapW * mapScale),
-                                      hr.v * static_cast<double>(hudMapH * mapScale));
+                    const double targetX = hr.u * static_cast<double>(hudMapW * mapScale);
+                    const double targetY = hr.v * static_cast<double>(hudMapH * mapScale);
+                    if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
+                        renderer.smoothFocusMap(targetX, targetY);
+                    } else {
+                        renderer.focusMap(targetX, targetY);
+                    }
                     return;
                 }
                 if (hr.action == ss2::HudAction::pause) {
@@ -494,8 +499,13 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
                 }
                 resetCursor();
             } else {
-                renderer.focusMap(hr.u * static_cast<double>(hudMapW * mapScale),
-                                  hr.v * static_cast<double>(hudMapH * mapScale));
+                const double targetX = hr.u * static_cast<double>(hudMapW * mapScale);
+                const double targetY = hr.v * static_cast<double>(hudMapH * mapScale);
+                if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
+                    renderer.smoothFocusMap(targetX, targetY);
+                } else {
+                    renderer.focusMap(targetX, targetY);
+                }
             }
         } else if (hr.action == ss2::HudAction::orderMinimap && simulation && hudMapW && hudMapH) {
             const int simX = std::clamp(static_cast<int>(std::lround(hr.u * static_cast<float>(hudMapW))),
@@ -975,7 +985,7 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
         }
         if (event.key.key == SDLK_SPACE && !(event.key.mod & SDL_KMOD_CTRL) && !eventHistory.empty()) {
             const auto [ex, ey] = eventHistory[eventHistoryCursor % eventHistory.size()];
-            renderer.focusMap(ex, ey, true);
+            renderer.smoothFocusMap(ex, ey);
             eventHistoryCursor = (eventHistoryCursor + 1u) % eventHistory.size();
             return;
         }
@@ -1235,10 +1245,12 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
             }
         }
         if (!ids.empty() && targetVeh && vehicleScene &&
-            vehicleScene->vehicles().at(*targetVeh).owner == 3 &&
+            (vehicleScene->vehicles().at(*targetVeh).owner == 3 ||
+             isAllyOwner(vehicleScene->vehicles().at(*targetVeh).owner)) &&
             simulation->canCaptureVehicle(*targetVeh)) {
             if (const auto res = simulation->captureVehicle(ids, *targetVeh); res && *res > 0) {
                 const auto& tv = vehicleScene->vehicles().at(*targetVeh);
+                const bool isFriendlyRecrew = (tv.owner != 3 && isAllyOwner(tv.owner));
                 const int mw = tv.width > 0 ? tv.width : 24;
                 const int mh = tv.height > 0 ? tv.height : 24;
                 const int ml = tv.width > 0 ? tv.left : tv.x - 12;
@@ -1254,7 +1266,10 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
                 syncMarkers();
                 pushOrderPulse(tv.x, tv.y, OrderPulse::Kind::Move);
                 playSelectionVoice("move");
-                showNotice(ss2::trf("Capturing vehicle ({0} soldiers)...", {std::to_string(*res)}),
+                showNotice(ss2::trf(isFriendlyRecrew
+                                        ? "Re-crewing vehicle ({0} soldiers)..."
+                                        : "Capturing vehicle ({0} soldiers)...",
+                                    {std::to_string(*res)}),
                            ss2::NoticeKind::accepted);
                 return;
             }
@@ -1583,6 +1598,13 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
              simulation->canEscortSoldier(ids, pvids, *targetInf));
         const bool canDisarmHover =
             !ids.empty() && !targetInf && !targetVeh && simulation->canDisarmMineAt(ids, simX, simY);
+        const bool canPickupHover =
+            !ids.empty() && targetVeh && vehicleScene &&
+            (((vehicleScene->vehicles().at(*targetVeh).owner == 3 ||
+               isAllyOwner(vehicleScene->vehicles().at(*targetVeh).owner)) &&
+              simulation->canCaptureVehicle(*targetVeh)) ||
+             (vehicleScene->vehicles().at(*targetVeh).owner == localOwner() &&
+              simulation->canBoardVehicle(*targetVeh)));
         if (armedAirSupport) {
             const TacticalCursorKind airCur =
                 *armedAirSupport == ss2::assets::AirMissionKind::Bomber ? TacticalCursorKind::AirBomb :
@@ -1616,6 +1638,10 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
             applyTacticalCursor(window, TacticalCursorKind::Rotate, moveCursor.get(), attackCursor.get());
         } else if (reverseMoveArmed) {
             applyTacticalCursor(window, TacticalCursorKind::Move, moveCursor.get(), attackCursor.get());
+        } else if (canTowHover) {
+            applyTacticalCursor(window, TacticalCursorKind::TowGun, moveCursor.get(), attackCursor.get());
+        } else if (canPickupHover) {
+            applyTacticalCursor(window, TacticalCursorKind::Pickup, moveCursor.get(), attackCursor.get());
         } else if (canSupportHover || canEscortHover || canDisarmHover) {
             TacticalCursorKind supCur = TacticalCursorKind::Move;
             if (!pvids.empty() && hoverBridge && simulation->canSupportBridge(pvids, *hoverBridge)) {
@@ -1629,14 +1655,8 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
                 supCur = TacticalCursorKind::Reload;
             }
             applyTacticalCursor(window, supCur, moveCursor.get(), attackCursor.get());
-        } else if (canTowHover) {
-            applyTacticalCursor(window, TacticalCursorKind::TowGun, moveCursor.get(), attackCursor.get());
         } else if (canGarrisonHover) {
             applyTacticalCursor(window, TacticalCursorKind::EnterBuilding, moveCursor.get(), attackCursor.get());
-        } else if (!ids.empty() && targetVeh && vehicleScene &&
-                   ((vehicleScene->vehicles().at(*targetVeh).owner == localOwner() && simulation->canBoardVehicle(*targetVeh)) ||
-                    (vehicleScene->vehicles().at(*targetVeh).owner == 3 && simulation->canCaptureVehicle(*targetVeh)))) {
-            applyTacticalCursor(window, TacticalCursorKind::Pickup, moveCursor.get(), attackCursor.get());
         } else if ((!ids.empty() && simulation->canMove(ids, simX, simY)) || !pickedVeh.empty()) {
             applyTacticalCursor(window, TacticalCursorKind::Move, moveCursor.get(), attackCursor.get());
         } else {

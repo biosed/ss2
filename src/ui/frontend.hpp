@@ -60,6 +60,8 @@ public:
         std::string easyPath;
         std::string description;
         std::string tag;
+        bool completed{false};
+        bool unlocked{true};
     };
 
     struct CampaignEntry {

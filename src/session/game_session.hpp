@@ -160,10 +160,7 @@ struct GameSession {
         int hp{3500}, maxHp{3500};
         int stage{0};
         bool destroyed{false};
-        int patchLeft{}, patchTop{};
-        assets::MapImage basePatch{};
-        std::array<std::uint8_t, 512> palette{};
-        std::array<std::vector<std::uint8_t>, 5> stageFrames{};
+        assets::BridgePlacement placement{};
         int stampedStage{0};
     };
     struct TimedMarker {
@@ -235,6 +232,7 @@ struct GameSession {
     std::map<std::string, unsigned> gpuAtlasSlots;
     std::filesystem::path gpuArtDir;
     std::filesystem::path gpuVehicleArtDir;
+    std::set<std::string> gpuInfantry2xIds;
     struct GpuHdVehicleMeta {
         unsigned atlasSlot{0};
         bool hasTurret{false};
@@ -312,6 +310,8 @@ struct GameSession {
     std::vector<LiveBuilding> liveBuildings;
     std::optional<std::size_t> selectedBuilding;
     std::vector<LiveBridge> liveBridges;
+    std::vector<assets::TreePlacement> destructibleTrees;
+    std::vector<bool> treeFallen;
     assets::CraterCatalog craterCatalog;
     unsigned craterSeed = 1;
     std::map<std::string, assets::MapImage> planeSpriteCache;
@@ -352,6 +352,8 @@ struct GameSession {
     std::deque<std::string> pendingDialogs;
     std::unique_ptr<SDL_Cursor, decltype(&SDL_DestroyCursor)> moveCursor;
     std::unique_ptr<SDL_Cursor, decltype(&SDL_DestroyCursor)> attackCursor;
+    std::unique_ptr<SDL_Cursor, decltype(&SDL_DestroyCursor)> panCursor;
+    bool mmbPanningCursor = false;
 
     FrameSample sample;
     const Snapshot empty{};
@@ -434,6 +436,7 @@ struct GameSession {
     int initialGrenadesForId(std::string_view id) const;
     void applyBuildingStage(std::size_t bIdx, int stage);
     void applyBridgeStage(std::size_t brIdx, int stage);
+    bool crushOrBlastTreesAt(int simX, int simY, int radiusPx, bool spawnDust);
     void stampBattleCrater(int simX, int simY, bool large);
     int initialMinesForId(std::string_view id) const;
     static bool isCombatAmmoSoldierId(std::string_view id);

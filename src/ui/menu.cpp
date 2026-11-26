@@ -243,6 +243,7 @@ void Menu::render() {
     pixelW = std::max(pixelW, 1);
     pixelH = std::max(pixelH, 1);
     const int fontPx = std::clamp(int(std::lround(pixelH / 40.0)), 14, 44);
+    const int uiScale = std::max(1, static_cast<int>(std::lround(double(pixelH) / 1080.0)));
     const int titlePx = fontPx * 5 / 4, pad = fontPx;
     rowHeight_ = fontPx * 2;
     const int panelW = std::clamp(std::max(380, pixelW / 2), 1, pixelW);
@@ -261,6 +262,7 @@ void Menu::render() {
     Context graphics(cairo_create(panel.get()), cairo_destroy);
     auto* cr = graphics.get();
     const bool skinned = hasRetailSkin();
+    const double lw = double(uiScale);
     if (skinned) {
         colour(cr, 18, 22, 18);
         cairo_paint(cr);
@@ -275,6 +277,11 @@ void Menu::render() {
             cairo_pattern_t* pat = cairo_pattern_create_for_surface(skin_->interior.get());
             cairo_pattern_set_extend(pat, CAIRO_EXTEND_REPEAT);
             cairo_pattern_set_filter(pat, CAIRO_FILTER_NEAREST);
+            if (uiScale > 1) {
+                cairo_matrix_t mat;
+                cairo_matrix_init_scale(&mat, 1.0 / lw, 1.0 / lw);
+                cairo_pattern_set_matrix(pat, &mat);
+            }
             cairo_set_source(cr, pat);
             cairo_paint_with_alpha(cr, 0.72);
             cairo_pattern_destroy(pat);
@@ -299,34 +306,34 @@ void Menu::render() {
             drawSubRectNearest(cr, skin_->frame.get(), s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7]);
         }
         cairo_set_source_rgba(cr, 146.0 / 255.0, 132.0 / 255.0, 92.0 / 255.0, 0.55);
-        cairo_set_line_width(cr, 1.0);
-        cairo_rectangle(cr, b + 0.5, b + 0.5, std::max(1.0, panelW - 2.0 * b - 1.0),
-                        std::max(1.0, panelH - 2.0 * b - 1.0));
+        cairo_set_line_width(cr, lw);
+        cairo_rectangle(cr, b + lw * 0.5, b + lw * 0.5, std::max(1.0, panelW - 2.0 * b - lw),
+                        std::max(1.0, panelH - 2.0 * b - lw));
         cairo_stroke(cr);
 
         cairo_set_source_rgba(cr, 52.0 / 255.0, 48.0 / 255.0, 30.0 / 255.0, 0.40);
-        cairo_rectangle(cr, b + 2.0, b + 2.0, std::max(1.0, panelW - 2.0 * b - 4.0),
-                        std::max(1.0, rowsTop_ - b - pad / 4.0 - 2.0));
+        cairo_rectangle(cr, b + 2.0 * lw, b + 2.0 * lw, std::max(1.0, panelW - 2.0 * b - 4.0 * lw),
+                        std::max(1.0, rowsTop_ - b - pad / 4.0 - 2.0 * lw));
         cairo_fill(cr);
 
         cairo_set_source_rgba(cr, 0.0, 0.0, 0.0, 0.65);
-        text(cr, fonts_.get(), title_, titlePx, true, pad + 1.0, pad + 1.0, panelW - 2 * pad, Align::left);
+        text(cr, fonts_.get(), title_, titlePx, true, pad + lw, pad + lw, panelW - 2 * pad, Align::left);
         colour(cr, 232, 214, 158);
         text(cr, fonts_.get(), title_, titlePx, true, pad, pad, panelW - 2 * pad, Align::left);
         colour(cr, 142, 128, 86);
-        cairo_rectangle(cr, pad, rowsTop_ - pad / 4.0, panelW - 2 * pad, 1);
+        cairo_rectangle(cr, pad, rowsTop_ - pad / 4.0, panelW - 2 * pad, lw);
         cairo_fill(cr);
     } else {
         colour(cr, 27, 32, 30);
         cairo_paint(cr);
         colour(cr, 132, 127, 101);
-        cairo_set_line_width(cr, 1);
-        cairo_rectangle(cr, .5, .5, panelW - 1, panelH - 1);
+        cairo_set_line_width(cr, lw);
+        cairo_rectangle(cr, lw * 0.5, lw * 0.5, panelW - lw, panelH - lw);
         cairo_stroke(cr);
         colour(cr, 201, 190, 152);
         text(cr, fonts_.get(), title_, titlePx, true, pad, pad, panelW - 2 * pad, Align::left);
         colour(cr, 70, 76, 68);
-        cairo_rectangle(cr, pad, rowsTop_ - pad / 4.0, panelW - 2 * pad, 1);
+        cairo_rectangle(cr, pad, rowsTop_ - pad / 4.0, panelW - 2 * pad, lw);
         cairo_fill(cr);
     }
 
@@ -334,19 +341,20 @@ void Menu::render() {
         const auto& item = items_[i];
         const int y = rowsTop_ + (i - first_) * rowHeight_;
         if (i == highlight_) {
+            const double rowInset = 2.0 * lw;
             if (skinned) {
                 colour(cr, i == armed_ ? 98 : 68, i == armed_ ? 104 : 78, i == armed_ ? 68 : 52);
-                cairo_rectangle(cr, pad / 2.0, y + 2, panelW - pad, rowHeight_ - 4);
+                cairo_rectangle(cr, pad / 2.0, y + rowInset, panelW - pad, std::max(1.0, rowHeight_ - 2.0 * rowInset));
                 cairo_fill_preserve(cr);
                 cairo_set_source_rgba(cr, 182.0 / 255.0, 164.0 / 255.0, 108.0 / 255.0, 0.80);
-                cairo_set_line_width(cr, 1.0);
+                cairo_set_line_width(cr, lw);
                 cairo_stroke(cr);
                 colour(cr, 220, 194, 116);
-                cairo_rectangle(cr, pad / 2.0 + 2.0, y + 4.0, 3.0, std::max(1.0, rowHeight_ - 8.0));
+                cairo_rectangle(cr, pad / 2.0 + 2.0 * lw, y + 4.0 * lw, 3.0 * lw, std::max(1.0, rowHeight_ - 8.0 * lw));
                 cairo_fill(cr);
             } else {
                 colour(cr, i == armed_ ? 96 : 74, i == armed_ ? 104 : 86, i == armed_ ? 78 : 60);
-                cairo_rectangle(cr, pad / 2.0, y + 2, panelW - pad, rowHeight_ - 4);
+                cairo_rectangle(cr, pad / 2.0, y + rowInset, panelW - pad, std::max(1.0, rowHeight_ - 2.0 * rowInset));
                 cairo_fill(cr);
             }
         }
@@ -369,8 +377,8 @@ void Menu::render() {
     }
     // Marks at the edge when rows are scrolled out of view.
     colour(cr, 132, 127, 101);
-    if (first_ > 0) { cairo_rectangle(cr, panelW / 2.0 - 12, rowsTop_ - 3, 24, 2); cairo_fill(cr); }
-    if (first_ + visible_ < int(items_.size())) { cairo_rectangle(cr, panelW / 2.0 - 12, panelH - pad / 2.0, 24, 2); cairo_fill(cr); }
+    if (first_ > 0) { cairo_rectangle(cr, panelW / 2.0 - 12.0 * lw, rowsTop_ - 3.0 * lw, 24.0 * lw, 2.0 * lw); cairo_fill(cr); }
+    if (first_ + visible_ < int(items_.size())) { cairo_rectangle(cr, panelW / 2.0 - 12.0 * lw, panelH - pad / 2.0, 24.0 * lw, 2.0 * lw); cairo_fill(cr); }
     if (cairo_status(cr) != CAIRO_STATUS_SUCCESS) throw std::runtime_error(cairo_status_to_string(cairo_status(cr)));
 
     width_ = unsigned(panelW);

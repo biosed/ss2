@@ -60,6 +60,7 @@ public:
     void setFogViewerOwner(int owner);
     MapPatch updateFog(std::span<const std::uint8_t> fog);
     std::optional<MapImage> renderUnitPortrait(const std::string& id, unsigned size = 48) const;
+    std::optional<MapImage> buildGpuSheet2xEpx(const std::string& id);
 private:
     std::filesystem::path gameDir_;
     bool originalSize_{false};

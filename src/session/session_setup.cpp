@@ -103,7 +103,8 @@ GameSession::GameSession(SDL_Window* win, ValidationReport* rep, int lim, bool t
       briefing(window),
       orderNotice(window),
       moveCursor(SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_CROSSHAIR), SDL_DestroyCursor),
-      attackCursor(SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_POINTER), SDL_DestroyCursor) {
+      attackCursor(SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_POINTER), SDL_DestroyCursor),
+      panCursor(SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_MOVE), SDL_DestroyCursor) {
     if (timing) {
         const auto* mode = SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(window));
         if (mode) {
@@ -217,9 +218,21 @@ void GameSession::initializeMission() {
         ss2::assets::SceneryDepth depth(map.width, map.height);
         std::vector<ss2::assets::BuildingPlacement> missionBuildings;
         std::vector<ss2::assets::BridgePlacement> missionBridges;
+        bool expectHd2xMap = false;
+        if (isTutorial1 && !hdPack.empty()) {
+            std::error_code hdEc;
+            const bool hdIsDir = std::filesystem::is_directory(hdPack, hdEc);
+            const auto groundPath = hdIsDir ? (hdPack / "tutorial1_ground_2x.ss2hd") : std::filesystem::path{};
+            const auto bakedPath = hdIsDir ? (hdPack / "tutorial1_2x.ss2hd") : hdPack;
+            const bool hasGround = !groundPath.empty() && std::filesystem::is_regular_file(groundPath, hdEc);
+            expectHd2xMap = hasGround || !hdIsDir || std::filesystem::is_regular_file(bakedPath, hdEc);
+        }
+        destructibleTrees.clear();
+        treeFallen.clear();
+        std::vector<ss2::assets::TreePlacement>* treeOut = expectHd2xMap ? nullptr : &destructibleTrees;
         const auto objects = isTutorial1
-            ? ss2::assets::drawTutorialScenery(map, gameDir, &depth, 0, &missionBuildings, &missionBridges)
-            : ss2::assets::drawMissionScenery(map, gameDir, missionPath, &depth, &missionBuildings, &missionBridges);
+            ? ss2::assets::drawTutorialScenery(map, gameDir, &depth, 0, &missionBuildings, &missionBridges, treeOut)
+            : ss2::assets::drawMissionScenery(map, gameDir, missionPath, &depth, &missionBuildings, &missionBridges, treeOut);
         reportLoadProgress(0.45f);
         const auto placements = isTutorial1
             ? ss2::assets::readTutorialPlacements(gameDir)
@@ -268,38 +281,18 @@ void GameSession::initializeMission() {
         }
         std::set<std::string> vehicleIds;
         for (const auto& v : vehicleUnits) vehicleIds.insert(v.id);
+        gpuArtDir.clear();
+        gpuVehicleArtDir.clear();
         if (!hdPack.empty() && !originalInfantry) {
-            gpuArtDir = hdPack / "infantry-art-4x";
-            if (std::filesystem::is_directory(gpuArtDir)) {
-                for (const auto& p : placements) {
-                    if (!vehicleIds.contains(p.id)) ensureGpuInfantrySlot(p.id);
-                }
-                for (const auto& rid : preloadRosterIds) {
-                    const auto* sp = unitCatalog ? unitCatalog->find(rid) : nullptr;
-                    if (!vehicleIds.contains(rid) && !(sp && sp->isVehicle)) {
-                        (void)ensureGpuInfantrySlot(rid);
-                    }
-                }
-                if (!gpuAtlasSlots.empty()) {
-                    std::cout << "GPU 4x HD infantry: " << gpuAtlasSlots.size() << " classes (";
-                    bool firstId = true;
-                    for (const auto& [id, slot] : gpuAtlasSlots) {
-                        (void)slot;
-                        if (!firstId) std::cout << ", ";
-                        firstId = false;
-                        std::cout << id;
-                    }
-                    std::cout << ")\n";
-                }
-            } else {
-                gpuArtDir.clear();
+            const auto candInfArt = hdPack / "infantry-art-4x";
+            std::error_code infEc;
+            if (std::filesystem::is_directory(candInfArt, infEc)) {
+                gpuArtDir = candInfArt;
             }
             const auto candVehArt = hdPack / "vehicles-art-4x";
             std::error_code vehEc;
             if (std::filesystem::is_directory(candVehArt, vehEc)) {
                 gpuVehicleArtDir = candVehArt;
-            } else {
-                gpuVehicleArtDir.clear();
             }
         }
         if (vehicleScene) {
@@ -383,10 +376,25 @@ void GameSession::initializeMission() {
         }
         scene.emplace(std::move(map), gameDir, placements, originalInfantry, std::move(hdImage), infantryArt,
                       cleanGround, std::move(depth), &gpuAtlasSlots, data.width, data.height);
+        if (mapScale != 1) {
+            destructibleTrees.clear();
+            treeFallen.clear();
+        } else {
+            treeFallen.assign(destructibleTrees.size(), false);
+        }
         if (mapScale == 1) {
             scene->setVehicleLayer([&](ss2::assets::MapImage& patch, int px, int py, const ss2::assets::SceneryDepth* d) {
                 if (vehicleScene) vehicleScene->drawRegion(patch, px, py, d);
             });
+        }
+        for (const auto& p : placements) {
+            if (!vehicleIds.contains(p.id)) (void)ensureGpuInfantrySlot(p.id);
+        }
+        for (const auto& rid : preloadRosterIds) {
+            const auto* sp = unitCatalog ? unitCatalog->find(rid) : nullptr;
+            if (!vehicleIds.contains(rid) && !(sp && sp->isVehicle)) {
+                (void)ensureGpuInfantrySlot(rid);
+            }
         }
         std::vector<std::pair<std::size_t, std::size_t>> preloadedRiders;
         {
@@ -413,8 +421,13 @@ void GameSession::initializeMission() {
                 ++pCursor;
             }
         }
-        if (!gpuAtlasSlots.empty()) std::cout << "GPU 4x HD infantry atlases: " << gpuAtlasSlots.size() << " classes\n";
-        else if (!infantryArt.empty()) std::cout << "Painted HD infantry: " << scene->paintedCount() << "/" << scene->units().size() << '\n';
+        if (!gpuAtlasSlots.empty()) {
+            const std::size_t cnt2x = gpuInfantry2xIds.size();
+            const std::size_t cnt4x = gpuAtlasSlots.size() > cnt2x ? (gpuAtlasSlots.size() - cnt2x) : 0u;
+            std::cout << "GPU infantry atlases: " << cnt4x << " 4x HD + " << cnt2x << " 2x EPX classes\n";
+        } else if (!infantryArt.empty()) {
+            std::cout << "Painted HD infantry: " << scene->paintedCount() << "/" << scene->units().size() << '\n';
+        }
         gpuPreloadLogged = true;
         reportLoadProgress(0.75f);
         const auto& infantry = scene->units();
@@ -473,10 +486,26 @@ void GameSession::initializeMission() {
         liveBridges.clear();
         liveBridges.reserve(missionBridges.size());
         for (auto& br : missionBridges) {
+            assets::BridgePlacement renderBp;
+            renderBp.x = br.x;
+            renderBp.y = br.y;
+            renderBp.u = br.u;
+            renderBp.v = br.v;
+            renderBp.left = br.left;
+            renderBp.top = br.top;
+            renderBp.width = br.width;
+            renderBp.height = br.height;
+            renderBp.maxHp = br.maxHp;
+            renderBp.patchLeft = br.patchLeft;
+            renderBp.patchTop = br.patchTop;
+            renderBp.basePatch = std::move(br.basePatch);
+            renderBp.palette = br.palette;
+            renderBp.stageFrames = std::move(br.stageFrames);
+            renderBp.stageShadows = std::move(br.stageShadows);
             liveBridges.push_back({
                 br.x, br.y, br.left, br.top, br.width, br.height,
                 br.maxHp, br.maxHp, 0, false,
-                br.patchLeft, br.patchTop, std::move(br.basePatch), br.palette, std::move(br.stageFrames), 0
+                std::move(renderBp), 0
             });
         }
         craterCatalog = ss2::assets::loadCraterCatalog(gameDir, mapScheme);
@@ -991,6 +1020,7 @@ float GameSession::fogBrightnessAt(int mx, int my) const {
 
 void GameSession::applyMapGraphics() {
     renderer.setMapFilterLinear(smoothTerrain);
+    renderer.setSpriteSharpness(enhancedGraphics ? 1.0f : 0.0f);
     if (!enhancedGraphics) {
         renderer.setMapGrade({});
         return;
@@ -1030,31 +1060,43 @@ bool GameSession::ensureGpuInfantrySlot(const std::string& id) {
         if (const auto* sp = unitCatalog->find(id); sp && sp->isVehicle) return false;
     }
     const auto logFallback = [&](const char* reason) {
-        if (!gpuArtDir.empty() && gpuFallbackIds.insert(id).second)
-            std::cout << "GPU 4x HD infantry fallback Gold: " << id << " (" << reason << ")\n";
+        if (gpuFallbackIds.insert(id).second)
+            std::cout << "GPU infantry fallback CPU: " << id << " (" << reason << ")\n";
     };
     const unsigned reserved = (hud && hud->airVfxAtlasSlot().has_value() ? 0u : 1u) +
                               (combatVfx.atlasSlot().has_value() ? 0u : 1u);
     const unsigned maxInfSlot = planeAtlasBase - reserved;
-    if (gpuArtDir.empty() || gpuNextSlot >= maxInfSlot) {
+    if (gpuNextSlot >= maxInfSlot) {
         logFallback("slot budget full");
         return false;
     }
-    const auto path = gpuArtDir / (id + ".png");
-    if (!std::filesystem::is_regular_file(path)) {
-        logFallback("no 4x sheet");
-        return false;
+    if (!gpuArtDir.empty() && !originalInfantry) {
+        const auto path = gpuArtDir / (id + ".png");
+        std::error_code ec;
+        if (std::filesystem::is_regular_file(path, ec)) {
+            auto atlas = ss2::assets::loadPngRgba(path);
+            if (atlas.width == 1024 && atlas.height == 640) {
+                renderer.setSpriteAtlas(gpuNextSlot, atlas);
+                gpuAtlasSlots.emplace(id, gpuNextSlot++);
+                if (gpuPreloadLogged)
+                    std::cout << "GPU 4x HD infantry lazy slot: " << id << " (slot " << (gpuNextSlot - 1) << ")\n";
+                return true;
+            }
+        }
     }
-    auto atlas = ss2::assets::loadPngRgba(path);
-    if (atlas.width != 1024 || atlas.height != 640) {
-        logFallback("bad sheet dimensions");
-        return false;
+    if (scene) {
+        if (auto epxSheet = scene->buildGpuSheet2xEpx(id);
+            epxSheet && epxSheet->width > 0 && epxSheet->height > 0) {
+            renderer.setSpriteAtlas(gpuNextSlot, *epxSheet);
+            gpuAtlasSlots.emplace(id, gpuNextSlot++);
+            gpuInfantry2xIds.insert(id);
+            if (gpuPreloadLogged)
+                std::cout << "GPU 2x EPX infantry lazy slot: " << id << " (slot " << (gpuNextSlot - 1) << ")\n";
+            return true;
+        }
     }
-    renderer.setSpriteAtlas(gpuNextSlot, atlas);
-    gpuAtlasSlots.emplace(id, gpuNextSlot++);
-    if (gpuPreloadLogged)
-        std::cout << "GPU 4x HD infantry lazy slot: " << id << " (slot " << (gpuNextSlot - 1) << ")\n";
-    return true;
+    logFallback("no 4x or 2x sheet");
+    return false;
 }
 
 bool GameSession::ensureGpuVehicleSlot(const std::string& id) {
@@ -1157,26 +1199,50 @@ void GameSession::syncGpuSprites() {
         if (!cullViewport) return true;
         return (x + w) >= cullMinX && x <= cullMaxX && (y + h) >= cullMinY && y <= cullMaxY;
     };
+    const auto now = std::chrono::steady_clock::now();
     const float lightRadiusSq = (140.0f * fMapScale) * (140.0f * fMapScale);
     const bool hasDynamicLights = enhancedGraphics && combatEffects && (!activeVfx.empty() || !burningWrecks.empty());
     const auto explosionLightAt = [&](float wx, float wy, float maxCap, bool includeTracer, bool includeWrecks) {
         if (!hasDynamicLights) return 0.0f;
         float boost = 0.0f;
-        for (const auto& vfx : activeVfx) {
-            if (boost >= maxCap) break;
-            if (vfx.kind != ActiveVfx::Kind::Explosion && vfx.kind != ActiveVfx::Kind::VehicleExplosion &&
-                vfx.kind != ActiveVfx::Kind::Flamer && vfx.kind != ActiveVfx::Kind::CannonShell &&
-                (!includeTracer || vfx.kind != ActiveVfx::Kind::Tracer)) {
-                continue;
-            }
-            const float dx = wx - vfx.x0;
-            const float dy = wy - vfx.y0;
+        const auto addPointLight = [&](float lx, float ly, float peak) {
+            const float dx = wx - lx;
+            const float dy = wy - ly;
             const float distSq = dx * dx + dy * dy;
             if (distSq < lightRadiusSq) {
                 const float falloff = 1.0f - std::sqrt(distSq / lightRadiusSq);
-                const float peak = (vfx.kind == ActiveVfx::Kind::VehicleExplosion || vfx.kind == ActiveVfx::Kind::Explosion)
-                    ? maxCap : std::min(maxCap, 0.28f);
                 boost = std::max(boost, peak * falloff);
+            }
+        };
+        for (const auto& vfx : activeVfx) {
+            if (boost >= maxCap) break;
+            const float p = std::clamp(
+                std::chrono::duration<float>(now - vfx.start).count() /
+                    std::max(0.01f, static_cast<float>(vfx.duration.count()) * 0.001f),
+                0.0f, 1.0f);
+            if (vfx.kind == ActiveVfx::Kind::Explosion || vfx.kind == ActiveVfx::Kind::VehicleExplosion ||
+                vfx.kind == ActiveVfx::Kind::Flamer) {
+                const float peak = (vfx.kind == ActiveVfx::Kind::Flamer) ? std::min(maxCap, 0.28f) : maxCap;
+                addPointLight(vfx.x0, vfx.y0, peak);
+            } else if (vfx.kind == ActiveVfx::Kind::CannonShell) {
+                if (p < 0.35f) {
+                    const float muzzleFade = 1.0f - p / 0.35f;
+                    addPointLight(vfx.x0, vfx.y0, std::min(maxCap, 0.34f) * muzzleFade);
+                }
+            } else if (vfx.kind == ActiveVfx::Kind::Tracer) {
+                if (includeTracer && p < 0.35f) {
+                    const float muzzleFade = 1.0f - p / 0.35f;
+                    addPointLight(vfx.x0, vfx.y0, std::min(maxCap, 0.24f) * muzzleFade);
+                }
+            } else if (vfx.kind == ActiveVfx::Kind::Rocket) {
+                if (p < 0.35f) {
+                    const float muzzleFade = 1.0f - p / 0.35f;
+                    addPointLight(vfx.x0, vfx.y0, std::min(maxCap, 0.34f) * muzzleFade);
+                }
+                const float arcY = -20.0f * fMapScale * std::sin(p * 3.14159f);
+                const float rx = vfx.x0 + (vfx.x1 - vfx.x0) * p;
+                const float ry = vfx.y0 + (vfx.y1 - vfx.y0) * p + arcY;
+                addPointLight(rx, ry, std::min(maxCap, 0.30f));
             }
         }
         if (includeWrecks) {
@@ -1205,41 +1271,64 @@ void GameSession::syncGpuSprites() {
         auto sp = ws.sprite;
         const float cx = sp.x + sp.width * 0.5f;
         const float cy = sp.y + sp.height * 0.5f;
-        const float lightBoost = explosionLightAt(cx, cy, 0.36f, false, true);
+        const float lightBoost = explosionLightAt(cx, cy, 0.36f, true, true);
         sp.brightness = std::min(1.42f, fogBrightnessAt(ws.mapX1x, ws.mapY1x) + lightBoost);
         items.push_back({sp, ws.sortY});
     }
-    constexpr float cellPx = 128.0f;
     const float dstSize = 32.0f * static_cast<float>(mapScale);
     constexpr float footRatioY = 116.0f / 128.0f;
-    for (const auto& c : fallenSoldiers) {
+    for (std::size_t ci = 0; ci < fallenSoldiers.size(); ++ci) {
+        const auto& c = fallenSoldiers[ci];
         if (!gpuAtlasSlots.contains(c.id)) continue;
+        const float cellPx = gpuInfantry2xIds.contains(c.id) ? 64.0f : 128.0f;
         const unsigned col = c.direction & 7u;
+        constexpr unsigned row = 4u;
         const float cw = dstSize * 0.96f;
         const float ch = dstSize * 0.36f;
         const float cx = static_cast<float>(c.x * mapScale) - 0.5f * cw;
         const float cy = static_cast<float>(c.y * mapScale) - 0.65f * ch;
         if (!inFrustumRect(cx, cy, cw, ch)) continue;
+        const std::size_t distFromNewest = fallenSoldiers.size() - ci;
+        const float fade = (distFromNewest > 224u)
+            ? std::clamp(static_cast<float>(257u - std::min<std::size_t>(256u, distFromNewest)) / 33.0f, 0.04f, 1.0f)
+            : 1.0f;
+        const float baseBright = fogBrightnessAt(c.x, c.y);
+        const unsigned slot = gpuAtlasSlots.at(c.id);
+        const float u0 = static_cast<float>(col) * cellPx;
+        const float v0 = static_cast<float>(row) * cellPx;
+        const float u1 = static_cast<float>(col + 1u) * cellPx;
+        const float v1 = static_cast<float>(row + 1u) * cellPx;
+        const float shW = cw * 1.06f;
+        const float shH = ch * 0.55f;
+        items.push_back({
+            {
+                cx + 2.0f * fMapScale,
+                cy + 0.48f * ch + 1.0f * fMapScale,
+                shW,
+                shH,
+                u0, v0, u1, v1,
+                slot,
+                -101.0f,
+                0.28f * baseBright * fade
+            },
+            -10001 + c.y
+        });
         items.push_back({
             {
                 cx,
                 cy,
                 cw,
                 ch,
-                static_cast<float>(col) * cellPx,
-                0.0f,
-                static_cast<float>(col + 1u) * cellPx,
-                cellPx,
-                gpuAtlasSlots.at(c.id),
-                fogBrightnessAt(c.x, c.y) * 0.78f,
-                0.92f
+                u0, v0, u1, v1,
+                slot,
+                baseBright * 0.78f,
+                0.92f * fade
             },
             -10000 + c.y
         });
     }
     constexpr float recoilDx[8] = {-1.8f, 0.0f, 1.8f, 2.4f, 1.8f, 0.0f, -1.8f, -2.4f};
     constexpr float recoilDy[8] = {-1.2f, -1.8f, -1.2f, 0.0f, 1.2f, 1.8f, 1.2f, 0.0f};
-    const auto now = std::chrono::steady_clock::now();
     const float elapsed = std::chrono::duration<float>(now - animStart).count();
     const auto& units = scene->units();
     for (size_t idx = 0; idx < units.size(); ++idx) {
@@ -1248,6 +1337,7 @@ void GameSession::syncGpuSprites() {
         const float ux = static_cast<float>(u.x * mapScale);
         const float uy = static_cast<float>(u.y * mapScale);
         if (!inFrustumRect(ux - dstSize, uy - dstSize, dstSize * 2.0f, dstSize * 2.0f)) continue;
+        const float cellPx = gpuInfantry2xIds.contains(u.id) ? 64.0f : 128.0f;
         const unsigned col = u.direction & 7u;
         const unsigned row = u.walking ? (1u + ((4u * u.progress) >> 8u)) : 0u;
         const bool crouched = crouchedUnits.contains(idx);
@@ -1281,7 +1371,7 @@ void GameSession::syncGpuSprites() {
                 {
                     ux - 0.5f * shW + 4.5f * fMapScale + ox,
                     uy - footRatioY * shH + 1.5f * fMapScale + oy,
-                    shW, shH, u0, v0, u1, v1, slot, 0.0f, 0.30f * baseBright
+                    shW, shH, u0, v0, u1, v1, slot, -101.0f, 0.30f * baseBright
                 },
                 u.y - 2
             });
@@ -1314,7 +1404,7 @@ void GameSession::syncGpuSprites() {
             const float maxExtent = 96.0f * fMapScale;
             if (!inFrustumRect(vx - maxExtent, vy - maxExtent, maxExtent * 2.0f, maxExtent * 2.0f)) continue;
             const float baseBright = fogBrightnessAt(v.x, v.y);
-            const float lightBoost = alive ? explosionLightAt(vx, vy, 0.36f, false, true) : 0.0f;
+            const float lightBoost = alive ? explosionLightAt(vx, vy, 0.36f, true, true) : 0.0f;
             const float litBright = std::min(1.42f, baseBright + lightBoost);
             float rDx = 0.0f, rDy = 0.0f;
             if (alive) {
@@ -1341,7 +1431,7 @@ void GameSession::syncGpuSprites() {
                             shW, shH,
                             static_cast<float>(hcol) * hdCell, alive ? 0.0f : 512.0f,
                             static_cast<float>(hcol + 1u) * hdCell, alive ? 256.0f : 768.0f,
-                            meta.atlasSlot, 0.0f, 0.34f * baseBright
+                            meta.atlasSlot, -101.0f, 0.34f * baseBright
                         },
                         alive ? (v.y - 3) : (-9502 + v.y)
                     });
@@ -1459,7 +1549,7 @@ void GameSession::syncGpuSprites() {
                         {
                             shCx - penW * 0.5f, shCy - penH * 0.5f,
                             penW, penH, u0, v0, u1, v1,
-                            lp.atlasSlot, 0.0f, 0.18f * shadowFog
+                            lp.atlasSlot, -101.0f, 0.18f * shadowFog
                         },
                         shSortY
                     });
@@ -1469,7 +1559,7 @@ void GameSession::syncGpuSprites() {
                         {
                             shCx - shW * 0.5f, shCy - shH * 0.5f,
                             shW, shH, u0, v0, u1, v1,
-                            lp.atlasSlot, 0.0f, 0.26f * shadowFog
+                            lp.atlasSlot, -101.0f, 0.26f * shadowFog
                         },
                         shSortY
                     });
@@ -1479,7 +1569,7 @@ void GameSession::syncGpuSprites() {
                     {
                         shCx - shW * 0.5f, shCy - shH * 0.5f,
                         shW, shH, u0, v0, u1, v1,
-                        lp.atlasSlot, 0.0f, 0.38f * shadowFog
+                        lp.atlasSlot, -101.0f, 0.38f * shadowFog
                     },
                     shSortY
                 });
@@ -1678,21 +1768,58 @@ void GameSession::applyBridgeStage(std::size_t brIdx, int stage) {
     if (!scene || brIdx >= liveBridges.size()) return;
     const int clamped = std::clamp(stage, 0, 4);
     auto& lb = liveBridges[brIdx];
-    if (lb.stampedStage == clamped || lb.basePatch.width == 0 || lb.basePatch.height == 0) return;
-    assets::MapImage patch = lb.basePatch;
-    const auto& frame = lb.stageFrames[static_cast<std::size_t>(clamped)];
-    if (!frame.empty()) {
-        assets::drawIndexedFrame(patch, lb.x - lb.patchLeft, lb.y - lb.patchTop, frame, lb.palette);
+    if (lb.stampedStage == clamped ||
+        lb.placement.basePatch.width == 0 || lb.placement.basePatch.height == 0) {
+        return;
     }
-    const auto upd = scene->stampGroundPatch(lb.patchLeft, lb.patchTop, patch, false);
+    const assets::MapImage patch = assets::renderBridgeStage(lb.placement, clamped);
+    if (patch.width == 0 || patch.height == 0) return;
+    const auto upd = scene->stampGroundPatch(lb.placement.patchLeft, lb.placement.patchTop, patch, false);
     if (upd.pixels.width && upd.pixels.height) {
         renderer.updateMapRegion(upd.x, upd.y, upd.pixels);
     }
     lb.stampedStage = clamped;
 }
 
+bool GameSession::crushOrBlastTreesAt(int simX, int simY, int radiusPx, bool spawnDust) {
+    if (mapScale != 1 || !scene || destructibleTrees.empty() ||
+        treeFallen.size() != destructibleTrees.size() || radiusPx <= 0) {
+        return false;
+    }
+    const long long r2 = static_cast<long long>(radiusPx) * static_cast<long long>(radiusPx);
+    bool anyFallen = false;
+    for (std::size_t i = 0; i < destructibleTrees.size(); ++i) {
+        if (treeFallen[i]) continue;
+        const auto& tree = destructibleTrees[i];
+        const long long dx = static_cast<long long>(tree.x) - simX;
+        const long long dy = static_cast<long long>(tree.y) - simY;
+        if (dx * dx + dy * dy > r2) continue;
+        treeFallen[i] = true;
+        anyFallen = true;
+        if (tree.fallenPatch.width > 0 && tree.fallenPatch.height > 0) {
+            const assets::SpriteCoverage* oldShadow =
+                (tree.intactShadowCoverage.width > 0 && tree.intactShadowCoverage.height > 0)
+                    ? &tree.intactShadowCoverage
+                    : nullptr;
+            const auto patch = scene->updateBuildingPatch(
+                tree.patchLeft, tree.patchTop, tree.fallenPatch, tree.y,
+                std::span<const assets::SpriteCoverage>{}, oldShadow, nullptr);
+            if (patch.pixels.width && patch.pixels.height) {
+                renderer.updateMapRegion(patch.x, patch.y, patch.pixels);
+            }
+        }
+        if (spawnDust && combatEffects && isBuildingPointVisible(tree.x, tree.y)) {
+            combatVfx.spawnDust(static_cast<float>(tree.x), static_cast<float>(tree.y), true);
+        }
+    }
+    return anyFallen;
+}
+
 void GameSession::stampBattleCrater(int simX, int simY, bool large) {
     if (!scene) return;
+    if (large) {
+        (void)crushOrBlastTreesAt(simX, simY, 44, true);
+    }
     const auto& vec = (large && !craterCatalog.largeCraters.empty())
         ? craterCatalog.largeCraters
         : (!craterCatalog.smallCraters.empty() ? craterCatalog.smallCraters : craterCatalog.largeCraters);

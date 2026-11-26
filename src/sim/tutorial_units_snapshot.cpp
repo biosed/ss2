@@ -119,6 +119,8 @@ TutorialUnits::Snapshot TutorialUnits::takeSnapshot() const {
         vs.towedBy = v.towedBy ? static_cast<std::int32_t>(*v.towedBy) : -1;
         vs.hasCrew = v.hasCrew;
         vs.crewHp = v.crewHp;
+        vs.unlimberTicks = v.unlimberTicks;
+        vs.embarkedCrew = v.embarkedCrew;
         snap.vehicles.push_back(std::move(vs));
     }
     snap.buildings.reserve(buildings_.size());
@@ -474,6 +476,8 @@ bool TutorialUnits::loadSnapshotWithExtra(const Snapshot& snap, const ExtraState
             v.hp = 0;
             v.visible = false;
             v.passengers.clear();
+            v.embarkedCrew.clear();
+            v.unlimberTicks = 0;
             v.towedVehicle.reset();
             v.towedBy.reset();
             continue;
@@ -509,6 +513,8 @@ bool TutorialUnits::loadSnapshotWithExtra(const Snapshot& snap, const ExtraState
             v.hasCrew = (v.owner != 3) || !v.passengers.empty();
             v.crewHp = v.hasCrew ? v.maxCrewHp : 0;
         }
+        v.unlimberTicks = std::max(0, vs.unlimberTicks);
+        v.embarkedCrew = vs.embarkedCrew;
         v.towedVehicle = vs.towedVehicle >= 0
             ? std::optional<size_t>(static_cast<size_t>(vs.towedVehicle))
             : std::nullopt;
@@ -700,6 +706,26 @@ std::vector<std::uint8_t> TutorialUnits::serializeSnapshot(const Snapshot& snap)
         appendU8(out, v.hasCrew ? 1u : 0u);
         appendI32(out, static_cast<std::int32_t>(v.crewHp));
     }
+    const bool hasExtraTail = std::ranges::any_of(snap.vehicles, [](const auto& v) {
+        return v.unlimberTicks > 0 || !v.embarkedCrew.empty();
+    });
+    if (hasExtraTail) {
+        out.push_back('E');
+        out.push_back('X');
+        out.push_back('T');
+        out.push_back('4');
+        for (const auto& v : snap.vehicles) {
+            appendI32(out, static_cast<std::int32_t>(v.unlimberTicks));
+            appendU32(out, static_cast<std::uint32_t>(v.embarkedCrew.size()));
+            for (const auto& cm : v.embarkedCrew) {
+                appendU32(out, static_cast<std::uint32_t>(cm.id.size()));
+                out.insert(out.end(), cm.id.begin(), cm.id.end());
+                appendI32(out, static_cast<std::int32_t>(cm.hp));
+                appendI32(out, static_cast<std::int32_t>(cm.ammo));
+                appendI32(out, static_cast<std::int32_t>(cm.expa));
+            }
+        }
+    }
     return out;
 }
 
@@ -802,6 +828,29 @@ std::optional<TutorialUnits::Snapshot> TutorialUnits::deserializeSnapshot(std::s
             std::int32_t ch = 0;
             if (!r.readBool(v.hasCrew) || !r.readI32(ch)) return std::nullopt;
             v.crewHp = ch;
+        }
+        if (bytes.size() - r.pos >= 4u &&
+            bytes[r.pos] == 'E' && bytes[r.pos + 1u] == 'X' &&
+            bytes[r.pos + 2u] == 'T' && bytes[r.pos + 3u] == '4') {
+            r.pos += 4u;
+            for (auto& v : snap.vehicles) {
+                std::int32_t ul = 0;
+                std::uint32_t crewLen = 0;
+                if (!r.readI32(ul) || !r.readU32(crewLen) || crewLen > (bytes.size() - r.pos) / 16u) {
+                    return std::nullopt;
+                }
+                v.unlimberTicks = std::max<std::int32_t>(0, ul);
+                v.embarkedCrew.resize(crewLen);
+                for (auto& cm : v.embarkedCrew) {
+                    std::uint32_t idLen = 0;
+                    std::vector<std::uint8_t> idBytes;
+                    if (!r.readU32(idLen) || !r.readBytes(idBytes, idLen) ||
+                        !r.readI32(cm.hp) || !r.readI32(cm.ammo) || !r.readI32(cm.expa)) {
+                        return std::nullopt;
+                    }
+                    cm.id.assign(reinterpret_cast<const char*>(idBytes.data()), idBytes.size());
+                }
+            }
         }
     }
 

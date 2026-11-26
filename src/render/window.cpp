@@ -113,6 +113,9 @@ struct VulkanWindow::Impl {
     // Transform of the last recorded frame, including any letterboxing.
     double screenLeft{}, screenTop{}, scaleX = 1.0, scaleY = 1.0;
     double centerX{}, centerY{}, scale = 1.0;
+    double targetCenterX{}, targetCenterY{}, targetScale = 1.0;
+    bool animatingCamera = false;
+    std::uint64_t lastCameraTickNs = 0;
     vk::Format surfaceFormat{};
     bool transformReady = false;
     bool preferSoftware = gPreferSoftwareRenderer;
@@ -167,6 +170,7 @@ struct VulkanWindow::Impl {
     vk::UniqueBuffer spriteBuffer;
     vk::DeviceSize spriteCapacity{};
     bool spritesStale = false;
+    float spriteSharpness = 0.0f;
     // Where the map landed on screen in the last recorded frame.
     vk::Rect2D mapScreenRect;
 
@@ -484,9 +488,11 @@ struct VulkanWindow::Impl {
         spritesStale = false;
         transformReady = false;
         mapSize = vk::Extent2D(data.width, data.height);
-        centerX = data.width / 2.0;
-        centerY = data.height / 2.0;
-        scale = 1.0;
+        centerX = targetCenterX = data.width / 2.0;
+        centerY = targetCenterY = data.height / 2.0;
+        scale = targetScale = 1.0;
+        animatingCamera = false;
+        lastCameraTickNs = 0;
     }
 
     void queuePatch(int x, int y, const assets::MapImage& patch) {
@@ -644,23 +650,71 @@ struct VulkanWindow::Impl {
         return std::min(double(activeExtent.width) / mapSize.width, double(viewHeight()) / mapSize.height);
     }
 
+    void clampCenter(double& cx, double& cy, double s) const {
+        if (!hasMap() || activeExtent.width == 0 || activeExtent.height == 0 || s <= 0.0) return;
+        const int w = int(mapSize.width), h = int(mapSize.height);
+        const int screenW = int(activeExtent.width), screenH = viewHeight();
+        const int srcW = std::clamp(int(std::round(screenW / s)), 1, w);
+        const int srcH = std::clamp(int(std::round(screenH / s)), 1, h);
+        cx = std::clamp(cx, srcW / 2.0, w - srcW / 2.0);
+        cy = std::clamp(cy, srcH / 2.0, h - srcH / 2.0);
+    }
+
     void cameraEvent(const SDL_Event& event) {
         if (!hasMap()) return;
         if (event.type == SDL_EVENT_MOUSE_WHEEL) {
             double delta = event.wheel.direction == SDL_MOUSEWHEEL_FLIPPED ? -event.wheel.y : event.wheel.y;
-            scale = std::clamp(scale * std::pow(1.25, delta), std::min(1.0, fitScale()), 8.0);
+            if (delta == 0.0) return;
+            const double minScale = std::min(1.0, fitScale());
+            const double prevTarget = animatingCamera ? targetScale : scale;
+            const double nextScale = std::clamp(prevTarget * std::pow(1.25, delta), minScale, 8.0);
+            if (!animatingCamera) {
+                targetCenterX = centerX;
+                targetCenterY = centerY;
+            }
+            const bool hasCursor = event.wheel.windowID != 0 || event.wheel.mouse_x != 0.0f || event.wheel.mouse_y != 0.0f;
+            if (hasCursor && activeExtent.width > 0 && activeExtent.height > 0) {
+                const auto [sx, sy] = windowScale();
+                const double px = double(event.wheel.mouse_x) * sx;
+                const double py = double(event.wheel.mouse_y) * sy;
+                const int screenW = int(activeExtent.width);
+                const int screenH = viewHeight();
+                if (px >= 0.0 && px <= double(screenW) && py >= 0.0 && py <= double(screenH)) {
+                    const double worldX = targetCenterX + (px - screenW * 0.5) / prevTarget;
+                    const double worldY = targetCenterY + (py - screenH * 0.5) / prevTarget;
+                    targetCenterX = worldX - (px - screenW * 0.5) / nextScale;
+                    targetCenterY = worldY - (py - screenH * 0.5) / nextScale;
+                }
+            }
+            targetScale = nextScale;
+            clampCenter(targetCenterX, targetCenterY, targetScale);
+            animatingCamera = true;
         } else if (event.type == SDL_EVENT_MOUSE_MOTION && (event.motion.state & SDL_BUTTON_MMASK)) {
             const auto [sx, sy] = windowScale();
-            centerX -= event.motion.xrel * sx / scale;
-            centerY -= event.motion.yrel * sy / scale;
+            const double dx = -event.motion.xrel * sx / scale;
+            const double dy = -event.motion.yrel * sy / scale;
+            centerX += dx;
+            centerY += dy;
+            targetCenterX = centerX;
+            targetCenterY = centerY;
         } else if (event.type == SDL_EVENT_KEY_DOWN) {
             switch (event.key.key) {
-            case SDLK_LEFT: centerX -= 64 / scale; break;
-            case SDLK_RIGHT: centerX += 64 / scale; break;
-            case SDLK_UP: centerY -= 64 / scale; break;
-            case SDLK_DOWN: centerY += 64 / scale; break;
-            case SDLK_HOME: scale = fitScale(); break;
-            case SDLK_1: scale = 1; break;
+            case SDLK_LEFT: centerX -= 64 / scale; targetCenterX = centerX; break;
+            case SDLK_RIGHT: centerX += 64 / scale; targetCenterX = centerX; break;
+            case SDLK_UP: centerY -= 64 / scale; targetCenterY = centerY; break;
+            case SDLK_DOWN: centerY += 64 / scale; targetCenterY = centerY; break;
+            case SDLK_HOME:
+                scale = targetScale = fitScale();
+                targetCenterX = centerX;
+                targetCenterY = centerY;
+                animatingCamera = false;
+                break;
+            case SDLK_1:
+                scale = targetScale = 1;
+                targetCenterX = centerX;
+                targetCenterY = centerY;
+                animatingCamera = false;
+                break;
             }
         }
     }
@@ -670,8 +724,7 @@ struct VulkanWindow::Impl {
         const int screenW = activeExtent.width, screenH = viewHeight();
         const int srcW = std::clamp(int(std::round(screenW / scale)), 1, w);
         const int srcH = std::clamp(int(std::round(screenH / scale)), 1, h);
-        centerX = std::clamp(centerX, srcW / 2.0, w - srcW / 2.0);
-        centerY = std::clamp(centerY, srcH / 2.0, h - srcH / 2.0);
+        clampCenter(centerX, centerY, scale);
         const int x = int(centerX - srcW / 2.0), y = int(centerY - srcH / 2.0);
         const int dstW = std::clamp(int(std::round(srcW * scale)), 1, screenW);
         const int dstH = std::clamp(int(std::round(srcH * scale)), 1, screenH);
@@ -849,7 +902,7 @@ struct VulkanWindow::Impl {
                 vk::ShaderStageFlagBits::eFragment);
             spriteLayout = device->createDescriptorSetLayoutUnique({{}, 1, &binding});
             const vk::PushConstantRange push(vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
-                                             0, 5 * sizeof(float));
+                                             0, 6 * sizeof(float));
             spritePipelineLayout = device->createPipelineLayoutUnique({{}, 1, &*spriteLayout, 1, &push});
             const vk::DescriptorPoolSize size(vk::DescriptorType::eCombinedImageSampler, std::uint32_t(atlases.size()));
             spritePool = device->createDescriptorPoolUnique({{}, std::uint32_t(atlases.size()), 1, &size});
@@ -1304,13 +1357,22 @@ struct VulkanWindow::Impl {
         command.setViewport(0, vk::Viewport(0, 0, float(activeExtent.width), float(activeExtent.height), 0, 1));
         command.setScissor(0, mapScreenRect);
         // Map pixel -> screen pixel is the frame's camera transform; then to clip space.
-        const float push[5] = {float(scaleX * 2.0 / activeExtent.width), float(scaleY * 2.0 / activeExtent.height),
-                               float(screenLeft * 2.0 / activeExtent.width - 1.0),
-                               float(screenTop * 2.0 / activeExtent.height - 1.0), srgbSurface() ? 1.f : 0.f};
-        command.pushConstants(*spritePipelineLayout, vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
-                              0, sizeof push, push);
+        const float s0 = float(scaleX * 2.0 / activeExtent.width);
+        const float s1 = float(scaleY * 2.0 / activeExtent.height);
+        const float o0 = float(screenLeft * 2.0 / activeExtent.width - 1.0);
+        const float o1 = float(screenTop * 2.0 / activeExtent.height - 1.0);
+        const float enc = srgbSurface() ? 1.f : 0.f;
         command.bindVertexBuffers(0, *spriteBuffer, vk::DeviceSize(0));
+        float lastSharpness = -1.f;
         for (const auto& batch : spriteBatches) {
+            const float sharp = (batch.atlas < VulkanWindow::spriteAtlasSlots) ? spriteSharpness : 0.f;
+            if (sharp != lastSharpness) {
+                const float push[6] = {s0, s1, o0, o1, enc, sharp};
+                command.pushConstants(*spritePipelineLayout,
+                    vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
+                    0, sizeof push, push);
+                lastSharpness = sharp;
+            }
             command.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, *spritePipelineLayout, 0, atlases[batch.atlas].set, {});
             command.draw(batch.count, 1, batch.first, 0);
         }
@@ -1338,7 +1400,8 @@ struct VulkanWindow::Impl {
             command.copyBufferToImage(*outline, destination, vk::ImageLayout::eTransferDstOptimal,
                 vk::BufferImageCopy(band, 0, 0, layer, {int(l), int(t), 0}, {unsigned(right-l), unsigned(bottom-t), 1}));
         };
-        for (int k = 0; k < weight; ++k) {
+        const int totalWeight = weight * std::max(1, int(activeExtent.height) / 1080);
+        for (int k = 0; k < totalWeight; ++k) {
             const std::int64_t a = x0 + k, b = y0 + k, c = x1 - k, d = y1 - k;
             if (c - a < 2 || d - b < 2) break;
             line(a, b, c, b+1); line(a, d-1, c, d);
@@ -1508,8 +1571,11 @@ struct VulkanWindow::Impl {
         command.bindPipeline(vk::PipelineBindPoint::eGraphics, *spritePipeline);
         command.setViewport(0, vk::Viewport(0, 0, float(activeExtent.width), float(activeExtent.height), 0, 1));
         command.setScissor(0, vk::Rect2D({0, 0}, activeExtent));
-        const float push[5] = {2.f / float(activeExtent.width), 2.f / float(activeExtent.height),
-                              -1.f, -1.f, srgbSurface() ? 1.f : 0.f};
+        const bool upscaledPanel = (atlasIdx == panelAtlas) &&
+            overlays[std::size_t(OverlaySlot::panel)].stretchFullscreen &&
+            atlases[atlasIdx].width > 0 && atlases[atlasIdx].width < activeExtent.width;
+        const float push[6] = {2.f / float(activeExtent.width), 2.f / float(activeExtent.height),
+                              -1.f, -1.f, srgbSurface() ? 1.f : 0.f, upscaledPanel ? 2.f : 0.f};
         command.pushConstants(*spritePipelineLayout, vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
                               0, sizeof push, push);
         command.bindVertexBuffers(0, quadBuf, vk::DeviceSize(0));
@@ -1588,6 +1654,30 @@ struct VulkanWindow::Impl {
         if (SDL_GetWindowFlags(window) & SDL_WINDOW_MINIMIZED) return false;
         try {
             if (dirty && !rebuild()) return false;
+            const std::uint64_t nowNs = SDL_GetTicksNS();
+            double dt = 0.0;
+            if (lastCameraTickNs != 0 && nowNs > lastCameraTickNs) {
+                dt = std::min(0.1, double(nowNs - lastCameraTickNs) * 1e-9);
+            } else if (animatingCamera) {
+                dt = 1.0 / 60.0;
+            }
+            lastCameraTickNs = nowNs;
+            if (animatingCamera && hasMap()) {
+                const double stepDt = std::max(dt, 1.0 / 240.0);
+                const double alpha = 1.0 - std::exp(-stepDt * 18.0);
+                scale += (targetScale - scale) * alpha;
+                centerX += (targetCenterX - centerX) * alpha;
+                centerY += (targetCenterY - centerY) * alpha;
+                if (std::abs(targetScale - scale) < 1e-4 &&
+                    std::abs(targetCenterX - centerX) < 0.05 &&
+                    std::abs(targetCenterY - centerY) < 0.05) {
+                    scale = targetScale;
+                    centerX = targetCenterX;
+                    centerY = targetCenterY;
+                    animatingCamera = false;
+                }
+                clampCenter(centerX, centerY, scale);
+            }
             if (mapGrade.enabled && canSampleMap && (!mapPipeline || mapPipelineFormat != surfaceFormat))
                 ensureMapPipeline();
             if (device->waitForFences(*submitted, true, acquireTimeoutNs) != vk::Result::eSuccess) return false;
@@ -1689,12 +1779,28 @@ void VulkanWindow::focusMap(int x, int y, bool zoomFromOverview) {
         impl_->scale = std::max(1.0,impl_->scale);
     impl_->centerX = x;
     impl_->centerY = y;
+    impl_->targetScale = impl_->scale;
+    impl_->targetCenterX = impl_->centerX;
+    impl_->targetCenterY = impl_->centerY;
+    impl_->animatingCamera = false;
+}
+void VulkanWindow::smoothFocusMap(double mapX, double mapY) {
+    if (!std::isfinite(mapX) || !std::isfinite(mapY)) return;
+    impl_->targetCenterX = mapX;
+    impl_->targetCenterY = mapY;
+    impl_->targetScale = impl_->animatingCamera ? impl_->targetScale : impl_->scale;
+    impl_->clampCenter(impl_->targetCenterX, impl_->targetCenterY, impl_->targetScale);
+    impl_->animatingCamera = true;
 }
 void VulkanWindow::panMap(double screenDx, double screenDy) {
     if (!impl_->hasMap() || (screenDx == 0.0 && screenDy == 0.0)) return;
     const auto [sx, sy] = impl_->windowScale();
-    impl_->centerX += screenDx * sx / impl_->scale;
-    impl_->centerY += screenDy * sy / impl_->scale;
+    const double dx = screenDx * sx / impl_->scale;
+    const double dy = screenDy * sy / impl_->scale;
+    impl_->centerX += dx;
+    impl_->centerY += dy;
+    impl_->targetCenterX = impl_->centerX;
+    impl_->targetCenterY = impl_->centerY;
 }
 std::pair<double, double> VulkanWindow::mapPosition(float x, float y) const {
     if (!impl_->transformReady) return {-1, -1};
@@ -1766,10 +1872,14 @@ void VulkanWindow::setSprites(std::vector<Sprite> list) {
     std::erase_if(list, [](const Sprite& s) { return s.width <= 0 || s.height <= 0 || s.alpha <= 0; });
     for (auto& s : list) {
         s.alpha = std::min(s.alpha, 1.f);
-        s.brightness = std::clamp(s.brightness, 0.f, 1.6f);
+        if (s.brightness <= -100.f) s.brightness = std::clamp(s.brightness, -104.f, -100.f);
+        else s.brightness = std::clamp(s.brightness, 0.f, 1.6f);
     }
     impl_->sprites = std::move(list);
     impl_->spritesStale = true;
+}
+void VulkanWindow::setSpriteSharpness(float sharpness) {
+    impl_->spriteSharpness = std::isfinite(sharpness) ? std::clamp(sharpness, 0.f, 4.f) : 0.f;
 }
 void VulkanWindow::setBeams(std::vector<MapBeam> list) {
     for (const auto& b : list)

@@ -65,6 +65,7 @@ void Tooltip::render() {
     pixelW = std::max(pixelW, 1);
     pixelH = std::max(pixelH, 1);
     const int body = std::clamp(int(std::lround(pixelH / 52.0)), 11, 34), title = body * 9 / 8;
+    const int uiScale = std::max(1, static_cast<int>(std::lround(double(pixelH) / 1080.0)));
     const int pad = std::max(5, body * 2 / 3), gap = std::max(2, body / 4);
     const int maxText = std::max(40, std::min(pixelW / 3, body * 26));
 
@@ -95,8 +96,9 @@ void Tooltip::render() {
     colour(cr, 22, 26, 24);
     cairo_paint(cr);
     colour(cr, 132, 127, 101);
-    cairo_set_line_width(cr, 1);
-    cairo_rectangle(cr, .5, .5, w - 1, h - 1);
+    const double lw = double(uiScale);
+    cairo_set_line_width(cr, lw);
+    cairo_rectangle(cr, lw * 0.5, lw * 0.5, w - lw, h - lw);
     cairo_stroke(cr);
     int y = pad;
     for (std::size_t i = 0; i < rows.size(); ++i) {

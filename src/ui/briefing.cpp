@@ -1,5 +1,6 @@
 #include "ui/briefing.hpp"
 #include "render/window.hpp"
+#include "ui/strings.hpp"
 
 #include <pango/pangocairo.h>
 #include <algorithm>
@@ -53,6 +54,7 @@ void Briefing::layout() {
     pixelH = std::max(pixelH, 1);
 
     const int fontPx = std::clamp(int(std::lround(pixelH / 38.0)), 19, 48);
+    const int uiScale = std::max(1, static_cast<int>(std::lround(double(pixelH) / 1080.0)));
     const int footerPx = std::max(14, 3 * fontPx / 4);
     const int maxPanelW = std::clamp(std::max(360, pixelW / 2), 1, pixelW);
     const int pad = std::min(fontPx, (maxPanelW - 1) / 4);
@@ -84,7 +86,7 @@ void Briefing::layout() {
     page_ = std::min(page_, pages_ - 1);
     const int start = pageStarts[page_];
     const int bodyH = (page_ + 1 < pages_ ? pageStarts[page_ + 1] : lineEnds.back()) - start;
-    std::string action = "Enter or click to continue";
+    std::string action = tr("Enter or click to continue");
     if (pages_ > 1) action += "   " + std::to_string(page_ + 1) + " / " + std::to_string(pages_);
     auto footer = makeLayout(fonts_.get(), action, footerPx, contentW);
     int footerW{}, footerH{};
@@ -97,8 +99,9 @@ void Briefing::layout() {
     color(cr, 27, 32, 30);
     cairo_paint(cr);
     color(cr, 132, 127, 101);
-    cairo_set_line_width(cr, 1);
-    cairo_rectangle(cr, .5, .5, panelW - 1, panelH - 1);
+    const double lw = double(uiScale);
+    cairo_set_line_width(cr, lw);
+    cairo_rectangle(cr, lw * 0.5, lw * 0.5, panelW - lw, panelH - lw);
     cairo_stroke(cr);
     cairo_save(cr);
     cairo_rectangle(cr, pad, pad, contentW, bodyH);
@@ -246,6 +249,7 @@ void Notice::layout() {
     pixelH = std::max(pixelH, 1);
 
     const int fontPx = std::clamp(int(std::lround(pixelH / 44.0)), 17, 42);
+    const int uiScale = std::max(1, static_cast<int>(std::lround(double(pixelH) / 1080.0)));
     const int pad = std::max(4, fontPx * 2 / 3);
     const int bar = std::max(4, fontPx / 4);
     const int icon = fontPx;
@@ -273,8 +277,9 @@ void Notice::layout() {
     color(cr, 27, 32, 30);
     cairo_paint(cr);
     color(cr, accent.r, accent.g, accent.b);
-    cairo_set_line_width(cr, 1);
-    cairo_rectangle(cr, .5, .5, panelW - 1, panelH - 1);
+    const double lw = double(uiScale);
+    cairo_set_line_width(cr, lw);
+    cairo_rectangle(cr, lw * 0.5, lw * 0.5, panelW - lw, panelH - lw);
     cairo_stroke(cr);
     cairo_rectangle(cr, 0, 0, bar, panelH);
     cairo_fill(cr);

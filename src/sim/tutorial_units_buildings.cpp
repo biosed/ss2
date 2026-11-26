@@ -70,6 +70,7 @@ void TutorialUnits::setBuildings(std::vector<assets::BuildingPlacement> building
         b.maxHp = std::max(100, bp.maxHp);
         b.hp = b.maxHp;
         b.capacity = std::clamp(bp.capacity, 2, 16);
+        b.sightBonus = bp.sightBonus > 0 ? bp.sightBonus : 3;
         b.entryCell = findBuildingEntryCell(bp.x, bp.y);
         buildings_.push_back(std::move(b));
     }
@@ -454,6 +455,10 @@ void TutorialUnits::damageBuilding(size_t bIdx, int rawDamage, assets::HitType h
         (void)evacuateBuilding(bIdx, &changed);
         emitBuildingUpdate(bIdx, true, true);
     } else {
+        const int effectiveUnloadHp = std::min(bldDef.unloadHp, std::max(1, b.maxHp / 4));
+        if (catalog_ != nullptr && !b.occupants.empty() && b.hp <= effectiveUnloadHp) {
+            (void)evacuateBuilding(bIdx, &changed);
+        }
         emitBuildingUpdate(bIdx, structDmg > 0, false);
     }
 }

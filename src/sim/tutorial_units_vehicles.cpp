@@ -21,9 +21,62 @@ constexpr std::array<int, 8> kTileDy{0, 1, 1, 1, 0, -1, -1, -1};
 unsigned dirDelta32(unsigned a, unsigned b) {
     return std::min((a - b) & 31u, (b - a) & 31u);
 }
+std::optional<SubCell> findNearestWalkableSubCell(const InfantryPathGrid& grid, SubCell desired, int maxR) {
+    const int w = grid.width(), h = grid.height();
+    if (w <= 0 || h <= 0) return std::nullopt;
+    const int cx = std::clamp(desired.x, 0, w - 1);
+    const int cy = std::clamp(desired.y, 0, h - 1);
+    std::optional<SubCell> best;
+    std::int64_t bestD2 = std::numeric_limits<std::int64_t>::max();
+    bool bestFree = false;
+    for (int r = 0; r <= maxR; ++r) {
+        for (int dy = -r; dy <= r; ++dy) {
+            for (int dx = -r; dx <= r; ++dx) {
+                if (std::max(std::abs(dx), std::abs(dy)) != r) continue;
+                const SubCell cand{cx + dx, cy + dy};
+                if (!grid.inBounds(cand) || !grid.walkable(cand)) continue;
+                const std::int64_t ox = std::int64_t(cand.x) - desired.x;
+                const std::int64_t oy = std::int64_t(cand.y) - desired.y;
+                const std::int64_t d2 = ox * ox + oy * oy;
+                const bool free = grid.canEnter(cand);
+                if (d2 < bestD2 || (d2 == bestD2 && free && !bestFree)) {
+                    bestD2 = d2;
+                    best = cand;
+                    bestFree = free;
+                }
+            }
+        }
+    }
+    return best;
+}
+std::optional<SubCell> findDisembarkCellBounded(const InfantryPathGrid& grid, SubCell desired, int maxR) {
+    const int w = grid.width(), h = grid.height();
+    if (w <= 0 || h <= 0) return std::nullopt;
+    const int cx = std::clamp(desired.x, 0, w - 1);
+    const int cy = std::clamp(desired.y, 0, h - 1);
+    std::optional<SubCell> best;
+    std::int64_t bestD2 = std::numeric_limits<std::int64_t>::max();
+    for (int r = 0; r <= maxR; ++r) {
+        for (int dy = -r; dy <= r; ++dy) {
+            for (int dx = -r; dx <= r; ++dx) {
+                if (std::max(std::abs(dx), std::abs(dy)) != r) continue;
+                const SubCell cand{cx + dx, cy + dy};
+                if (!grid.inBounds(cand) || !grid.canEnter(cand)) continue;
+                const std::int64_t ox = std::int64_t(cand.x) - desired.x;
+                const std::int64_t oy = std::int64_t(cand.y) - desired.y;
+                const std::int64_t d2 = ox * ox + oy * oy;
+                if (d2 < bestD2) {
+                    bestD2 = d2;
+                    best = cand;
+                }
+            }
+        }
+    }
+    return best;
+}
 }
 int TutorialUnits::scaleVehicleDamageForDifficulty(int targetOwner, int rawDamage) const {
-    if (rawDamage <= 0 || targetOwner != 0) return rawDamage;
+    if (rawDamage <= 0 || targetOwner != 0 || multiplayerSymmetry_) return rawDamage;
     if (difficulty_ <= 1) return std::max(1, (rawDamage * 80) / 100);
     if (difficulty_ == 3) return std::max(1, (rawDamage * 115) / 100);
     return rawDamage;
@@ -558,11 +611,24 @@ size_t TutorialUnits::unloadVehicles(std::span<const size_t> vehicleIds, std::ve
         if (vid >= vehicles_.size()) continue;
         auto& v = vehicles_[vid];
         if (!v.alive || v.hp <= 0 || v.owner != actor || v.passengers.empty()) continue;
+        const bool waterBound = v.isNaval || !grid_.walkable(v.cell);
+        std::vector<size_t> remaining;
+        bool vehUnloadedAny = false;
         for (size_t sIdx : v.passengers) {
             if (sIdx >= soldiers_.size()) continue;
             auto& s = soldiers_[sIdx];
             if (s.hp <= 0) continue;
-            const SubCell spot = findSpawnCell(grid_, v.cell);
+            std::optional<SubCell> spotOpt;
+            if (waterBound) {
+                spotOpt = findDisembarkCellBounded(grid_, v.cell, 8);
+                if (!spotOpt) {
+                    remaining.push_back(sIdx);
+                    continue;
+                }
+            } else {
+                spotOpt = findSpawnCell(grid_, v.cell);
+            }
+            const SubCell spot = *spotOpt;
             s.embarked = false;
             s.cell = spot;
             s.motion.reset();
@@ -581,10 +647,13 @@ size_t TutorialUnits::unloadVehicles(std::span<const size_t> vehicleIds, std::ve
                 });
             }
             ++unloaded;
+            vehUnloadedAny = true;
         }
-        v.passengers.clear();
-        emitVehiclePose(vid);
-        fogDirty_ = true;
+        v.passengers = std::move(remaining);
+        if (vehUnloadedAny) {
+            emitVehiclePose(vid);
+            fogDirty_ = true;
+        }
     }
     if (unloaded > 0 && fog_) refreshSpotting(outPoses, true);
     if (outPoses) {
@@ -608,8 +677,9 @@ bool TutorialUnits::canCaptureVehicle(size_t vehicleIdx, int viewerOwner) const 
     if (!v.alive || v.hp <= 0 || v.isCrate) return false;
     const bool neutralCapturable = (v.owner == 3) && (!multiplayerSymmetry_ || !v.hasCrew);
     const bool friendlyUnmanned = !v.hasCrew && isAlliedFor(viewerOwner, v.owner);
-    if (!neutralCapturable && !friendlyUnmanned) return false;
-    if (friendlyUnmanned) return true;
+    const bool friendlyUnderCrewed = (v.owner == viewerOwner) && v.hasCrew && v.crewHp < v.maxCrewHp && v.crewNumber > 1;
+    if (!neutralCapturable && !friendlyUnmanned && !friendlyUnderCrewed) return false;
+    if (friendlyUnmanned || friendlyUnderCrewed) return true;
     if (viewerOwner == 0 && !multiplayerSymmetry_) return v.visible;
     return !fog_ || (v.spottedMask & static_cast<std::uint8_t>(1u << viewerOwner)) != 0u;
 }
@@ -648,13 +718,33 @@ std::vector<VehicleRangePreview> TutorialUnits::selectionRangePreviews(std::span
                                                                          std::span<const size_t> soldierIds) const {
     std::vector<VehicleRangePreview> out;
     std::vector<size_t> seen;
+    const int visPct = weatherVisibilityPct();
     for (const size_t vid : vehicleIds) {
         if (vid >= vehicles_.size()) continue;
         if (std::ranges::find(seen, vid) != seen.end()) continue;
         seen.push_back(vid);
         const auto& v = vehicles_[vid];
         if (!v.alive || v.hp <= 0 || v.owner != viewerOwner_ || !v.hasCrew || !v.hasPrimary || v.range <= 0.0) continue;
-        out.push_back({v.x, v.y, static_cast<float>(v.range), static_cast<float>(v.deadzone)});
+        const bool buttonedUp = !v.hatchOpen || v.suppressionTicks > 0 ||
+                                (v.lastCombatTick != 0u && tick_ < v.lastCombatTick + 125u);
+        const int marchBonus = buttonedUp ? 0 : v.marchSightBonus;
+        const int elevBonus = (fog_ && fog_->isElevated(v.cell.x / 2, v.cell.y / 2)) ? 2 : 0;
+        const int vr = std::min(31, v.sightTiles + elevBonus + (v.expa >= 16384 ? 2 : (v.expa >= 8192 ? 1 : 0)));
+        int effVr = (visPct >= 100) ? vr : std::max(1, (vr * visPct) / 100);
+        if (v.bonusSight != 0) effVr = std::clamp(effVr + (v.bonusSight * visPct) / 100, 1, 31);
+        if (difficulty_ <= 1 && v.owner == 0 && !multiplayerSymmetry_) {
+            effVr = std::clamp((effVr * 13) / 10, 1, 31);
+        }
+        if (marchBonus > 0) {
+            int withMarch = effVr + (marchBonus * visPct) / 100;
+            if (difficulty_ <= 1 && v.owner == 0 && !multiplayerSymmetry_) {
+                withMarch = (withMarch * 13) / 10;
+            }
+            effVr = std::max(effVr, std::min(31, withMarch));
+        }
+        const bool indirect = v.indirectArc1 || v.isArtillery || v.isRocketArtillery;
+        out.push_back({v.x, v.y, static_cast<float>(v.range), static_cast<float>(v.deadzone),
+                       static_cast<float>(effVr * 32), indirect});
         if (out.size() >= 4u) break;
     }
     if (out.size() < 4u && !soldierIds.empty()) {
@@ -665,16 +755,32 @@ std::vector<VehicleRangePreview> TutorialUnits::selectionRangePreviews(std::span
             seenSoldiers.push_back(sid);
             const auto& s = soldiers_[sid];
             if (s.owner != viewerOwner_ || s.hp <= 0 || s.embarked || s.garrisonBuilding ||
-                (!s.isMortar && !s.isFlamer)) {
+                (!s.isMortar && !s.isFlamer && !s.isSniper && !s.isAntiVehicle && !s.isHeavyMg && !s.isOfficer)) {
                 continue;
             }
-            const int maxRange = scaleByExpa(s.desc.rangeBase, s.desc.rangeDelta, s.expa);
+            const int maxRange = (s.isAntiVehicle && !s.hasCatalogAtShot)
+                ? 240
+                : scaleByExpa(s.desc.rangeBase, s.desc.rangeDelta, s.expa);
             const int minRange = scaleByExpa(s.desc.deadzoneBase, s.desc.deadzoneDelta, s.expa);
-            if (maxRange <= 0) continue;
+            if (maxRange <= 0 && !s.isOfficer) continue;
+            InfantryCombatDesc sightDesc = s.desc;
+            if (s.hasBinoculars && s.binoculars && !s.motion && s.route.empty()) {
+                if (s.crouched) sightDesc.crouchSightBase += s.binoSightBonus;
+                else sightDesc.sightBase += s.binoSightBonus;
+            }
+            if (fog_ && fog_->isElevated(s.cell.x / 2, s.cell.y / 2)) {
+                if (s.crouched) sightDesc.crouchSightBase += 2;
+                else sightDesc.sightBase += 2;
+            }
+            const int r = effectiveSightRadius(sightDesc, s.expa, s.crouched, s.owner,
+                                               difficulty_, s.movingSightPenalty, visPct);
             const auto [su, sv] = soldierWorld(s);
             out.push_back({
                 originX_ + su - sv, (su + sv) / 2,
-                static_cast<float>(maxRange), static_cast<float>(minRange)
+                static_cast<float>(std::max(0, maxRange)),
+                static_cast<float>(std::max(0, minRange)),
+                static_cast<float>(r * 32),
+                s.isMortar
             });
             if (out.size() >= 4u) break;
         }
@@ -697,6 +803,7 @@ std::vector<assets::Placement> TutorialUnits::abandonVehicles(std::span<const si
         if (v.towedVehicle) detachTowedGun(vid);
         else if (v.towedBy) detachTowedGun(*v.towedBy);
 
+        const int crewCount = std::max(1, v.activeCrewCount());
         std::string crewId = "dguner";
         if (!v.crewUnit.empty()) {
             crewId = v.crewUnit;
@@ -733,9 +840,21 @@ std::vector<assets::Placement> TutorialUnits::abandonVehicles(std::span<const si
         fogDirty_ = true;
         emitVehiclePose(vid);
 
-        const int cx = std::clamp(v.x + 18, 16, std::max(16, mapPixelW_ - 16));
-        const int cy = std::clamp(v.y + 10, 16, std::max(16, mapPixelH_ - 16));
-        crewPlacements.push_back({crewId, cx, cy, 0, 100, 40, v.group, prevOwner});
+        for (int ci = 0; ci < crewCount; ++ci) {
+            const int offX = (ci % 3) * 14;
+            const int offY = (ci / 3) * 14;
+            const int cx = std::clamp(v.x + 18 + offX, 16, std::max(16, mapPixelW_ - 16));
+            const int cy = std::clamp(v.y + 10 + offY, 16, std::max(16, mapPixelH_ - 16));
+            if (!v.embarkedCrew.empty()) {
+                CrewMember cm = std::move(v.embarkedCrew.back());
+                v.embarkedCrew.pop_back();
+                crewPlacements.push_back({std::move(cm.id), cx, cy, 0, std::max(1, cm.hp),
+                                          std::max(0, cm.ammo), v.group, prevOwner, {}, cm.expa});
+            } else {
+                crewPlacements.push_back({crewId, cx, cy, 0, 100, 40, v.group, prevOwner});
+            }
+        }
+        v.embarkedCrew.clear();
     }
     if (!crewPlacements.empty() && fog_) {
         refreshSpotting(outPoses, true);
@@ -997,13 +1116,23 @@ size_t TutorialUnits::unhitchVehicles(std::span<const size_t> vehicleIndices) {
         if (vid >= vehicles_.size()) continue;
         const auto& v = vehicles_[vid];
         if (!v.alive || v.hp <= 0 || v.owner != actor) continue;
-        if (v.towedVehicle) {
-            detachTowedGun(vid);
-            ++unhitched;
-        } else if (v.towedBy) {
-            detachTowedGun(*v.towedBy);
-            ++unhitched;
+        std::optional<size_t> tractorIdx;
+        if (v.towedVehicle) tractorIdx = vid;
+        else if (v.towedBy) tractorIdx = *v.towedBy;
+        if (!tractorIdx || *tractorIdx >= vehicles_.size()) continue;
+        const auto gunOpt = vehicles_[*tractorIdx].towedVehicle;
+        const unsigned trHull = vehicles_[*tractorIdx].hullDir;
+        detachTowedGun(*tractorIdx);
+        if (gunOpt && *gunOpt < vehicles_.size()) {
+            auto& gun = vehicles_[*gunOpt];
+            if (gun.speedPx <= 0.0) {
+                gun.hullDir = (trHull + 16u) & 31u;
+                gun.turretDir = gun.hullDir;
+                gun.unlimberTicks = 35;
+                emitVehiclePose(*gunOpt);
+            }
         }
+        ++unhitched;
     }
     return unhitched;
 }
@@ -1208,8 +1337,10 @@ void TutorialUnits::stepBoarding(std::vector<SoldierPose>& changed) {
         const auto [su, sv] = soldierWorld(s);
         const int sx = originX_ + su - sv;
         const int sy = (su + sv) / 2;
+        const bool onWater = !grid_.walkable(v.cell);
+        const double embarkDist = onWater ? 96.0 : 56.0;
         const double dist = det::detHypot(double(v.x - sx), double(v.y - sy));
-        if (dist <= 56.0) {
+        if (dist <= embarkDist) {
             if (embarkImmediate(i, vid)) {
                 pushOrUpdateSoldierPose(changed, {
                     i, sx, sy, s.direction, 0, false, s.hp, true, s.owner, s.group, false, false
@@ -1217,8 +1348,17 @@ void TutorialUnits::stepBoarding(std::vector<SoldierPose>& changed) {
             }
             continue;
         }
-        if (!s.goal || !sameTile(*s.goal, v.cell)) {
-            s.goal = v.cell;
+        SubCell approachCell = v.cell;
+        if (onWater) {
+            const auto shore = findNearestWalkableSubCell(grid_, v.cell, 8);
+            if (!shore) {
+                s.boardVehicleTarget.reset();
+                continue;
+            }
+            approachCell = *shore;
+        }
+        if (!s.goal || !sameTile(*s.goal, approachCell)) {
+            s.goal = approachCell;
             s.route.clear();
             s.cursor = 0;
             s.planning = {};
@@ -1245,35 +1385,80 @@ void TutorialUnits::stepCaptures(std::vector<SoldierPose>& changed) {
         const auto [su, sv] = soldierWorld(s);
         const int sx = originX_ + su - sv;
         const int sy = (su + sv) / 2;
-        if (det::detHypot(double(v.x - sx), double(v.y - sy)) <= 56.0) {
+        const bool onWater = !grid_.walkable(v.cell);
+        const double capDist = onWater ? 96.0 : 56.0;
+        if (det::detHypot(double(v.x - sx), double(v.y - sy)) <= capDist) {
+            const std::string sid = (i < soldierIds_.size() && !soldierIds_[i].empty())
+                ? soldierIds_[i]
+                : (!v.crewUnit.empty() ? v.crewUnit : std::string("dguner"));
+            const SubCell oldCell = s.cell;
+            s.embarked = true;
+            s.motion.reset();
+            clearMovingSightPenalty(s);
+            s.goal.reset();
+            s.route.clear();
+            s.cursor = 0;
+            s.needsRoute = false;
+            s.attackTarget.reset();
+            s.attackVehicleTarget.reset();
+            s.attackBuildingTarget.reset();
+            s.attackGround.reset();
+            s.autoTarget.reset();
+            s.boardVehicleTarget.reset();
+            s.captureVehicleTarget.reset();
+            s.garrisonTarget.reset();
+            s.healTarget.reset();
+            s.escortVehicleTarget.reset();
+            s.escortSoldierTarget.reset();
+            s.disarmMineTarget.reset();
+            s.disarmWorkTicks = 0;
+            s.binoculars = false;
+            s.spottedMask = 0;
+            s.cell = v.cell;
+            if (!soldierAtCell(oldCell) && !vehicleAtCell(oldCell)) {
+                grid_.setOccupied(oldCell, false);
+            }
+            v.embarkedCrew.push_back(CrewMember{sid, s.hp, s.ammo, s.expa});
+            const bool wasUnmanned = !v.hasCrew;
             const int prevOwner = v.owner;
             v.owner = s.owner;
             v.hasCrew = true;
             if (prevOwner == 3 && v.group == 0 && s.owner != 0 && !multiplayerSymmetry_) {
                 v.group = s.group;
             }
+            const int cNum = std::max(1, v.crewNumber);
+            const int crewIncrement = std::max(1, (v.maxCrewHp + cNum - 1) / cNum);
             const bool needsQualifiedCrew = v.hasCrewProtection && v.attackCrew >= 2;
             if (s.canBeCrew > 0 || !needsQualifiedCrew) {
                 v.crewHp = v.maxCrewHp;
-                if (s.canBeCrew > 0 && s.expa > v.expa) {
-                    v.expa = s.expa;
-                }
-            } else {
+            } else if (wasUnmanned) {
                 const int skeletonCrew = std::max(1, v.attackCrew - 1);
-                v.crewHp = std::max(1, (v.maxCrewHp * skeletonCrew) / std::max(1, v.crewNumber));
+                v.crewHp = std::max(1, (v.maxCrewHp * skeletonCrew) / cNum);
+            } else {
+                v.crewHp = std::min(v.maxCrewHp, std::max(0, v.crewHp) + crewIncrement);
             }
-            s.captureVehicleTarget.reset();
-            s.goal.reset();
-            s.route.clear();
-            s.cursor = 0;
-            s.needsRoute = false;
+            if (s.canBeCrew > 0 && s.expa > v.expa) {
+                v.expa = s.expa;
+            }
             fogDirty_ = true;
+            pushOrUpdateSoldierPose(changed, {
+                i, sx, sy, s.direction, 0, false, s.hp, true, s.owner, s.group, false, false
+            });
             if (fog_) refreshSpotting(&changed, false);
             emitVehiclePose(vid, false, 0, 0, false, {}, false, false, false, false, true);
             continue;
         }
-        if (!s.goal || !sameTile(*s.goal, v.cell)) {
-            s.goal = v.cell;
+        SubCell approachCell = v.cell;
+        if (onWater) {
+            const auto shore = findNearestWalkableSubCell(grid_, v.cell, 8);
+            if (!shore) {
+                s.captureVehicleTarget.reset();
+                continue;
+            }
+            approachCell = *shore;
+        }
+        if (!s.goal || !sameTile(*s.goal, approachCell)) {
+            s.goal = approachCell;
             s.route.clear();
             s.cursor = 0;
             s.planning = {};
@@ -1304,6 +1489,9 @@ void TutorialUnits::stepVehicles(std::vector<SoldierPose>& changed) {
     for (size_t i = 0; i < vehicles_.size(); ++i) {
         auto& v = vehicles_[i];
         if (!v.alive || v.hp <= 0 || !v.hasCrew) continue;
+        if (v.unlimberTicks > 0 && !v.towedBy) {
+            --v.unlimberTicks;
+        }
         if (v.towedBy) {
             v.facingTargetDir.reset();
             v.supportTargetVehicle.reset();
@@ -1549,6 +1737,18 @@ void TutorialUnits::stepVehicles(std::vector<SoldierPose>& changed) {
         const double prevFy = v.fy;
         const unsigned moveDir = vehicleDirFromMapDelta(nextFx - v.fx, nextFy - v.fy);
         const unsigned desiredHull = v.reverseMove ? ((moveDir + 16u) & 31u) : moveDir;
+        const bool pivotBeforeMove =
+            catalog_ != nullptr && (v.hasGunTurnDelay || v.isCasemate) && !v.isNaval && !v.isTrain;
+        if (pivotBeforeMove && dirDelta32(v.hullDir, desiredHull) > 4u) {
+            v.hullDir = turnTowardDir32(v.hullDir, desiredHull, std::max(1u, v.turnStep32));
+            if (!v.attackTarget) {
+                v.turretDir = turnTowardDir32(
+                    v.turretDir, v.hullDir, v.hasGunTurnDelay ? v.turretStep32 : std::max(2u, v.turnStep32));
+            }
+            v.wasMoving = true;
+            emitVehiclePose(i);
+            continue;
+        }
         v.hullDir = turnTowardDir32(v.hullDir, desiredHull, std::max(1u, v.turnStep32));
         if (!v.attackTarget) {
             v.turretDir = turnTowardDir32(
@@ -1970,8 +2170,9 @@ void TutorialUnits::stepVehicleCombat(std::vector<SoldierPose>& changed) {
                 const int sy = (su + sv) / 2;
                 const double sd = det::detHypot(static_cast<double>(sx - impactX), static_cast<double>(sy - impactY));
                 if (sd > splashR) continue;
-                const int splashDmg = std::max(1, static_cast<int>(det::detRoundToInt(
-                    static_cast<double>(dmgBase) * 0.55 * (1.0 - sd / (splashR + 1.0)))));
+                const int splashDmg = scaleVehicleDamageForDifficulty(
+                    ss.owner, std::max(1, static_cast<int>(det::detRoundToInt(
+                        static_cast<double>(dmgBase) * 0.55 * (1.0 - sd / (splashR + 1.0))))));
                 ss.hp = std::max(0, ss.hp - splashDmg);
                 if (ss.hp > 0) applySuppression(k, 25);
                 recordHit(ss.owner, ss.group);
@@ -2023,10 +2224,12 @@ void TutorialUnits::stepVehicleCombat(std::vector<SoldierPose>& changed) {
             }
         };
 
+        const bool fixedArc = v.isCasemate || !v.towWeightClass.empty();
+        const unsigned fixedMaxArc = v.isCasemate ? 2u : 1u;
         const auto aimVehicleAt = [&](unsigned desiredDir, bool snap, bool forceEmit) {
             const unsigned prevTurret = v.turretDir;
             const unsigned prevHull = v.hullDir;
-            const bool pivotHull = !v.towedBy && (v.speedPx <= 0.0 || (v.isCasemate && !v.moveTarget));
+            const bool pivotHull = !v.towedBy && (v.speedPx <= 0.0 || (v.isCasemate && (!v.moveTarget || v.attackMoveEngaging)));
             if (snap) {
                 v.turretDir = desiredDir;
                 if (pivotHull) {
@@ -2034,9 +2237,21 @@ void TutorialUnits::stepVehicleCombat(std::vector<SoldierPose>& changed) {
                 }
                 return;
             }
-            v.turretDir = turnTowardDir32(v.turretDir, desiredDir, std::max(1u, v.turretStep32));
             if (pivotHull) {
                 v.hullDir = turnTowardDir32(v.hullDir, desiredDir, std::max(1u, v.turnStep32));
+            }
+            if (fixedArc) {
+                const int diff = (static_cast<int>(desiredDir) - static_cast<int>(v.hullDir) + 48) % 32 - 16;
+                const unsigned clampedTarget = static_cast<unsigned>(
+                    (static_cast<int>(v.hullDir) + std::clamp(diff, -2, 2) + 32) % 32);
+                v.turretDir = turnTowardDir32(v.turretDir, clampedTarget, std::max(1u, v.turretStep32));
+                const int tdiff = (static_cast<int>(v.turretDir) - static_cast<int>(v.hullDir) + 48) % 32 - 16;
+                if (std::abs(tdiff) > 2) {
+                    v.turretDir = static_cast<unsigned>(
+                        (static_cast<int>(v.hullDir) + std::clamp(tdiff, -2, 2) + 32) % 32);
+                }
+            } else {
+                v.turretDir = turnTowardDir32(v.turretDir, desiredDir, std::max(1u, v.turretStep32));
             }
             if (v.turretDir != prevTurret || v.hullDir != prevHull || forceEmit) {
                 emitVehiclePose(i);
@@ -2081,12 +2296,21 @@ void TutorialUnits::stepVehicleCombat(std::vector<SoldierPose>& changed) {
             }
             if (dist > weapon.range || dist < weapon.deadzone) continue;
             if (v.attackMove && !explicitBldOrder) v.attackMoveEngaging = true;
+            if (v.unlimberTicks > 0) {
+                aimVehicleAt(desiredTurret, false, explicitBldOrder);
+                continue;
+            }
             if (v.fireCooldown > 0) {
                 aimVehicleAt(desiredTurret, false, explicitBldOrder);
                 continue;
             }
-            if (v.hasGunTurnDelay && !v.isCasemate &&
-                dirDelta32(v.turretDir, desiredTurret) > v.turretStep32) {
+            if (fixedArc) {
+                if (dirDelta32(v.hullDir, desiredTurret) > fixedMaxArc) {
+                    aimVehicleAt(desiredTurret, false, true);
+                    continue;
+                }
+            } else if (v.hasGunTurnDelay &&
+                       dirDelta32(v.turretDir, desiredTurret) > v.turretStep32) {
                 aimVehicleAt(desiredTurret, false, true);
                 continue;
             }
@@ -2094,7 +2318,7 @@ void TutorialUnits::stepVehicleCombat(std::vector<SoldierPose>& changed) {
                 aimVehicleAt(desiredTurret, false, explicitBldOrder);
                 continue;
             }
-            aimVehicleAt(desiredTurret, true, false);
+            aimVehicleAt(desiredTurret, !fixedArc, false);
             applyWeaponShotAndCooldown(v, weapon.secondary, weapon.cooldown);
             const bool isFlameShot = (weapon.secondary ? v.weapon2Flamer : v.weapon1Flamer) ||
                                      weapon.hitType == assets::HitType::Fire;
@@ -2138,12 +2362,21 @@ void TutorialUnits::stepVehicleCombat(std::vector<SoldierPose>& changed) {
             v.reverseMove = false;
             v.wasMoving = false;
             if (gDist >= v.deadzone && gDist <= v.range) {
+                if (v.unlimberTicks > 0) {
+                    aimVehicleAt(gTurret, false, false);
+                    continue;
+                }
                 if (v.fireCooldown > 0) {
                     aimVehicleAt(gTurret, false, false);
                     continue;
                 }
-                if (v.hasGunTurnDelay && !v.isCasemate &&
-                    dirDelta32(v.turretDir, gTurret) > v.turretStep32) {
+                if (fixedArc) {
+                    if (dirDelta32(v.hullDir, gTurret) > fixedMaxArc) {
+                        aimVehicleAt(gTurret, false, true);
+                        continue;
+                    }
+                } else if (v.hasGunTurnDelay &&
+                           dirDelta32(v.turretDir, gTurret) > v.turretStep32) {
                     aimVehicleAt(gTurret, false, true);
                     continue;
                 }
@@ -2151,7 +2384,7 @@ void TutorialUnits::stepVehicleCombat(std::vector<SoldierPose>& changed) {
                     aimVehicleAt(gTurret, false, false);
                     continue;
                 }
-                aimVehicleAt(gTurret, true, false);
+                aimVehicleAt(gTurret, !fixedArc, false);
                 applyWeaponShotAndCooldown(v, false, v.cooldown);
                 int impX = gx;
                 int impY = gy;
@@ -2270,12 +2503,21 @@ void TutorialUnits::stepVehicleCombat(std::vector<SoldierPose>& changed) {
             v.attackMoveEngaging = true;
         }
 
+        if (v.unlimberTicks > 0) {
+            aimVehicleAt(desiredTurret, false, explicitOrder);
+            continue;
+        }
         if (v.fireCooldown > 0) {
             aimVehicleAt(desiredTurret, false, explicitOrder);
             continue;
         }
-        if (v.hasGunTurnDelay && !v.isCasemate &&
-            dirDelta32(v.turretDir, desiredTurret) > v.turretStep32) {
+        if (fixedArc) {
+            if (dirDelta32(v.hullDir, desiredTurret) > fixedMaxArc) {
+                aimVehicleAt(desiredTurret, false, true);
+                continue;
+            }
+        } else if (v.hasGunTurnDelay &&
+                   dirDelta32(v.turretDir, desiredTurret) > v.turretStep32) {
             aimVehicleAt(desiredTurret, false, true);
             continue;
         }
@@ -2284,7 +2526,7 @@ void TutorialUnits::stepVehicleCombat(std::vector<SoldierPose>& changed) {
             continue;
         }
 
-        aimVehicleAt(desiredTurret, true, false);
+        aimVehicleAt(desiredTurret, !fixedArc, false);
         applyWeaponShotAndCooldown(v, weapon.secondary, weapon.cooldown);
 
         const bool heavyShot = !weapon.secondary &&
@@ -2325,7 +2567,8 @@ void TutorialUnits::stepVehicleCombat(std::vector<SoldierPose>& changed) {
             emitVehiclePose(tid);
         } else {
             auto& ts = soldiers_[tid];
-            ts.hp = std::max(0, ts.hp - weapon.damage);
+            const int dmg = scaleVehicleDamageForDifficulty(ts.owner, weapon.damage);
+            ts.hp = std::max(0, ts.hp - dmg);
             if (ts.hp > 0 && ts.expaOnHit > 0) {
                 ts.expa = std::min(0x8000, ts.expa + ts.expaOnHit);
             }

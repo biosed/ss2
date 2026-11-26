@@ -130,6 +130,8 @@ struct VehicleRangePreview {
     int x{}, y{};
     float rangePx{0.0f};
     float deadzonePx{0.0f};
+    float sightPx{0.0f};
+    bool indirect{false};
 };
 
 struct AirSortiePose {
@@ -195,6 +197,13 @@ public:
         int owner{0}, group{0}, hp{100}, ammo{100}, expa{0}, pool{0};
         bool operator==(const ReserveUnit&) const = default;
     };
+    struct CrewMember {
+        std::string id;
+        int hp{100};
+        int ammo{20};
+        int expa{0};
+        bool operator==(const CrewMember&) const = default;
+    };
     struct Snapshot {
         struct SoldierState {
             int cellX{}, cellY{};
@@ -217,6 +226,8 @@ public:
             std::int32_t towedBy{-1};
             bool hasCrew{true};
             int crewHp{-1};
+            int unlimberTicks{0};
+            std::vector<CrewMember> embarkedCrew;
             bool operator==(const VehicleState&) const = default;
         };
         struct BuildingState {
@@ -639,6 +650,8 @@ private:
         unsigned standStepMax{8u};
         unsigned crouchStepBase{5u};
         unsigned crouchStepMax{5u};
+        assets::HitType primaryHitType{assets::HitType::Machine};
+        bool hasCatalogAtShot{false};
         unsigned stepProgressBase() const {
             const unsigned lo = crouched ? crouchStepBase : standStepBase;
             const unsigned hi = crouched ? crouchStepMax : standStepMax;
@@ -816,6 +829,8 @@ private:
         int moraleRndMove{0};
         int moraleRage{0};
         unsigned lastPanicTick{0};
+        std::vector<CrewMember> embarkedCrew;
+        int unlimberTicks{0};
 
         std::string_view effectiveTargetType() const {
             if (!targetType.empty()) return targetType;
@@ -842,6 +857,7 @@ private:
         int left{}, top{}, width{}, height{};
         int hp{300}, maxHp{300}, capacity{4};
         int owner{-1};
+        int sightBonus{3};
         bool destroyed{false};
         SubCell entryCell{};
         std::vector<size_t> occupants;

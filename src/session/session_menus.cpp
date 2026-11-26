@@ -17,6 +17,29 @@ void ensureRetailMenuSkin(Menu& menu, const std::filesystem::path& gameDir) {
         menu.loadRetailAssets(gameDir);
     }
 }
+
+std::string canonicalCampaignKey(const std::filesystem::path& path) {
+    if (path.empty()) return "TUTORIAL1";
+    std::string key = ss2::normalizeMissionKey(path.stem().string());
+    std::string ext = path.extension().string();
+    for (char& ch : ext) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    if (ext == ".ssc" && key.size() >= 2u && key.back() == 'E') {
+        const bool hasDigitBeforeE = std::isdigit(static_cast<unsigned char>(key[key.size() - 2u])) != 0;
+        std::string parentName = path.parent_path().filename().string();
+        for (char& ch : parentName) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        if (hasDigitBeforeE || parentName == "easy" || parentName == "easy_ssc") {
+            key.pop_back();
+        }
+    }
+    return key;
+}
+
+double difficultyScoreWeight(int difficulty, bool isMultiplayer) noexcept {
+    if (isMultiplayer) return 1.0;
+    if (difficulty <= 1) return 0.75;
+    if (difficulty >= 3) return 1.25;
+    return 1.0;
+}
 } // namespace
 
 std::vector<MenuItem> GameSession::buildPauseItems() {
@@ -194,8 +217,14 @@ void GameSession::openCampaignsMenu() {
         const auto& c = menuCampaigns[i];
         std::size_t done = 0;
         for (const auto& m : c.missions) {
-            if (settings.completedMissions.contains(ss2::normalizeMissionKey(m.code)) ||
-                settings.completedMissions.contains(ss2::normalizeMissionKey(m.path.stem().string()))) {
+            const std::string codeKey = ss2::normalizeMissionKey(m.code);
+            const std::string stemKey = canonicalCampaignKey(m.path);
+            const std::string easyKey = !m.easyPath.empty() ? canonicalCampaignKey(m.easyPath) : std::string{};
+            const std::string rawEasyKey = !m.easyPath.empty() ? ss2::normalizeMissionKey(m.easyPath.stem().string()) : std::string{};
+            if (settings.completedMissions.contains(codeKey) ||
+                settings.completedMissions.contains(stemKey) ||
+                (!easyKey.empty() && settings.completedMissions.contains(easyKey)) ||
+                (!rawEasyKey.empty() && settings.completedMissions.contains(rawEasyKey))) {
                 ++done;
             }
         }
@@ -220,17 +249,21 @@ void GameSession::openCampaignMissionsMenu(std::size_t campaignIdx) {
         std::string tag = std::to_string(m.width) + "x" + std::to_string(m.height) +
                           (m.scheme == 2 ? " Beach" : " Summer");
         const std::string codeKey = ss2::normalizeMissionKey(m.code);
-        const std::string stemKey = ss2::normalizeMissionKey(m.path.stem().string());
+        const std::string stemKey = canonicalCampaignKey(m.path);
+        const std::string easyKey = !m.easyPath.empty() ? canonicalCampaignKey(m.easyPath) : std::string{};
+        const std::string rawEasyKey = !m.easyPath.empty() ? ss2::normalizeMissionKey(m.easyPath.stem().string()) : std::string{};
         if (settings.completedMissions.contains(codeKey) ||
-            settings.completedMissions.contains(stemKey)) {
+            settings.completedMissions.contains(stemKey) ||
+            (!easyKey.empty() && settings.completedMissions.contains(easyKey)) ||
+            (!rawEasyKey.empty() && settings.completedMissions.contains(rawEasyKey))) {
             tag = ss2::tr("Completed") + " | " + tag;
         }
         int bestScore = 0;
-        if (const auto sit = settings.missionHighScores.find(codeKey); sit != settings.missionHighScores.end()) {
-            bestScore = std::max(bestScore, sit->second);
-        }
-        if (const auto sit = settings.missionHighScores.find(stemKey); sit != settings.missionHighScores.end()) {
-            bestScore = std::max(bestScore, sit->second);
+        for (const auto& candidate : {codeKey, stemKey, easyKey, rawEasyKey}) {
+            if (candidate.empty()) continue;
+            if (const auto sit = settings.missionHighScores.find(candidate); sit != settings.missionHighScores.end()) {
+                bestScore = std::max(bestScore, sit->second);
+            }
         }
         if (bestScore > 0) {
             tag += " | " + std::to_string(bestScore);
@@ -323,7 +356,9 @@ void GameSession::openDebriefMenu(bool victory) {
     if (airSortiesFlown > 0u) {
         items.push_back({"", ss2::tr("Air sorties flown"), std::to_string(airSortiesFlown), false});
     }
-    const int netBattleScore = std::max(0, enemyScoreEarned - friendlyScoreLost / 2);
+    const int rawBattleScore = std::max(0, enemyScoreEarned - friendlyScoreLost / 2);
+    const int netBattleScore = static_cast<int>(std::lround(
+        static_cast<double>(rawBattleScore) * difficultyScoreWeight(settings.difficulty, multiplayer.enabled)));
     items.push_back({"", ss2::tr("Battle score"), std::to_string(netBattleScore), false});
     if (victory && unitCatalog) {
         const int stars = unitCatalog->starRatingForScore(netBattleScore);
@@ -334,8 +369,7 @@ void GameSession::openDebriefMenu(bool victory) {
                              false});
         }
     }
-    const std::string completedKey = ss2::normalizeMissionKey(
-        currentMissionPath.empty() ? std::string("TUTORIAL1") : currentMissionPath.stem().string());
+    const std::string completedKey = canonicalCampaignKey(currentMissionPath);
     int prevBestScore = 0;
     if (!completedKey.empty()) {
         if (const auto sit = settings.missionHighScores.find(completedKey); sit != settings.missionHighScores.end()) {
@@ -596,8 +630,11 @@ void GameSession::openForceOverviewMenu(bool fromPauseMenu) {
                      std::to_string(enemyInfKilled) + " / " + std::to_string(enemyVehDestroyed), false});
     items.push_back({"", ss2::tr("Friendly casualties"),
                      std::to_string(selection ? selection->playerLosses() : 0), false});
+    const int rawOverviewScore = std::max(0, enemyScoreEarned - friendlyScoreLost / 2);
+    const int weightedOverviewScore = static_cast<int>(std::lround(
+        static_cast<double>(rawOverviewScore) * difficultyScoreWeight(settings.difficulty, multiplayer.enabled)));
     items.push_back({"", ss2::tr("Battle score"),
-                     std::to_string(std::max(0, enemyScoreEarned - friendlyScoreLost / 2)), false});
+                     std::to_string(weightedOverviewScore), false});
     int totalAirReady = 0;
     for (const auto& as : simulation->airSupportFor(localOwner())) {
         totalAirReady += std::max(0, as.ready);

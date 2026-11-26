@@ -460,8 +460,12 @@ std::optional<FrontEndResult> runFrontEnd(SDL_Window* window, ss2::ValidationRep
                                       ' ' + ss2::assets::schemeDisplayName(m.scheme);
                     const std::string codeKey = ss2::normalizeMissionKey(m.code);
                     const std::string stemKey = ss2::normalizeMissionKey(m.path.stem().string());
+                    const std::string easyStemKey = m.easyPath.empty()
+                        ? std::string{}
+                        : ss2::normalizeMissionKey(m.easyPath.stem().string());
                     const bool completed = settings.completedMissions.contains(codeKey) ||
-                                           settings.completedMissions.contains(stemKey);
+                                           settings.completedMissions.contains(stemKey) ||
+                                           (!easyStemKey.empty() && settings.completedMissions.contains(easyStemKey));
                     if (completed) tag = ss2::tr("Completed") + " | " + tag;
                     int bestScore = 0;
                     if (const auto sit = settings.missionHighScores.find(codeKey);
@@ -471,6 +475,12 @@ std::optional<FrontEndResult> runFrontEnd(SDL_Window* window, ss2::ValidationRep
                     if (const auto sit = settings.missionHighScores.find(stemKey);
                         sit != settings.missionHighScores.end()) {
                         bestScore = std::max(bestScore, sit->second);
+                    }
+                    if (!easyStemKey.empty()) {
+                        if (const auto sit = settings.missionHighScores.find(easyStemKey);
+                            sit != settings.missionHighScores.end()) {
+                            bestScore = std::max(bestScore, sit->second);
+                        }
                     }
                     if (bestScore > 0) tag += " | " + std::to_string(bestScore);
                     ce.missions.push_back({m.code, m.title, m.path.string(), m.easyPath.string(),

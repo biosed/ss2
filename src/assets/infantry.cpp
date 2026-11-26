@@ -841,4 +841,76 @@ std::optional<MapImage> InfantryScene::renderUnitPortrait(const std::string& id,
     }
     return out;
 }
+
+std::optional<MapImage> InfantryScene::buildGpuSheet2xEpx(const std::string& id) {
+    if (id.empty() || !ensureClassLoaded(id)) return std::nullopt;
+    const auto it = poses_.find(id);
+    if (it == poses_.end()) return std::nullopt;
+
+    constexpr unsigned kCols = 8u;
+    constexpr unsigned kRows = 5u;
+    constexpr int kCell = 64;
+    constexpr int kFootX = 32;
+    constexpr int kFootY = 58;
+    const unsigned sheetW = kCols * static_cast<unsigned>(kCell);
+    const unsigned sheetH = kRows * static_cast<unsigned>(kCell);
+    MapImage sheet{sheetW, sheetH, std::vector<std::uint8_t>(std::size_t(sheetW) * sheetH * 4u, 0u)};
+
+    const auto& poseSet = it->second;
+    for (unsigned col = 0u; col < kCols; ++col) {
+        const auto& stand = poseSet[col];
+        const auto& walk = poseSet[8u + col];
+        for (unsigned row = 0u; row < kRows; ++row) {
+            const InfantryPose* srcPose = nullptr;
+            if (row == 0u) {
+                if (!stand.empty()) srcPose = &stand[0];
+                else if (!walk.empty()) srcPose = &walk[0];
+            } else {
+                if (!walk.empty()) {
+                    const std::size_t idx = (walk.size() * static_cast<std::size_t>(row - 1u)) / 4u;
+                    srcPose = &walk[std::min(idx, walk.size() - 1u)];
+                } else if (!stand.empty()) {
+                    srcPose = &stand[0];
+                }
+            }
+            if (!srcPose || srcPose->pixels.width == 0u || srcPose->pixels.height == 0u ||
+                srcPose->pixels.rgba.size() < std::size_t(srcPose->pixels.width) * srcPose->pixels.height * 4u) {
+                continue;
+            }
+            const MapImage upscaled = (resolution_ == 1)
+                ? upscaleOverlay2xEpx(srcPose->pixels)
+                : srcPose->pixels;
+            const int cellLeft = static_cast<int>(col) * kCell;
+            const int cellTop = static_cast<int>(row) * kCell;
+            const int offX = kFootX + srcPose->left * 2;
+            const int offY = kFootY + srcPose->top * 2;
+            const int uw = static_cast<int>(upscaled.width);
+            const int uh = static_cast<int>(upscaled.height);
+            for (int sy = 0; sy < uh; ++sy) {
+                const int cy = offY + sy;
+                if (cy < 0 || cy >= kCell) continue;
+                for (int sx = 0; sx < uw; ++sx) {
+                    const int cx = offX + sx;
+                    if (cx < 0 || cx >= kCell) continue;
+                    const std::size_t si = (static_cast<std::size_t>(sy) * upscaled.width + static_cast<std::size_t>(sx)) * 4u;
+                    const unsigned a = upscaled.rgba[si + 3u];
+                    if (a == 0u) continue;
+                    const std::size_t di = (static_cast<std::size_t>(cellTop + cy) * sheetW +
+                                            static_cast<std::size_t>(cellLeft + cx)) * 4u;
+                    if (a == 255u) {
+                        sheet.rgba[di + 0u] = upscaled.rgba[si + 0u];
+                        sheet.rgba[di + 1u] = upscaled.rgba[si + 1u];
+                        sheet.rgba[di + 2u] = upscaled.rgba[si + 2u];
+                    } else {
+                        sheet.rgba[di + 0u] = static_cast<std::uint8_t>(std::min(255u, (unsigned(upscaled.rgba[si + 0u]) * 255u + a / 2u) / a));
+                        sheet.rgba[di + 1u] = static_cast<std::uint8_t>(std::min(255u, (unsigned(upscaled.rgba[si + 1u]) * 255u + a / 2u) / a));
+                        sheet.rgba[di + 2u] = static_cast<std::uint8_t>(std::min(255u, (unsigned(upscaled.rgba[si + 2u]) * 255u + a / 2u) / a));
+                    }
+                    sheet.rgba[di + 3u] = static_cast<std::uint8_t>(a);
+                }
+            }
+        }
+    }
+    return sheet;
+}
 }

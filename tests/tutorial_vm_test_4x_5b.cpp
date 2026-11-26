@@ -595,7 +595,7 @@ void runPhase4Xto5B() {
                             throw std::runtime_error("Phase 4Z flamer failed to crew-cook tiger while leaving hull intact");
                         }
                         const auto crewSpawns = sim4zB.abandonVehicles(std::array<size_t, 1>{1});
-                        if (crewSpawns.size() != 1u || crewSpawns[0].id != "dtankist") {
+                        if (crewSpawns.size() != 5u || crewSpawns[0].id != "dtankist") {
                             throw std::runtime_error("Phase 4Z abandonVehicles did not spawn retail crew_unit dtankist");
                         }
                     }

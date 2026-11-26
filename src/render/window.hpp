@@ -80,6 +80,7 @@ public:
     // Reads the map image back, including queued patches. Slow; for tests and screenshots.
     assets::MapImage captureMap();
     void focusMap(int x, int y, bool zoomFromOverview = false);
+    void smoothFocusMap(double mapX, double mapY);
     std::pair<double, double> mapPosition(float windowX, float windowY) const;
     void highlight(std::vector<MapRect>);
     // Replaces all markers; an empty list removes them. They stay until replaced
@@ -110,6 +111,7 @@ public:
     // on-screen rectangle, and follow the camera. Replacing the map removes them.
     // Throws if a sprite names an atlas slot that has not been set.
     void setSprites(std::vector<Sprite>);
+    void setSpriteSharpness(float sharpness);
     // Renders one frame, presents it and returns its pixels as RGBA8, top row first.
     // For tests and screenshots. Throws if the surface cannot be read back.
     assets::MapImage captureFrame();

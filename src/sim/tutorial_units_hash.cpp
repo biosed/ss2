@@ -69,7 +69,7 @@ static_assert(sizeof(TutorialUnits) == 4040, "update TutorialUnits::stateHash fo
 std::uint64_t TutorialUnits::stateHash() const {
 #ifdef SS2_STATE_HASH_SIZE_GUARDS
     static_assert(sizeof(Soldier) == 768, "update the Soldier hash below for the new field");
-    static_assert(sizeof(Vehicle) == 1472, "update the Vehicle hash below for the new field");
+    static_assert(sizeof(Vehicle) == 1504, "update the Vehicle hash below for the new field");
     static_assert(sizeof(Building) == 80, "update the Building hash below for the new field");
     static_assert(sizeof(Bridge) == 64, "update the Bridge hash below for the new field");
     static_assert(sizeof(Projectile) == 32, "update the Projectile hash below for the new field");
@@ -195,6 +195,36 @@ std::uint64_t TutorialUnits::stateHash() const {
     // simulation state; commandActor_ is transient RAII context during applyAs() and always 0 at rest.
     // Keep SP stateHash() identical when multiplayerSymmetry_ is false.
     if (multiplayerSymmetry_) h.add(multiplayerSymmetry_);
+    if (std::ranges::any_of(soldiers_, [](const Soldier& s) {
+            return s.primaryHitType != assets::HitType::Machine || s.hasCatalogAtShot;
+        })) {
+        for (size_t si = 0; si < soldiers_.size(); ++si) {
+            const auto& s = soldiers_[si];
+            if (s.primaryHitType != assets::HitType::Machine || s.hasCatalogAtShot) {
+                h.all(si, s.primaryHitType, s.hasCatalogAtShot);
+            }
+        }
+    }
+    if (std::ranges::any_of(vehicles_, [](const Vehicle& v) {
+            return !v.embarkedCrew.empty() || v.unlimberTicks > 0;
+        })) {
+        for (size_t vi = 0; vi < vehicles_.size(); ++vi) {
+            const auto& v = vehicles_[vi];
+            if (!v.embarkedCrew.empty() || v.unlimberTicks > 0) {
+                h.all(vi, v.unlimberTicks);
+                h.each(v.embarkedCrew, [&h](const CrewMember& cm) {
+                    h.all(cm.id, cm.hp, cm.ammo, cm.expa);
+                });
+            }
+        }
+    }
+    if (std::ranges::any_of(buildings_, [](const Building& b) { return b.sightBonus != 3; })) {
+        for (size_t bi = 0; bi < buildings_.size(); ++bi) {
+            if (buildings_[bi].sightBonus != 3) {
+                h.all(bi, buildings_[bi].sightBonus);
+            }
+        }
+    }
     return h.value();
 }
 

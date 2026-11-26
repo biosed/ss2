@@ -20,6 +20,7 @@ struct BuildingPlacement {
     MapImage basePatch;
     std::array<std::uint8_t, 512> palette{};
     std::array<std::vector<std::uint8_t>, 16> stageBlocks{};
+    int sightBonus{3};
 };
 
 /// Returns the retail 4-stage visual damage tier (0 intact, 1 light, 2 heavy, 3 ruined).
@@ -62,7 +63,19 @@ struct BridgePlacement {
     MapImage basePatch;
     std::array<std::uint8_t, 512> palette{};
     std::array<std::vector<std::uint8_t>, 5> stageFrames{};
+    std::array<std::vector<std::uint8_t>, 5> stageShadows{};
     std::vector<BridgeSubCell> cells;
+};
+
+MapImage renderBridgeStage(const BridgePlacement& bp, int stage);
+
+struct TreePlacement {
+    int x{}, y{};
+    int patchLeft{}, patchTop{};
+    MapImage basePatch;
+    MapImage fallenPatch;
+    SpriteCoverage intactBodyCoverage{};
+    SpriteCoverage intactShadowCoverage{};
 };
 
 class SceneryDepth {
@@ -89,12 +102,14 @@ std::size_t drawTutorialScenery(MapImage&, const std::filesystem::path& gameDir,
                                 SceneryDepth* depth = nullptr,
                                 unsigned scheme = 0,
                                 std::vector<BuildingPlacement>* buildings = nullptr,
-                                std::vector<BridgePlacement>* bridges = nullptr);
+                                std::vector<BridgePlacement>* bridges = nullptr,
+                                std::vector<TreePlacement>* trees = nullptr);
 std::size_t drawMissionScenery(MapImage& map, const std::filesystem::path& gameDir,
                                const std::filesystem::path& missionPath,
                                SceneryDepth* depth = nullptr,
                                std::vector<BuildingPlacement>* buildings = nullptr,
-                               std::vector<BridgePlacement>* bridges = nullptr);
+                               std::vector<BridgePlacement>* bridges = nullptr,
+                               std::vector<TreePlacement>* trees = nullptr);
 
 struct CraterCatalog {
     std::vector<MapImage> smallCraters;

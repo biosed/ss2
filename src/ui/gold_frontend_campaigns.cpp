@@ -113,9 +113,11 @@ void GoldFrontEnd::setCampaigns(std::vector<GoldCampaignEntry> campaigns) {
         FrontEnd::CampaignEntry ce;
         ce.name = c.name;
         ce.missions.reserve(c.missions.size());
-        for (const auto& m : c.missions) {
+        for (std::size_t mi = 0; mi < c.missions.size(); ++mi) {
+            const auto& m = c.missions[mi];
+            const bool unlocked = !hasMenuAssets() || mi == 0u || m.completed || c.missions[mi - 1u].completed;
             ce.missions.push_back(FrontEnd::CampaignMissionEntry{
-                m.code, m.name, m.path, m.easyPath, m.description, m.tag
+                m.code, m.name, m.path, m.easyPath, m.description, m.tag, m.completed, unlocked
             });
         }
         base.push_back(std::move(ce));
@@ -143,7 +145,7 @@ void GoldFrontEnd::setCustomCampaigns(std::vector<GoldCampaignEntry> campaigns) 
         ce.missions.reserve(c.missions.size());
         for (const auto& m : c.missions) {
             ce.missions.push_back(FrontEnd::CampaignMissionEntry{
-                m.code, m.name, m.path, m.easyPath, m.description, m.tag
+                m.code, m.name, m.path, m.easyPath, m.description, m.tag, m.completed, true
             });
         }
         base.push_back(std::move(ce));
@@ -877,10 +879,13 @@ void GoldFrontEnd::renderCampaigns(const RenderEnv& env) {
         cairo_set_source_rgb(cr, 232.0 / 255.0, 224.0 / 255.0, 188.0 / 255.0);
         pango_cairo_show_layout(cr, sumLayout.get());
 
+        const bool lockRows = !isCustom && hasMenuAssets();
         const std::size_t maxPreviewRows = std::min<std::size_t>(camp.missions.size(), 8);
         for (std::size_t mi = 0; mi < maxPreviewRows; ++mi) {
             const double ry = 138.0 + double(mi) * 19.0;
             const bool highlightNext = (mi == firstUncompleted);
+            const bool rowUnlocked = !lockRows || mi == 0u || camp.missions[mi].completed ||
+                                     camp.missions[mi - 1u].completed;
             if (highlightNext) {
                 cairo_set_source_rgba(cr, 98.0 / 255.0, 114.0 / 255.0, 72.0 / 255.0, 0.34);
                 cairo_rectangle(cr, 430, ry, 328, 18.0);
@@ -895,6 +900,7 @@ void GoldFrontEnd::renderCampaigns(const RenderEnv& env) {
             pango_layout_set_ellipsize(ml.get(), PANGO_ELLIPSIZE_END);
             cairo_move_to(cr, 434, ry + 1.0);
             if (highlightNext) cairo_set_source_rgb(cr, 245.0 / 255.0, 245.0 / 255.0, 245.0 / 255.0);
+            else if (!rowUnlocked) cairo_set_source_rgb(cr, 122.0 / 255.0, 130.0 / 255.0, 110.0 / 255.0);
             else cairo_set_source_rgb(cr, 49.0 / 255.0, 174.0 / 255.0, 74.0 / 255.0);
             pango_cairo_show_layout(cr, ml.get());
         }
@@ -933,8 +939,9 @@ void GoldFrontEnd::renderMissionBrowserScreen(const RenderEnv& env) {
     cairo_t* cr = env.cr;
     PangoContext* pangoCtx = env.pangoCtx;
 
-    auto renderMissionBrowser = [&](const std::string& heading, auto rowAt, std::size_t rowCount,
-                                    std::size_t selectedRow, const char* rowPrefix, bool showDifficulty) {
+    auto renderMissionBrowser = [&](const std::string& heading, auto rowAt, auto rowUnlockedAt,
+                                    std::size_t rowCount, std::size_t selectedRow,
+                                    const char* rowPrefix, bool showDifficulty) {
         drawHeading(cr, pangoCtx, heading, {200, 38, 400, 28}, 17.0);
         drawHeading(cr, pangoCtx, tr("Missions:"), {130, 110, 150, 20}, 15.0);
         drawHeading(cr, pangoCtx, tr("Description:"), {520, 110, 144, 20}, 15.0);
@@ -967,10 +974,12 @@ void GoldFrontEnd::renderMissionBrowserScreen(const RenderEnv& env) {
                 }
 
                 const auto& m = rowAt(std::size_t(idx));
+                const bool unlocked = rowUnlockedAt(std::size_t(idx));
                 std::string label = m.name;
                 const auto& gemLit = assets_->rombik[1];
                 const bool gem = m.completed && gemLit.surface != nullptr;
                 if (m.completed && !gem) label += "  [\xE2\x9C\x93]";
+                else if (!unlocked) label += "  [Locked]";
                 if (gem) {
                     drawPckAt(cr, gemLit, kListX + kListW - 8.0 - gemLit.w,
                               ry + std::floor((kRowH - 1.0 - gemLit.h) * 0.5));
@@ -981,7 +990,10 @@ void GoldFrontEnd::renderMissionBrowserScreen(const RenderEnv& env) {
                 pango_layout_set_ellipsize(rowLayout.get(), PANGO_ELLIPSIZE_END);
 
                 cairo_move_to(cr, kListX + 12, ry + 2.0);
-                if (isSelected) cairo_set_source_rgb(cr, 245.0 / 255.0, 245.0 / 255.0, 245.0 / 255.0);
+                if (!unlocked) {
+                    if (isSelected) cairo_set_source_rgb(cr, 178.0 / 255.0, 182.0 / 255.0, 165.0 / 255.0);
+                    else cairo_set_source_rgb(cr, 122.0 / 255.0, 130.0 / 255.0, 110.0 / 255.0);
+                } else if (isSelected) cairo_set_source_rgb(cr, 245.0 / 255.0, 245.0 / 255.0, 245.0 / 255.0);
                 else if (isHovered) cairo_set_source_rgb(cr, 128.0 / 255.0, 224.0 / 255.0, 138.0 / 255.0);
                 else cairo_set_source_rgb(cr, 49.0 / 255.0, 174.0 / 255.0, 74.0 / 255.0);
                 pango_cairo_show_layout(cr, rowLayout.get());
@@ -1111,8 +1123,9 @@ void GoldFrontEnd::renderMissionBrowserScreen(const RenderEnv& env) {
             }
         }
 
+        const bool selectedUnlocked = (selectedRow < rowCount) && rowUnlockedAt(selectedRow);
         for (const auto& b : kSingleMissionButtons) {
-            const bool enabled = std::string_view(b.id) == "start" ? (rowCount > 0) : b.enabled;
+            const bool enabled = std::string_view(b.id) == "start" ? selectedUnlocked : b.enabled;
             drawGoldStencilButton(cr, pangoCtx, b.rect, tr(b.enLabel), b.shortcut,
                                   hoveredId_ == b.id, focusedId_ == b.id, enabled, 24.0);
         }
@@ -1126,11 +1139,18 @@ void GoldFrontEnd::renderMissionBrowserScreen(const RenderEnv& env) {
             ? active[ci].name
             : tr(fe_.inCustomCampaign() ? "Custom Campaigns" : "Campaigns");
         const auto& cMissions = ci < active.size() ? active[ci].missions : kEmptyCampaignMissions;
+        const bool lockRows = !fe_.inCustomCampaign() && hasMenuAssets();
+        const auto isCampaignMissionUnlocked = [&](std::size_t idx) {
+            if (!lockRows || idx == 0u || idx >= cMissions.size()) return true;
+            return cMissions[idx].completed || cMissions[idx - 1u].completed;
+        };
         renderMissionBrowser(campName, [&](std::size_t i) -> const auto& { return cMissions[i]; },
-                             cMissions.size(), fe_.selectedCampaignMission(), "cmission:", true);
+                             isCampaignMissionUnlocked, cMissions.size(),
+                             fe_.selectedCampaignMission(), "cmission:", true);
     } else {
         renderMissionBrowser(tr("Single Player"), [&](std::size_t i) -> const auto& { return missions_[i]; },
-                             missions_.size(), fe_.selected(), "mission:", false);
+                             [](std::size_t) { return true; }, missions_.size(),
+                             fe_.selected(), "mission:", false);
     }
 }
 

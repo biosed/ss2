@@ -433,7 +433,17 @@ std::optional<SavedUnitPoolMap> readCampaignPoolFile(const std::filesystem::path
 
 std::filesystem::path campaignPoolPathForMission(std::string_view profileName,
                                                  const std::filesystem::path& missionPath) {
-    const std::string missionKey = normalizeMissionKey(missionPath.stem().string());
+    std::string missionKey = normalizeMissionKey(missionPath.stem().string());
+    if (missionKey.size() == 7u && (missionKey.back() == 'e' || missionKey.back() == 'E')) {
+        bool sixDigits = true;
+        for (std::size_t i = 0; i < 6u; ++i) {
+            if (missionKey[i] < '0' || missionKey[i] > '9') {
+                sixDigits = false;
+                break;
+            }
+        }
+        if (sixDigits) missionKey.pop_back();
+    }
     if (missionKey.empty()) return {};
     std::string cleanProf = sanitizeProfileName(profileName);
     if (cleanProf.empty()) cleanProf = "YourID";
