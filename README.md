@@ -31,32 +31,72 @@ Opening cinematics (`movies/logo1.BIK`, `movies/intro.BIK`, or HD `movies-hd/*.m
 
 ## Features
 
-- **Full Retail Single-Player & Campaign Parity**: `Single Player` multi-profile manager (`New` / `Rename` / `Delete`), all 5 retail campaigns + `Custom Campaigns` (`maps/custom_campaign/`, `~/.local/share/ss2/custom_campaigns/`, or `%LOCALAPPDATA%\ss2\custom_campaigns`), animated `I-BRF` briefings with OKI ADPCM commander voices and looping `backwav` / `briefing` music, Screen 5 `loadscr.dat`, post-mission `Ratings` / battle stats, persistent `SS2SAVE2` save/load (`F1–F8` quick-save / bookmark slots), `Replay Browser` (`--record`, `--replay`), and `Options`.
+- **Full Retail Single-Player & Campaign Parity**: `Single Player` multi-profile manager (`New` / `Rename` / `Delete`) with a 1-click `Continue` latest-save card, all 5 retail campaigns + `Custom Campaigns` (`maps/custom_campaign/`, `~/.local/share/ss2/custom_campaigns/`, or `%LOCALAPPDATA%\ss2\custom_campaigns`), `Single Missions` with `Difficulty` selector and `<completed>/<total>` progress counter, animated `I-BRF` briefings with OKI ADPCM commander voices, looping `backwav` / `briefing` music, and page navigation (`Up`/`Down`/`Left`/`Right`/`PgUp`/`PgDn`), Screen 5 `loadscr.dat`, post-mission `Ratings` / battle stats, persistent `SS2SAVE2` save/load (`F9` / `F10` or `Ctrl+S` / `Ctrl+L` quick-save/load, difficulty tags, mission-start & objective auto-saves), interactive `Replay Browser` (`--record`, `--replay`, `--watch-replay`), streamlined Pause Menu (grouped `Options` submenu, live Fullscreen toggle, `Exit to Main Menu`, destructive-action confirmations), and configurable camera `Scroll` (`60%–200%`) & `Edge` scrolling in `Options`.
+- **Tactical Realism & Community QoL**: Optional **Realism Doctrine (`RWM/LRM` toggle)** in Options & Pause Menu (`+sight & standoff range`), `Alt+V` pinnable tactical overlay (sight, firing ranges, support/command auras, salvage), live support & command aura rings (Supply Trucks & Ambulances `140px` service + `280px` auto-roam when `Alt`/pinned, Propaganda `200px`, Officers/Generals, Medics `96px`), hostile `Alt`-hover threat range rings & armor-penetration/role tooltips, selected garrisoned building rings, rich HUD class-card (`Count | HP% | Ammo%`) & `[Cargo]` tooltips, `Alt+H` fleet-wide Logistics Depot Hold toggle, `Alt+C` combat-only selection filter, and subcell vehicle pathfinding fixes (e.g. Cherbourg town/bridge approaches).
 - **2–4 Player Lockstep Multiplayer**: Deterministic Star Host-Relay over TCP (`--host PORT`, `--join HOST:PORT`, `--mp-players`, `--mp-teams`, `--mp-nation`, `--list-multiplayer`), FFA / `2v2` / custom teams, Zeppelin capture economy, allied (`Shift+Enter` / `/a `) & global (`Enter`) chat, and `Alt+LeftClick` tactical flare beacons. Cross-ISA bit-for-bit simulation determinism is verified across ARM64 GCC, ARM64 Clang, x86-64, and x86-64-v3 (`-ffp-contract=off`).
 - **Out-of-the-Box Mods**: Supports `sudtest.ini` `[Data]` `;`-chains (`Common=`, `Menu=`, `Game=`, `Sounds=`, `Movies=`, `BackWav=`, `Addons=`, `Scheme1..N=`) and `[Game]` keys (`TurnDelay`, prefixes), `Scheme3` `desc_scheme3.sue` / `lang_desc_scheme3.sue`, unpacked raw or RFC-1952 gzip folder mounts (`mycommon\`), `FZFS` and standalone `addons/*.ssx` mission packs, and automatic discovery under `<gameDir>/mods/*`, `<gameDir>/Run/*` (MultiModSwitcher layout), `<gameDir>/switcher/*`, `<gameDir>/sudtest_*.ini`, and user `mods/`. Switch mods live in `Options -> Mod` or via `--list-mods` / `--mod NAME|DIR|INI`.
-- **Enhanced Vulkan Graphics Pipeline (On by default, `--classic-gfx` / Pause Menu toggle)**: GPU subpixel Pixel-AA and 5-tap Catmull-Rom reconstruction with Contrast-Adaptive Sharpening (`CAS`), theater atmospheric grading & subtle vignette, 3-level trilinear mipmapped `1024×640` HD infantry atlases, animated directional soldier sun shadows, tactical ground selection rings, overbright dynamic combat soldier illumination, and additive glow shockwaves & ground light pools.
+- **Enhanced Vulkan Graphics (`Options -> Enhanced graphics`, on by default; `--classic-gfx`)**: GPU subpixel Pixel-AA and 5-tap Catmull-Rom reconstruction with Contrast-Adaptive Sharpening (`CAS`), world-space animated water shimmer, drifting cloud shadows, `Rain`/`Snow` atmospheric grading, particles & subtle vignette, 3-level trilinear mipmapped HD infantry atlases, GPU-accelerated vehicles (`4x HD` sprite sheets + automatic `2x EPX` `.PCK` atlases across 128 sprite slots with turret cannon recoil), animated directional shadows, tactical ground selection rings, overbright dynamic combat illumination, and additive glow shockwaves & ground light pools.
 - **Localization**: Full EN / FR / ES interface auto-detected from locale (`LC_ALL`, `LC_MESSAGES`, `LANG`), `--lang en|fr|es`, or `Options`.
-- **Enhanced Vulkan Graphics (`Options -> Enhanced graphics`, `--classic-gfx`)**: World-space animated water shimmer, drifting cloud shadows, `Rain`/`Snow` atmospheric grading & particles, Pixel-AA + Catmull-Rom + FidelityFX-style sharpening, and GPU-accelerated vehicles (`4x HD` sprite sheets + automatic `2x EPX` `.PCK` atlases across 128 sprite slots with directional shadows, turret cannon recoil, and dynamic combat lighting).
 - **Optional Clean-Room 4× HD Pack (60/60 RS2 Infantry + 14 Vehicles)**: Download `ss2-v0.1.2-hd-infantry-pack.zip` from [Release `v0.1.2`](https://github.com/biosed/ss2/releases/tag/v0.1.2) (clean-room **60-class** RS2 4× HD infantry sheets, **14** 4× HD vehicles & field guns, and **74** `96×96` HUD portraits), extract it into `~/.local/share/ss2/hd-pack` (`%LOCALAPPDATA%\ss2\hd-pack` on Windows) or `<gameDir>/hd-pack`, or pass `--hd-pack DIR` (`--original-infantry` keeps vanilla sizing). Engine also loads optional user-supplied `audio-hd/` and `movies-hd/` subdirectories if placed in the HD pack folder.
-- **Zero-Friction Setup & LAN Discovery**: Automatic GOG / common-install folder detection (`--discover-lan` and Multiplayer Join UDP LAN scanner), interactive game-folder picker on first launch, and persistent `game_dir` / `enhanced_graphics` preferences in `settings.ini`.
+- **Zero-Friction Setup & LAN Discovery**: Automatic GOG / common-install folder detection (`--discover-lan` and Multiplayer Join UDP LAN scanner), interactive game-folder picker on first launch, and persistent `game_dir`, `enhanced_graphics`, `scroll_speed`, `edge_scroll`, and `realism_mode` preferences in `settings.ini`.
 - **Windows Hardware & VM Resilience**: Self-contained `ss2-windows-x86_64` zip bundles Khronos `vulkan-1.dll`, embeds a native application icon & `VS_VERSION_INFO`, decodes UTF-16 CLI arguments/environment paths (e.g. non-ASCII usernames/folders and Unicode audio/video paths), runs batch `--replay FILE` headlessly without needing a display window, falls back automatically to `maps/single/--- TUTORIAL I ---.SSM` for retail CD/GOG installs without developer `maps.src/`, recovers cleanly from Win32 `VK_ERROR_SURFACE_LOST_KHR` (UAC/`Win+L`/HDR), and auto-discovers drop-in Mesa Lavapipe (`vulkan_lvp.dll` / `lvp_icd.json` alongside `ss2.exe` or in `%LOCALAPPDATA%\ss2\vulkan`, selectable with `--software-renderer`).
 
 ### In-game controls
 
+#### Selection & Control Groups
+
 | Input | Effect |
 | --- | --- |
-| Left-click / Left-drag | Select unit or box-select squad |
-| Double-click / Ctrl-double-click | Select all matching types in view / across map |
-| Shift | Add or toggle units in selection |
-| Right-click | Move, board/enter, repair, attack spotted enemy, or issue command-bar action |
-| Middle-drag / Arrow keys / Wheel / Home | Pan, zoom, fit entire map |
-| `Tab` / `M` / `V` | Cycle infantry / jump to mission marker / cycle tanks & guns |
-| `S` / `H` / `C` / `B` / `X` | Stop / Hold fire / Crouch / Officer binoculars / Hatch toggle |
-| `Ctrl+0..9`, `0..9` | Assign / recall control group |
-| `F1–F8` | Quick-save / bookmark slots |
-| `Enter` / `Shift+Enter` / `Alt+Click` | Global chat / Allied chat / Tactical flare beacon (MP) |
-| `Ctrl+P` or `Pause`, `L`, `O`, `N`, `Ctrl+M` | Pause, Message Log, Force Status, Next Music Track, Mute Music |
-| `F11`, `Escape` | Toggle fullscreen, Open Pause Menu |
+| `Left-click` / `Left-drag` | Select unit or box-select squad |
+| `Double-click` / `Ctrl+Double-click` | Select all matching types on screen / across map |
+| `Ctrl+A` / `Ctrl+Shift+A` | Select on-screen units / all player units |
+| `Shift+click` | Add or toggle units in selection |
+| `Alt+C` | Filter selection to combat units (excludes medics & logistics) |
+| `Ctrl+0..9` / `Ctrl+Shift+0..9` | Assign / append units to control group `0–9` |
+| `0..9` / `Shift+0..9` | Recall / additive-recall group (double-tap or right-click HUD group chip to jump camera) |
+| HUD class card click / `Shift+click` or `Right-click` | Isolate class in selection / exclude class from selection |
+
+#### Tactical Orders & Stances
+
+| Input | Effect |
+| --- | --- |
+| `Right-click` / `Right-drag` | Move, board, hitch, garrison, repair, escort friendly, disarm mine, or attack spotted enemy; drag for line formation preview |
+| `Shift+Right-click` | Queue waypoints / sequential orders |
+| `Ctrl+Right-click` | Convoy move (match slowest unit speed) |
+| `A` / `Q` / `G` | Attack-move / Patrol (`Q + click`) / Attack ground (bombard) |
+| `R` / `T` | Reverse armor move / Rotate front armor facing (`T + click`) |
+| `Y` / `E` / `D` | Deploy smoke screen (`Y + click`) / Lay AT mine (Sapper) / Scatter infantry |
+| `U` / `K` | Unload, unhitch, or evacuate / Abandon vehicle (bail out crew) |
+| `F` / `Alt+1..5` | Cycle / select Air Support mission |
+| `S` / `H` / `Alt+H` | Stop / Hold fire (or Depot hold on trucks) / Toggle fleet-wide Logistics Depot Hold |
+| `C` / `B` / `X` | Toggle crouch stance / Officer binoculars / Tank hatch toggle |
+
+#### Camera, Overlays & Session
+
+| Input | Effect |
+| --- | --- |
+| `Middle-drag` / `Edges` / `Arrow keys` | Pan camera |
+| `Wheel` / `Num +` / `Num -` | Smooth zoom in / out |
+| `Backspace` / `Num 0` / `Home` / `Alt+Home` | Reset 1:1 zoom / Center on selection / Fit entire map overview |
+| `Ctrl+F1..F8` / `F1..F8` | Save / jump camera bookmark slots |
+| `Tab` / `V` / `I` / `Z` / `W` / `,` / `M` / `Space` | Cycle infantry / vehicles / idle / select all idle / wounded or low-ammo / specialists & support / mission marker / jump to recent alert |
+| `Alt` (hold) / `Alt+V` / `Alt+Y` | Inspect ranges & hostile threats / Pin tactical overlay / Hide or restore HUD |
+| `F9` / `F10` (`Ctrl+S` / `Ctrl+L`) | Quick Save / Quick Load |
+| `[` / `]` | Adjust game speed (`0.5×–3×`) |
+| `Ctrl+P` or `Pause`, `O`, `J`, `L` | Pause, Force Status, Mission Briefing, Message Log |
+| `N` / `Ctrl+M` | Next music track / Mute music |
+| `Enter` / `Shift+Enter` / `Alt+Left-click` | Global chat / Allied chat / Tactical flare beacon (MP) |
+| `F11` / `Escape` | Toggle fullscreen / Open Pause Menu |
+
+#### Live Replay Viewer (`--watch-replay` / Replay Browser)
+
+| Input | Effect |
+| --- | --- |
+| `Space` or `Pause` / `.` | Pause or resume playback / Step single simulation tick |
+| `+` / `-` or `[` / `]` | Adjust playback speed |
+| `Tab` | Cycle player perspective / all-vision toggle |
+| `Alt+Y` / `F11` / `Backspace` / `Num 0` / `Alt+Home` | Toggle HUD / Fullscreen / Reset or fit zoom |
+| `Escape` or HUD `Menu` | Return to Main Menu |
 
 ## Build & Install
 
@@ -95,13 +135,13 @@ cmake --install build --prefix dist/ss2-windows-x86_64
 
 ## Tests & Verification
 
-Fifty-nine tests are registered in [CMakeLists.txt](CMakeLists.txt):
+Sixty tests are registered in [CMakeLists.txt](CMakeLists.txt):
 
 ```sh
-# Standard asset-free test suite (33 tests on Linux & Windows)
+# Standard asset-free test suite (34 tests on Linux & Windows)
 ctest --test-dir build --output-on-failure
 
-# Full Linux Vulkan + Khronos validation suite (45 tests without retail data, 59 with SS2_PRIVATE_GAME)
+# Full Linux Vulkan + Khronos validation suite (46 tests without retail data, 60 with SS2_PRIVATE_GAME)
 cmake --preset validation
 cmake --build --preset validation
 tools/ctest-validation.sh build-validation
@@ -117,19 +157,19 @@ tools/ctest-validation.sh build-sanitize
 
 | Configuration | Tests | Notes |
 | --- | --- | --- |
-| Default (`--preset release`) | 33 | Sim determinism, `combat_parity`, `visibility_parity`, `tutorial_vm`, `lockstep` TCP, SUE/mission/addon/mod VFS, `save_file`, frontend/strings/movie, CLI |
-| `-DSS2_TEST_WINDOW=ON -DSS2_TEST_VALIDATION=ON` (`--preset validation` / Windows CI) | 45 Linux / 43 Windows | Adds Vulkan window/WSI/UI/VFX validation tests (Linux CI matrix in `.github/workflows/linux.yml` inside `fedora:45`, plus `cross-isa-determinism`; Windows CI in `.github/workflows/windows.yml` runs 43 tests with `VK_LAYER_KHRONOS_validation` on Mesa Lavapipe — `vulkan_wsi_recovery` is POSIX-only) |
-| `-DSS2_PRIVATE_GAME=DIR` (with window+validation) | 59 | Adds 12 retail trace/VM/scene/sound/movie tests plus `gold_cli_record_replay` & `gold_session_input` |
+| Default (`--preset release`) | 34 | Sim determinism, `combat_parity`, `visibility_parity`, `tutorial_vm`, `lockstep` TCP, SUE/mission/addon/mod VFS, `save_file`, frontend/strings/movie, CLI |
+| `-DSS2_TEST_WINDOW=ON -DSS2_TEST_VALIDATION=ON` (`--preset validation` / Windows CI) | 46 Linux / 44 Windows CI | Adds Vulkan window/WSI/UI/VFX validation tests (Linux CI matrix in `.github/workflows/linux.yml` inside `fedora:45`, plus `cross-isa-determinism`; Windows CI in `.github/workflows/windows.yml` runs 44 tests with `VK_LAYER_KHRONOS_validation` on Mesa Lavapipe — `vulkan_wsi_recovery` is POSIX-only and Windows CI excludes `missing_validation_layer`) |
+| `-DSS2_PRIVATE_GAME=DIR` (with window+validation) | 60 | Adds 12 retail trace/VM/scene/sound/movie tests plus `gold_cli_record_replay` & `gold_session_input` |
 
-**Hardware acceptance (passed)**: Native x86-64 Fedora 44 container on Bazzite 45 (AMD BC-250 / RADV GFX1013, 3840×2160@120 Hz Wayland): `59/59` validation CTests, `8/8` live Wayland WSI tests, zero Vulkan validation errors, steady `p50=8.33 ms` frame pacing, and bit-identical simulation hashes with ARM64. See [docs/validation.md](docs/validation.md).
+**Hardware acceptance (passed)**: Native x86-64 Fedora 44 container on Bazzite 45 (AMD BC-250 / RADV GFX1013, 3840×2160@120 Hz Wayland): `59/59` validation CTests at the documented acceptance benchmark, `8/8` live Wayland WSI tests, zero Vulkan validation errors, steady `p50=8.33 ms` frame pacing, and bit-identical simulation hashes with ARM64. See [docs/validation.md](docs/validation.md).
 
-**Windows verification status**: Verified in MSYS2 UCRT64 CI (`43/43` tests passing including 10 Win32 `VK_KHR_win32_surface` + `VK_LAYER_KHRONOS_validation` swapchain/UI/frontend tests on Mesa Lavapipe, plus Winsock2 TCP lockstep) and on clean AWS `eu-west-1` Windows Server 2022 Datacenter Spot VMs (interactive Desktop Session 1 GUI menu + retail `.SSM` *Tutorial I* + 4× HD pack rendering over `krdc` RDP, Session 0 headless `--replay`, bundled `vulkan-1.dll`, Mesa `26.3.1` Lavapipe, `Track02.ogg`, embedded `ss2.ico`/`VERSIONINFO`, and bit-exact cross-OS `stateHash` parity). Physical consumer Windows desktop GPU hardware (NVIDIA/AMD/Intel WDDM drivers) has not yet been tested directly.
+**Windows verification status**: Verified in MSYS2 UCRT64 CI (`44/44` tests passing including 10 Win32 `VK_KHR_win32_surface` + `VK_LAYER_KHRONOS_validation` swapchain/UI/frontend tests on Mesa Lavapipe, plus Winsock2 TCP lockstep) and on clean AWS `eu-west-1` Windows Server 2022 Datacenter Spot VMs (interactive Desktop Session 1 GUI menu + retail `.SSM` *Tutorial I* + 4× HD pack rendering over `krdc` RDP, Session 0 headless `--replay`, bundled `vulkan-1.dll`, Mesa `26.3.1` Lavapipe, `Track02.ogg`, embedded `ss2.ico`/`VERSIONINFO`, and bit-exact cross-OS `stateHash` parity). Physical consumer Windows desktop GPU hardware (NVIDIA/AMD/Intel WDDM drivers) has not yet been tested directly.
 
 ## Repository layout
 
 | Path | Responsibility |
 | --- | --- |
-| `src/main.cpp` | CLI flags (`--mod`, `--list-mods`, `--host`, `--join`, `--record`, `--replay`), startup/game-dir discovery, Vulkan/SDL main loop |
+| `src/main.cpp` | CLI flags (`--mod`, `--list-mods`, `--host`, `--join`, `--record`, `--replay`, `--watch-replay`), startup/game-dir discovery, Vulkan/SDL main loop |
 | `src/assets/` | SUE/SSX archives, `sudtest.ini` VFS & loose/gzip mod mounts, missions, CAOF assets, PCK/ANI/RS2 sprites, terrains, catalogs, sound banks |
 | `src/audio/` | SDL3 audio stream SFX mixer and dynamic `libvorbisfile` Ogg soundtrack player |
 | `src/sim/` | Fixed-36 ms deterministic mission clock, infantry/vehicle/air/bridge/building/mine sim, CAOF VM, lockstep protocol |
@@ -139,5 +179,5 @@ tools/ctest-validation.sh build-sanitize
 | `src/ui/` | Gold 2.2 front end, `Options -> Mod`, `I-BRF` briefings, tactical HUD, tooltips, EN/FR/ES strings |
 | `src/video/` | FFmpeg `.BIK`/`.MKV` decoder and SDL3 opening cinematic player |
 | `packaging/` | Freedesktop `.desktop`, vector icon, AppStream metadata, and Flatpak manifest ([`io.github.biosed.ss2.yml`](packaging/io.github.biosed.ss2.yml)); see also [`tools/package-appimage.sh`](tools/package-appimage.sh) |
-| `.github/workflows/` | `linux.yml` (`fedora:45` x86-64/ARM64 Release+ASan/UBSan + `cross-isa-determinism`), `windows.yml` (MSYS2 UCRT64 + 43 Vulkan/unit tests), and `release.yml` (Windows zip + Linux `.tar.gz`/`.AppImage`) |
+| `.github/workflows/` | `linux.yml` (`fedora:45` x86-64/ARM64 Release+ASan/UBSan + `cross-isa-determinism`), `windows.yml` (MSYS2 UCRT64 + 44 Vulkan/unit tests), and `release.yml` (Windows zip + Linux `.tar.gz`/`.AppImage`) |
 | `docs/` | Reverse engineering (`gog-13718-pe.tsv`), source audit, determinism audit, implementation plan, and validation record |
