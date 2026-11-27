@@ -682,6 +682,28 @@ int main(int argc, char** argv) try {
         m2Replay.renderer.present(m2Replay.empty);
     }
 
+    // Live replay viewer UX checks: Alt+Y HUD toggle, zoom reset/overview, and Esc -> main menu.
+    if (parsedReplay) {
+        ss2::UserSettings liveRepSettings{};
+        bool replayRetMenu = false;
+        ss2::GameSession liveRep(
+            win, validate ? &report : nullptr,
+            0, false, gameDir, {}, {}, false, true,
+            liveRepSettings, false, false, nullptr, {}, &*parsedReplay, false, {}, {}, nullptr, true,
+            &replayRetMenu);
+        require(liveRep.simulation && liveRep.liveReplay, "Live replay GameSession failed to initialize");
+        liveRep.handleInputEvent(makeKeyDown(win, SDLK_Y, SDL_KMOD_ALT));
+        require(liveRep.hudHidden, "Alt+Y must hide HUD in live replay");
+        liveRep.handleInputEvent(makeKeyDown(win, SDLK_Y, SDL_KMOD_ALT));
+        require(!liveRep.hudHidden, "Second Alt+Y must restore HUD in live replay");
+        liveRep.handleInputEvent(makeKeyDown(win, SDLK_BACKSPACE));
+        liveRep.handleInputEvent(makeKeyDown(win, SDLK_HOME, SDL_KMOD_ALT));
+        liveRep.updateHudAndBeams();
+        liveRep.renderer.present(liveRep.empty);
+        liveRep.handleInputEvent(makeKeyDown(win, SDLK_ESCAPE));
+        require(!liveRep.running && replayRetMenu, "Esc in live replay must exit and return to Main Menu");
+    }
+
     // Verify Pause -> Options scroll_speed / edge_scroll controls and smooth keyboard zoom hotkeys.
     {
         ss2::UserSettings camSettings{};

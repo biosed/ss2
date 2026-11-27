@@ -41,13 +41,69 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
         return;
     }
     if (replayFile) {
-        if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE) {
+        if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat && event.key.key == SDLK_ESCAPE) {
+            if (returnToMainMenuOut) *returnToMainMenuOut = true;
             running = false;
             return;
         }
         if (liveReplay && simulation) {
             if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat) {
                 switch (event.key.key) {
+                case SDLK_F11: {
+                    const bool isFullscreen = (SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN) != 0;
+                    if (!SDL_SetWindowFullscreen(window, !isFullscreen)) {
+                        SDL_Log("Fullscreen switch failed: %s", SDL_GetError());
+                    }
+                    return;
+                }
+                case SDLK_Y:
+                    if ((event.key.mod & SDL_KMOD_ALT) != 0 && !(event.key.mod & SDL_KMOD_CTRL)) {
+                        hudHidden = !hudHidden;
+                        if (hudHidden) {
+                            if (hud) hud->cancelMinimapDrag();
+                            renderer.clearOverlay(OverlaySlot::hud);
+                            renderer.setHudBarHeight(0);
+                            orderNotice.show(ss2::tr("HUD hidden (Alt+Y to restore)."), ss2::NoticeKind::accepted);
+                        } else {
+                            if (hud) hud->forceRedraw();
+                            orderNotice.show(ss2::tr("HUD restored."), ss2::NoticeKind::accepted);
+                        }
+                        return;
+                    }
+                    break;
+                case SDLK_M:
+                    if (audio && (event.key.mod & SDL_KMOD_CTRL) != 0) {
+                        const bool muted = audio->toggleMusicMute();
+                        settings.musicMuted = muted;
+                        persistNow();
+                        orderNotice.show(ss2::tr(muted ? "Music muted (Ctrl+M)." : "Music unmuted."),
+                                         ss2::NoticeKind::accepted);
+                        return;
+                    }
+                    break;
+                case SDLK_N:
+                    if (audio && !(event.key.mod & SDL_KMOD_CTRL)) {
+                        if (audio->nextMusicTrack()) {
+                            orderNotice.show(ss2::tr("Next soundtrack track."), ss2::NoticeKind::accepted);
+                        }
+                        return;
+                    }
+                    break;
+                case SDLK_BACKSPACE:
+                case SDLK_KP_0:
+                    if (!(event.key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT))) {
+                        renderer.resetZoom();
+                        orderNotice.show(ss2::tr("Zoom reset (1:1)."), ss2::NoticeKind::accepted);
+                        return;
+                    }
+                    break;
+                case SDLK_HOME:
+                    if ((event.key.mod & SDL_KMOD_ALT) != 0 && !(event.key.mod & SDL_KMOD_CTRL)) {
+                        renderer.fitMapOverview();
+                        orderNotice.show(ss2::tr("Camera: full map overview."), ss2::NoticeKind::accepted);
+                        return;
+                    }
+                    break;
                 case SDLK_SPACE:
                 case SDLK_PAUSE:
                     replayTransport.togglePause();
@@ -110,6 +166,12 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
                     }
                     return;
                 }
+                if (hr.action == ss2::HudAction::menu) {
+                    if (audio) audio->playGroup("switch", 0.42f, ss2::VoicePriority::High);
+                    if (returnToMainMenuOut) *returnToMainMenuOut = true;
+                    running = false;
+                    return;
+                }
                 if (hr.action == ss2::HudAction::pause) {
                     if (audio) audio->playGroup("switch", 0.42f, ss2::VoicePriority::High);
                     replayTransport.togglePause();
@@ -133,6 +195,9 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
                 if (hr.consumed) return;
             }
         }
+        if (event.type == SDL_EVENT_KEY_DOWN &&
+            (event.key.key == SDLK_LEFT || event.key.key == SDLK_RIGHT ||
+             event.key.key == SDLK_UP || event.key.key == SDLK_DOWN)) return;
         renderer.handleEvent(event);
         return;
     }

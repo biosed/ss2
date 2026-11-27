@@ -468,6 +468,22 @@ void GameSession::updateHudAndBeams() {
                     }
                 }
             }
+            if (!threatRing.active && scene) {
+                if (const auto iHov = selection->infantryAt(int(std::floor(mapX)), int(std::floor(mapY)))) {
+                    const auto& tu = scene->units().at(*iHov);
+                    if (tu.hp > 0 && tu.visible && isHostileOwner(tu.owner)) {
+                        const auto* uSpec = unitCatalog ? unitCatalog->find(tu.id) : nullptr;
+                        if (uSpec && uSpec->shot1.damage > 0 && uSpec->shot1.range > 0) {
+                            const float rPx = static_cast<float>(uSpec->shot1.range) *
+                                              (settings.realismDoctrine ? 1.35f : 1.0f);
+                            const float dzPx = static_cast<float>(std::max(0, uSpec->shot1.deadzone));
+                            if (rPx > 12.0f) {
+                                threatRing = {true, static_cast<float>(tu.x), static_cast<float>(tu.y), rPx, dzPx};
+                            }
+                        }
+                    }
+                }
+            }
             if (!threatRing.active && !liveBuildings.empty()) {
                 const int simX = int(std::floor(mapX / mapScale));
                 const int simY = int(std::floor(mapY / mapScale));
@@ -617,6 +633,11 @@ void GameSession::updateHudAndBeams() {
     const bool hasAirTrailBeams = combatEffects && hud && hud->hasActiveAirTrails();
     const bool hasSelectedUnits = selection && (!selection->selected().empty() || !selection->selectedVehicles().empty());
     const bool hasSelectionRings = enhancedGraphics && hasSelectedUnits;
+    const bool hasSelectedBuilding = !hasSelectedUnits && selectedBuilding.has_value() &&
+                                     *selectedBuilding < liveBuildings.size() &&
+                                     !liveBuildings[*selectedBuilding].destroyed &&
+                                     liveBuildings[*selectedBuilding].owner == localOwner() &&
+                                     liveBuildings[*selectedBuilding].occupantCount > 0;
     const float rightDragDistPx = rightDragActive
         ? std::hypot(rightDragCurScreenX - rightDragStartScreenX, rightDragCurScreenY - rightDragStartScreenY)
         : 0.0f;
@@ -629,7 +650,7 @@ void GameSession::updateHudAndBeams() {
         previewRing || facePreview || showRightDragPreview || !rangePreviews.empty() || threatRing.active ||
         objectiveMarkerSim.has_value() || !visibleOnScreenMines.empty() ||
         !statusBadges.empty() || !beamZeppelins.empty() || !activeBeacons.empty() ||
-        hasSelectedUnits || hasSelectionRings || showAltSalvage || vfxWasNonEmpty) {
+        hasSelectedUnits || hasSelectionRings || hasSelectedBuilding || showAltSalvage || vfxWasNonEmpty) {
         const auto now = std::chrono::steady_clock::now();
         std::erase_if(activeVfx, [&](const ActiveVfx& v) { return now - v.start >= v.duration; });
         std::erase_if(orderPulses, [&](const OrderPulse& op) {
@@ -693,6 +714,19 @@ void GameSession::updateHudAndBeams() {
                     pushIsoEllipse(vx, vy, 22.0f, 16, 1.8f * s, 110, 224, 120, 0.52f, false, true);
                     ++ringUnits;
                 }
+            }
+        }
+        if (hasSelectedBuilding) {
+            const auto& lb = liveBuildings[*selectedBuilding];
+            const float bx = static_cast<float>(lb.x) * s;
+            const float by = static_cast<float>(lb.y) * s;
+            const float rad = std::clamp(static_cast<float>(std::max(lb.width, lb.height)) * 0.45f, 22.0f, 52.0f);
+            pushIsoEllipse(bx, by, rad, 20, 2.0f * s, 110, 224, 120, 0.62f, false, true);
+            if (altHeld && beams.size() + 24u < 768u) {
+                const int garBonus = unitCatalog
+                    ? std::clamp(unitCatalog->buildingDefense().bonusShotRange / 3, 32, 64)
+                    : 48;
+                pushIsoEllipse(bx, by, static_cast<float>(200 + garBonus), 24, 1.5f * s, 244, 186, 78, 0.36f);
             }
         }
         if (hasSelectedUnits) {

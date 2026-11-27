@@ -161,6 +161,14 @@ bool Briefing::previousPage() {
     return true;
 }
 
+bool Briefing::nextPage() {
+    if (!active_ || page_ + 1 >= pages_) return false;
+    armed_ = false;
+    ++page_;
+    layout();
+    return true;
+}
+
 bool Briefing::handle(const SDL_Event& event) {
     if (!active_) return false;
     const auto id = SDL_GetWindowID(parent_);
@@ -177,6 +185,9 @@ bool Briefing::handle(const SDL_Event& event) {
         case SDLK_ESCAPE: page_ = pages_ - 1; return acknowledge();
         case SDLK_UP: case SDLK_LEFT: case SDLK_PAGEUP: case SDLK_BACKSPACE:
             previousPage();
+            return false;
+        case SDLK_DOWN: case SDLK_RIGHT: case SDLK_PAGEDOWN:
+            nextPage();
             return false;
         default: return false;
         }

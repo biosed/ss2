@@ -234,9 +234,22 @@ int main(int argc, char** argv) {
             check(!briefing.handle(key(SDLK_BACKSPACE)) && briefing.active() && briefing.page() == pages - 5,
                   "Backspace goes back");
         }
+        check(!briefing.handle(key(SDLK_DOWN)) && briefing.active() &&
+                  (pages == 1 || briefing.page() == (pages >= 5 ? pages - 4 : 1)),
+              "Down advances forward one page");
+        if (pages >= 4) {
+            check(!briefing.handle(key(SDLK_RIGHT)) && briefing.active() && briefing.page() == pages - 3,
+                  "Right advances forward one page");
+            check(!briefing.handle(key(SDLK_PAGEDOWN)) && briefing.active() && briefing.page() == pages - 2,
+                  "PageDown advances forward one page");
+        }
+        while (briefing.page() + 1 < pages) check(!briefing.nextPage() || briefing.active(), "nextPage stays active");
+        check(!briefing.nextPage() && briefing.active() && briefing.page() == pages - 1,
+              "nextPage clamps at last page without closing");
 
         briefing.open(longText);
         check(briefing.handle(key(SDLK_ESCAPE)) && !briefing.active(), "Escape closes from any page");
+        check(!briefing.nextPage(), "nextPage ignored when closed");
 
         // Presentation, with and without a map underneath, and after a resize.
         const bool validate = argc == 2 && std::string_view(argv[1]) == "--validate";
