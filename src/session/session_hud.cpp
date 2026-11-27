@@ -433,7 +433,59 @@ void GameSession::updateHudAndBeams() {
         rangePreviews = simulation->selectionRangePreviews(vids, sids);
         if (rangePreviews.size() > 4u) rangePreviews.resize(4u);
     }
-    const bool altHeld = (SDL_GetModState() & SDL_KMOD_ALT) != 0;
+    const bool altHeld = (SDL_GetModState() & SDL_KMOD_ALT) != 0 || tacticalOverlayPinned;
+    struct SupportAuraRing {
+        float x{0.0f}, y{0.0f}, radiusPx{0.0f}, outerRadiusPx{0.0f};
+        std::uint8_t r{244}, g{198}, b{92};
+    };
+    std::vector<SupportAuraRing> supportAuras;
+    if (selection) {
+        if (vehicleScene && unitCatalog) {
+            const auto& vehs = vehicleScene->vehicles();
+            for (const size_t vid : selection->selectedVehicles()) {
+                if (supportAuras.size() >= 6u) break;
+                if (vid >= vehs.size()) continue;
+                const auto& v = vehs[vid];
+                if (!v.alive || v.hp <= 0 || !v.visible || v.owner != localOwner()) continue;
+                const auto* vSpec = unitCatalog->find(v.id);
+                if (!vSpec) continue;
+                if ((vSpec->isSupplyTruck() && !vSpec->isSupplyCrate()) || vSpec->isAmbulance()) {
+                    const float outer = vehicleHoldFireUnits.contains(vid) ? 0.0f : 280.0f;
+                    supportAuras.push_back({static_cast<float>(v.x), static_cast<float>(v.y),
+                                            140.0f, outer, 72, 224, 180});
+                } else if (vSpec->isPropaganda()) {
+                    supportAuras.push_back({static_cast<float>(v.x), static_cast<float>(v.y),
+                                            200.0f, 0.0f, 244, 198, 92});
+                }
+            }
+        }
+        if (scene) {
+            const auto& units = scene->units();
+            for (const size_t sid : selection->selected()) {
+                if (supportAuras.size() >= 6u) break;
+                if (sid >= units.size()) continue;
+                const auto& u = units[sid];
+                if (u.hp <= 0 || !u.visible || u.owner != localOwner()) continue;
+                std::string lowId = u.id;
+                for (char& ch : lowId) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+                const auto* uSpec = unitCatalog ? unitCatalog->find(u.id) : nullptr;
+                if (lowId.find("officer") != std::string::npos ||
+                    lowId.find("general") != std::string::npos ||
+                    (uSpec && uSpec->isOfficerInfantry())) {
+                    const bool isGen = lowId.find("general") != std::string::npos ||
+                                       (uSpec && uSpec->selType == "general");
+                    const float rPx = static_cast<float>(
+                        (uSpec && uSpec->officerRadius > 0) ? uSpec->officerRadius : (isGen ? 350 : 160));
+                    supportAuras.push_back({static_cast<float>(u.x), static_cast<float>(u.y),
+                                            rPx, 0.0f, 244, 198, 92});
+                } else if (lowId.find("medic") != std::string::npos ||
+                           (uSpec && uSpec->isMedicInfantry())) {
+                    supportAuras.push_back({static_cast<float>(u.x), static_cast<float>(u.y),
+                                            96.0f, 0.0f, 88, 226, 132});
+                }
+            }
+        }
+    }
     struct ThreatRingPreview {
         bool active{false};
         float x{0.0f}, y{0.0f}, rangePx{0.0f}, deadzonePx{0.0f};
@@ -647,7 +699,8 @@ void GameSession::updateHudAndBeams() {
         !lightDamageSmokeVehicles.empty() || !heavyDamageSmokeVehicles.empty() ||
         !movingSmokeVehicles.empty() || !movingWaterVehicles.empty() || !livePlanes.empty() ||
         !liveParachutes.empty() || hasAirTrailBeams || !orderLines.empty() ||
-        previewRing || facePreview || showRightDragPreview || !rangePreviews.empty() || threatRing.active ||
+        previewRing || facePreview || showRightDragPreview || !rangePreviews.empty() ||
+        !supportAuras.empty() || threatRing.active ||
         objectiveMarkerSim.has_value() || !visibleOnScreenMines.empty() ||
         !statusBadges.empty() || !beamZeppelins.empty() || !activeBeacons.empty() ||
         hasSelectedUnits || hasSelectionRings || hasSelectedBuilding || showAltSalvage || vfxWasNonEmpty) {
@@ -832,6 +885,15 @@ void GameSession::updateHudAndBeams() {
                 if (showSightRings && rp.sightPx > 12.0f && beams.size() + 24u < 768u) {
                     pushIsoEllipse(vx, vy, rp.sightPx, 24, 1.4f * s, 105, 212, 235, 0.34f);
                 }
+            }
+        }
+        for (const auto& aura : supportAuras) {
+            if (beams.size() + 24u >= 768u) break;
+            const float ax = aura.x * s;
+            const float ay = aura.y * s;
+            pushIsoEllipse(ax, ay, aura.radiusPx, 24, 1.6f * s, aura.r, aura.g, aura.b, 0.36f, false, true);
+            if (altHeld && aura.outerRadiusPx > aura.radiusPx && beams.size() + 24u < 768u) {
+                pushIsoEllipse(ax, ay, aura.outerRadiusPx, 24, 1.3f * s, 244, 186, 78, 0.24f, false, true);
             }
         }
         if (threatRing.active && beams.size() + 24u < 768u) {

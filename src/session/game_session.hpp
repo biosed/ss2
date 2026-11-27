@@ -401,6 +401,7 @@ struct GameSession {
     bool markerHint = false;
     std::optional<std::pair<int, int>> objectiveMarkerSim;
     bool paused = false;
+    bool tacticalOverlayPinned = false;
     std::size_t reportedLosses = 0;
     std::vector<TimedMarker> activeMarkers;
     std::vector<OrderPulse> orderPulses;

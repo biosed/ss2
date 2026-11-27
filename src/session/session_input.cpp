@@ -990,6 +990,108 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
         }
         return;
     }
+    if (simulation && !menu.active() && !briefing.active() && event.type == SDL_EVENT_KEY_DOWN &&
+        !event.key.repeat && event.key.key == SDLK_V &&
+        (event.key.mod & SDL_KMOD_ALT) != 0 && !(event.key.mod & SDL_KMOD_CTRL)) {
+        tacticalOverlayPinned = !tacticalOverlayPinned;
+        if (audio) audio->playGroup("switch", 0.35f, ss2::VoicePriority::High);
+        orderNotice.show(ss2::tr(tacticalOverlayPinned
+                                     ? "Tactical overlay pinned (sight, ranges, auras & salvage — Alt+V to hide)."
+                                     : "Tactical overlay off (hold Alt to peek)."),
+                         ss2::NoticeKind::accepted);
+        return;
+    }
+    if (simulation && vehicleScene && unitCatalog && !menu.active() && !briefing.active() &&
+        event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat && event.key.key == SDLK_H &&
+        (event.key.mod & SDL_KMOD_ALT) != 0 && !(event.key.mod & SDL_KMOD_CTRL)) {
+        std::vector<size_t> supportVids;
+        const auto& vehs = vehicleScene->vehicles();
+        for (size_t vid = 0; vid < vehs.size(); ++vid) {
+            const auto& v = vehs[vid];
+            if (!v.alive || v.hp <= 0 || !v.visible || v.owner != localOwner()) continue;
+            const auto* sp = unitCatalog->find(v.id);
+            if (sp && ((sp->isSupplyTruck() && !sp->isSupplyCrate()) || sp->isAmbulance())) {
+                supportVids.push_back(vid);
+            }
+        }
+        if (supportVids.empty()) {
+            orderNotice.show(ss2::tr("No support vehicles available."), ss2::NoticeKind::unsupported);
+            return;
+        }
+        bool anyRoaming = false;
+        for (const size_t vid : supportVids) {
+            if (!vehicleHoldFireUnits.contains(vid)) {
+                anyRoaming = true;
+                break;
+            }
+        }
+        const bool wantHold = anyRoaming;
+        std::vector<size_t> toToggle;
+        for (const size_t vid : supportVids) {
+            if (vehicleHoldFireUnits.contains(vid) != wantHold) {
+                toToggle.push_back(vid);
+            }
+        }
+        if (!toToggle.empty()) {
+            (void)simulation->toggleVehicleHoldFire(toToggle);
+            for (const size_t vid : toToggle) {
+                if (wantHold) vehicleHoldFireUnits.insert(vid);
+                else vehicleHoldFireUnits.erase(vid);
+            }
+        }
+        if (audio) audio->playGroup("switch", 0.40f, ss2::VoicePriority::High);
+        orderNotice.show(ss2::trf(wantHold
+                                      ? "Logistics Depot Hold enabled ({0} support vehicles)."
+                                      : "Logistics Auto-Roam enabled ({0} support vehicles).",
+                                  {std::to_string(supportVids.size())}),
+                         ss2::NoticeKind::accepted);
+        return;
+    }
+    if (simulation && selection && scene && !menu.active() && !briefing.active() &&
+        event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat && event.key.key == SDLK_C &&
+        (event.key.mod & SDL_KMOD_ALT) != 0 && !(event.key.mod & SDL_KMOD_CTRL)) {
+        std::set<size_t> combatInf, combatVeh;
+        std::size_t excluded = 0;
+        const auto& units = scene->units();
+        for (const size_t sid : selection->selected()) {
+            if (sid >= units.size() || units[sid].hp <= 0) continue;
+            const auto& uid = units[sid].id;
+            std::string lowId = uid;
+            for (char& ch : lowId) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+            const auto* sp = unitCatalog ? unitCatalog->find(uid) : nullptr;
+            const bool isMedic = (lowId.find("medic") != std::string::npos) || (sp && sp->isMedicInfantry());
+            if (isMedic) ++excluded;
+            else combatInf.insert(sid);
+        }
+        if (vehicleScene) {
+            const auto& vehs = vehicleScene->vehicles();
+            for (const size_t vid : selection->selectedVehicles()) {
+                if (vid >= vehs.size() || !vehs[vid].alive || vehs[vid].hp <= 0) continue;
+                const auto* sp = unitCatalog ? unitCatalog->find(vehs[vid].id) : nullptr;
+                const bool isLogi = sp && (sp->isSupplyTruck() || sp->isSupplyCrate() || sp->isAmbulance());
+                if (isLogi) ++excluded;
+                else combatVeh.insert(vid);
+            }
+        }
+        if (excluded == 0u) {
+            orderNotice.show(ss2::tr("All selected units are already combat-ready."), ss2::NoticeKind::accepted);
+            return;
+        }
+        if (combatInf.empty() && combatVeh.empty()) {
+            orderNotice.show(ss2::tr("Only support units are selected."), ss2::NoticeKind::unsupported);
+            return;
+        }
+        const std::size_t kept = combatInf.size() + combatVeh.size();
+        activeSubgroupLabel.clear();
+        selection->setSelection(std::move(combatInf), std::move(combatVeh));
+        prevSelInf = selection->selected();
+        prevSelVeh = selection->selectedVehicles();
+        if (audio) audio->playGroup("switch", 0.38f, ss2::VoicePriority::High);
+        orderNotice.show(ss2::trf("Filtered to {0} combat units (excluded {1} support).",
+                                  {std::to_string(kept), std::to_string(excluded)}),
+                         ss2::NoticeKind::accepted);
+        return;
+    }
     if (simulation && !menu.active() && event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat &&
         event.key.key == SDLK_J && !(event.key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT))) {
         openMissionBriefing();

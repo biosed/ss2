@@ -766,6 +766,22 @@ int main(int argc, char** argv) try {
         camSess.handleInputEvent(makeKeyDown(win, SDLK_1));
         require(camSess.selection->selected().size() == 2u,
                 "Pressing 1 must recall both soldiers appended via Ctrl+Shift+1");
+
+        // Alt+V toggles pinned tactical overlay; Alt+C filters out medics/support; Alt+H toggles logistics hold.
+        require(!camSess.tacticalOverlayPinned, "tacticalOverlayPinned must start false");
+        camSess.handleInputEvent(makeKeyDown(win, SDLK_V, SDL_KMOD_ALT));
+        require(camSess.tacticalOverlayPinned, "Alt+V must pin tactical overlay");
+        camSess.selection->selectAllPlayerUnits(false);
+        const std::size_t beforeFilterCount = camSess.selection->selected().size();
+        camSess.handleInputEvent(makeKeyDown(win, SDLK_C, SDL_KMOD_ALT));
+        require(!camSess.selection->selected().empty() &&
+                    camSess.selection->selected().size() <= beforeFilterCount,
+                "Alt+C must keep non-empty combat soldier selection");
+        camSess.updateHudAndBeams();
+        camSess.renderer.present(camSess.empty);
+        camSess.handleInputEvent(makeKeyDown(win, SDLK_V, SDL_KMOD_ALT));
+        require(!camSess.tacticalOverlayPinned, "Second Alt+V must unpin tactical overlay");
+        camSess.handleInputEvent(makeKeyDown(win, SDLK_H, SDL_KMOD_ALT));
     }
 
     require(report.errors.load() == 0, "Vulkan validation errors observed during GameSession input test");
