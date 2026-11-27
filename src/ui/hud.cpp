@@ -2463,11 +2463,33 @@ std::optional<HudTip> Hud::tooltipAtWindow(float windowX, float windowY) const {
         }
         return HudTip{
             trf("Control Group {0}", {std::to_string(*grp)}),
-            {trf("{0} units — click to select, click again to focus", {std::to_string(cnt)})}
+            {trf("{0} units — L-click select • R-click jump camera", {std::to_string(cnt)})}
         };
     }
     if (const auto cls = classAt(p->x, p->y)) {
-        return HudTip{tr(*cls), {tr("Click to select class • Shift/R-click to exclude")}};
+        const bool isCargo = cls->rfind("[Cargo] ", 0) == 0;
+        const bool isGarrison = !isCargo && !state_.hasSelection;
+        const HudClass* mc = nullptr;
+        for (const auto& c : state_.selection) {
+            if (c.label == *cls) { mc = &c; break; }
+        }
+        std::vector<std::string> lines;
+        if (mc) {
+            const int hpPct = static_cast<int>(std::lround(std::clamp(mc->health, 0.0f, 1.0f) * 100.0f));
+            const int ammoPct = static_cast<int>(std::lround(std::clamp(mc->ammo, 0.0f, 1.0f) * 100.0f));
+            if (isCargo) {
+                lines.push_back(trf("Passengers: {0} | Avg HP {1}%",
+                                    {std::to_string(mc->count), std::to_string(hpPct)}));
+            } else {
+                lines.push_back(trf("Count: {0} | HP {1}% | Ammo {2}%",
+                                    {std::to_string(mc->count), std::to_string(hpPct), std::to_string(ammoPct)}));
+            }
+        }
+        lines.push_back(tr(isCargo
+            ? "Click to unload 1 passenger"
+            : (isGarrison ? "Click to evacuate 1 soldier"
+                          : "Click to select class • Shift/R-click to exclude")));
+        return HudTip{tr(*cls), std::move(lines)};
     }
     return std::nullopt;
 }
@@ -2515,6 +2537,11 @@ HudResult Hud::handle(const SDL_Event& event) {
             return result;
         }
         if (event.button.button == SDL_BUTTON_RIGHT) {
+            if (const auto hitGroup = groupAt(p->x, p->y)) {
+                result.action = HudAction::focusGroup;
+                result.groupDigit = int(*hitGroup);
+                return result;
+            }
             if (const auto hitClass = classAt(p->x, p->y)) {
                 result.action = HudAction::selectClass;
                 result.classLabel = *hitClass;

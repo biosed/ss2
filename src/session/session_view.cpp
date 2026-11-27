@@ -347,6 +347,16 @@ bool GameSession::updateViewTooltipAndPresent() {
                             tc.lines.push_back(ss2::tr("Neutral"));
                         } else {
                             tc.lines.push_back(ss2::tr("Hostile"));
+                            if (uSpec) {
+                                if (uSpec->isSniper()) tc.lines.push_back(ss2::tr("Sniper"));
+                                else if (uSpec->isAntiTankInfantry()) tc.lines.push_back(ss2::tr("Anti-Tank Infantry"));
+                                else if (uSpec->hasFlamethrower()) tc.lines.push_back(ss2::tr("Flamethrower"));
+                                else if (uSpec->isMortarInfantry()) tc.lines.push_back(ss2::tr("Light Mortar"));
+                                else if (uSpec->isHeavyMgInfantry()) tc.lines.push_back(ss2::tr("Heavy Machine Gunner"));
+                                else if (uSpec->isOfficerInfantry()) tc.lines.push_back(ss2::tr("Officer"));
+                                else if (uSpec->isMedicInfantry()) tc.lines.push_back(ss2::tr("Medic"));
+                                appendCombatStats(tc, uSpec, uSpec->sight);
+                            }
                         }
                         tooltip.show(tc, mx, my);
                         showTip = true;

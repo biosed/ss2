@@ -268,6 +268,15 @@ int main(int argc, char** argv) {
             renderer.setMap(stripes);
             wheel.wheel.y = 6;
             renderer.handleEvent(wheel);
+            for (int step = 0; step < 60; ++step) {
+                (void)renderer.present({});
+                const auto [mx0, my0] = renderer.mapPosition(160, 120);
+                const auto [mx1, my1] = renderer.mapPosition(161, 120);
+                (void)my0;
+                (void)my1;
+                if (mx1 - mx0 > 0.0 && (mx1 - mx0) < 0.4) break;
+                SDL_Delay(5);
+            }
             const auto inBetween = [&] {
                 const auto shot = capture();
                 int count = 0;

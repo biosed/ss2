@@ -154,14 +154,14 @@ void GameSession::doStop() {
     const auto ids = activeInfantrySelection();
     const auto vids = activeVehicleSelection();
     if (ids.empty() && vids.empty()) return;
-    size_t n = 0;
+    size_t nInf = 0, nVeh = 0;
     if (!ids.empty()) {
-        n += simulation->stop(ids);
+        nInf = simulation->stop(ids);
     }
     if (!vids.empty()) {
-        n += simulation->stopVehicles(vids);
+        nVeh = simulation->stopVehicles(vids);
     }
-    if (n) {
+    if (const size_t n = nInf + nVeh; n > 0) {
         playSelectionVoice("stop");
         attackMoveArmed = false;
         attackGroundArmed = false;
@@ -171,7 +171,10 @@ void GameSession::doStop() {
         smokeArmed = false;
         armedAirSupport.reset();
         resetCursor();
-        showNotice(ss2::trf("Stop order ({0} soldiers).", {std::to_string(n)}), ss2::NoticeKind::accepted);
+        const char* msgKey = (nVeh == 0) ? "Stop order ({0} soldiers)."
+                           : (nInf == 0) ? "Stop order ({0} vehicles)."
+                                         : "Stop order ({0} units).";
+        showNotice(ss2::trf(msgKey, {std::to_string(n)}), ss2::NoticeKind::accepted);
         std::cout << "Tutorial I tactical S (stop): " << n << " units\n";
     }
 }

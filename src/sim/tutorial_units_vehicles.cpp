@@ -16,8 +16,6 @@
 namespace ss2 {
 namespace {
 constexpr double kVehicleArrivePx = 8.0;
-constexpr std::array<int, 8> kTileDx{1, 1, 0, -1, -1, -1, 0, 1};
-constexpr std::array<int, 8> kTileDy{0, 1, 1, 1, 0, -1, -1, -1};
 unsigned dirDelta32(unsigned a, unsigned b) {
     return std::min((a - b) & 31u, (b - a) & 31u);
 }

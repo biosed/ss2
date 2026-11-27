@@ -629,6 +629,43 @@ int main(int argc, char** argv) {
                   "Phase 4W right-click class card did not emit exclude selectClass");
             std::cout << "Phase 4W HUD class card right-click exclude PASSED\n";
 
+            // Rich class card stats + right-click group chip focus + cargo/garrison context hints.
+            check(clsTip->lines.size() >= 2u &&
+                  clsTip->lines[0].find("Count:") != std::string::npos &&
+                  clsTip->lines[0].find("HP") != std::string::npos &&
+                  clsTip->lines[0].find("Ammo") != std::string::npos,
+                  "class card tooltip must show Count/HP/Ammo summary");
+            const auto g1Rect = hud.groupChipRect(1);
+            SDL_Event grDown{};
+            grDown.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+            grDown.button.windowID = SDL_GetWindowID(window.get());
+            grDown.button.button = SDL_BUTTON_RIGHT;
+            const auto grPt = mouse.at(centreX(g1Rect), centreY(g1Rect));
+            grDown.button.x = grPt.x;
+            grDown.button.y = grPt.y;
+            const auto grRes = hud.handle(grDown);
+            check(grRes.consumed && grRes.action == HudAction::focusGroup && grRes.groupDigit == 1,
+                  "right-click group chip 1 must emit HudAction::focusGroup");
+
+            ss2::HudState ctxState = state;
+            ctxState.hasSelection = true;
+            ctxState.selection = {{"[Cargo] Rifleman", 4, 0.75f, 1.0f}};
+            hud.update(ctxState);
+            const auto cargoTip = tipAtRect(hud.classCardRect(0));
+            check(cargoTip && cargoTip->lines.size() >= 2u &&
+                  cargoTip->lines[0].find("Passengers:") != std::string::npos &&
+                  cargoTip->lines[1] == "Click to unload 1 passenger",
+                  "cargo class card tooltip must show passenger stats and unload hint");
+
+            ctxState.hasSelection = false;
+            ctxState.selection = {{"Rifleman", 3, 0.8f, 0.7f}};
+            hud.update(ctxState);
+            const auto garTip = tipAtRect(hud.classCardRect(0));
+            check(garTip && garTip->lines.size() >= 2u &&
+                  garTip->lines[1] == "Click to evacuate 1 soldier",
+                  "garrison class card tooltip must show evacuate hint");
+            hud.update(state);
+
             // Retail Gold 2.2 skin fallback, Weather overlay (Rain/Snow/Fog), opaqueAtWindow invariance,
             // and damaged-aircraft smoke/fire trails.
             {

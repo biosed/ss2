@@ -762,6 +762,17 @@ void GameSession::handleInputEvent(const SDL_Event& event) {
                     renderer.smoothFocusMap(ctr->first, ctr->second);
                 }
             }
+        } else if (hr.action == ss2::HudAction::focusGroup && hr.groupDigit >= 0 && hr.groupDigit < 10 && selection) {
+            if (audio) audio->playGroup("switch", 0.42f, ss2::VoicePriority::High);
+            selection->recallControlGroup(static_cast<unsigned>(hr.groupDigit), false);
+            if (!selection->selected().empty() || !selection->selectedVehicles().empty()) {
+                selectedBuilding.reset();
+            }
+            prevSelInf = selection->selected();
+            prevSelVeh = selection->selectedVehicles();
+            if (const auto ctr = selection->selectionCentroid()) {
+                renderer.smoothFocusMap(ctr->first, ctr->second);
+            }
         } else if (hr.action == ss2::HudAction::selectClass && !hr.classLabel.empty() && selection && scene) {
             if (audio) audio->playGroup("switch", 0.42f, ss2::VoicePriority::High);
             if (selection->selected().empty() && selection->selectedVehicles().empty() &&

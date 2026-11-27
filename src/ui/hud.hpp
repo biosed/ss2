@@ -86,7 +86,7 @@ struct HudState {
 enum class HudAction {
     none, stop, holdFire, crouch, mission, pause, log, moveCamera, menu, recon,
     orderMinimap, airSupport, attackMove, patrol, attackGround, unload, mine,
-    scatter, recallGroup, selectClass, speedDown, speedUp
+    scatter, recallGroup, focusGroup, selectClass, speedDown, speedUp
 };
 
 struct HudResult {
